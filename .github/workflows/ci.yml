@@ -21,7 +21,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version-file: .node-version # single source of truth with local dev (§0.8)
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile

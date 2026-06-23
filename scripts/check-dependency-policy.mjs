@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -40,6 +40,32 @@ function parseExactDependency(name, versionRange, source) {
   return { name, version: versionRange, source };
 }
 
+// Workspace package manifests (apps/*, packages/*) so their pins are held to the
+// same exact-pin + 30-day soak policy as the root, not just the root itself.
+function discoverWorkspaceManifests() {
+  const manifests = [];
+  for (const group of ["apps", "packages"]) {
+    let entries;
+    try {
+      entries = readdirSync(join(rootDir, group), { withFileTypes: true });
+    } catch {
+      continue; // group not scaffolded yet
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const manifestPath = join(rootDir, group, entry.name, "package.json");
+      try {
+        manifests.push({ path: manifestPath, json: JSON.parse(readFileSync(manifestPath, "utf8")) });
+      } catch {
+        // No package.json (e.g. a .gitkeep-only stub) — nothing to validate.
+      }
+    }
+  }
+  return manifests;
+}
+
 function collectDependencies() {
   const dependencies = [];
   const packageManager = parsePackageManager(packageJson.packageManager);
@@ -47,11 +73,25 @@ function collectDependencies() {
     dependencies.push(packageManager);
   }
 
-  for (const section of ["dependencies", "devDependencies", "optionalDependencies"]) {
-    for (const [name, versionRange] of Object.entries(packageJson[section] ?? {})) {
-      const dependency = parseExactDependency(name, versionRange, section);
-      if (dependency) {
-        dependencies.push(dependency);
+  const manifests = [
+    { label: "", json: packageJson },
+    ...discoverWorkspaceManifests().map((m) => ({
+      label: `${relative(rootDir, dirname(m.path)).replace(/\\/g, "/")}:`,
+      json: m.json,
+    })),
+  ];
+
+  for (const { label, json } of manifests) {
+    for (const section of ["dependencies", "devDependencies", "optionalDependencies"]) {
+      for (const [name, versionRange] of Object.entries(json[section] ?? {})) {
+        // Workspace-internal links (workspace:*) are not registry packages.
+        if (typeof versionRange === "string" && versionRange.startsWith("workspace:")) {
+          continue;
+        }
+        const dependency = parseExactDependency(name, versionRange, `${label}${section}`);
+        if (dependency) {
+          dependencies.push(dependency);
+        }
       }
     }
   }
