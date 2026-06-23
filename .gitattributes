@@ -1,0 +1,18 @@
+# Normalize line endings: store as LF in the repo, check out native on Windows.
+* text=auto eol=lf
+
+# Windows-specific scripts keep CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets — never normalize or diff as text
+*.parquet binary
+*.png binary
+*.jpg binary
+*.webm binary
+*.mp4 binary
+*.mov binary
+*.ico binary
+*.woff binary
+*.woff2 binary

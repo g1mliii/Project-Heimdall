@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref to save minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Web / shared (pnpm verify)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check:deps
+      - run: pnpm audit:deps
+      - run: pnpm verify # lint + typecheck + test across the workspace
+
+  desktop:
+    name: Desktop (cargo fmt / clippy / test)
+    runs-on: windows-latest
+    # No-op until the Tauri client exists (Phase 9). Runs once Cargo.toml lands.
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: detect
+        shell: bash
+        run: |
+          if [ -f apps/desktop/src-tauri/Cargo.toml ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "Desktop client not scaffolded yet — skipping Rust gate."
+          fi
+
+      - if: steps.detect.outputs.present == 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - if: steps.detect.outputs.present == 'true'
+        run: cargo fmt --check --manifest-path apps/desktop/src-tauri/Cargo.toml
+
+      - if: steps.detect.outputs.present == 'true'
+        run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --all-features --locked -- -D warnings -D clippy::perf
+
+      - if: steps.detect.outputs.present == 'true'
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
