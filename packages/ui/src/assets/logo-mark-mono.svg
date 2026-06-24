@@ -1,0 +1,6 @@
+<svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Heimdall">
+  <title>Heimdall</title>
+  <path d="M16 4.5H32L43.5 16V32L32 43.5H16L4.5 32V16L16 4.5Z" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"></path>
+  <path d="M11 27.5L17 27.5L20.5 20L24 31L27.5 14.5L31 27.5L37 27.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.55"></path>
+  <circle cx="27.5" cy="14.5" r="3.4" fill="none" stroke="currentColor" stroke-width="2.2"></circle>
+</svg>

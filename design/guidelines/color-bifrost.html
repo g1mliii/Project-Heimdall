@@ -1,0 +1,26 @@
+<!-- @dsCard group="Colors" viewport="700x150" name="Bifröst Spectral Ramp" subtitle="Teal→blue→violet→magenta — hero moments & continuous data scales" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { background: var(--bg-base); padding: var(--space-6); }
+  .ramp { height: 56px; border-radius: var(--radius-md); background: var(--bifrost); box-shadow: var(--elev-1); }
+  .stops { display: flex; gap: var(--space-3); margin-top: var(--space-4); }
+  .stop { flex: 1; display: flex; align-items: center; gap: var(--space-2); }
+  .dot { width: 18px; height: 18px; border-radius: var(--radius-pill); flex: none; }
+  .meta { font: var(--type-data); color: var(--fg-2); }
+  .meta b { color: var(--fg-1); font-weight: var(--weight-medium); display: block; }
+</style>
+</head>
+<body>
+  <div class="ramp"></div>
+  <div class="stops">
+    <div class="stop"><span class="dot" style="background:#2ee6c6"></span><span class="meta"><b>Teal</b>#2ee6c6</span></div>
+    <div class="stop"><span class="dot" style="background:#4d9fff"></span><span class="meta"><b>Blue</b>#4d9fff</span></div>
+    <div class="stop"><span class="dot" style="background:#8b7bff"></span><span class="meta"><b>Violet</b>#8b7bff</span></div>
+    <div class="stop"><span class="dot" style="background:#e26ad6"></span><span class="meta"><b>Magenta</b>#e26ad6</span></div>
+  </div>
+</body>
+</html>

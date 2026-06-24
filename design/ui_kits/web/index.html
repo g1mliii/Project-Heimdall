@@ -1,0 +1,80 @@
+<!-- @dsCard group="Web Hub" viewport="1200x760" -->
+<!-- @startingPoint section="Web Hub" subtitle="Shareable run report with frame-time chart & auto-diagnostics" viewport="1200x760" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Heimdall — Web Hub</title>
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  body { background: var(--bg-base); min-height: 100vh; }
+  #root { min-height: 100vh; }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+  <script type="text/babel" src="charts.jsx"></script>
+  <script type="text/babel" src="AppShell.jsx"></script>
+  <script type="text/babel" src="RunPage.jsx"></script>
+  <script type="text/babel" src="GamePage.jsx"></script>
+  <script type="text/babel" src="extras.jsx"></script>
+  <script type="text/babel" src="screens.jsx"></script>
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+      "scenario": "expo",
+      "overlayFill": true,
+      "stutterMarkers": true,
+      "startTab": "compare"
+    }/*EDITMODE-END*/;
+
+    function App() {
+      const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+      const [route, setRoute] = useState(t.startTab);
+      // Follow the start-tab tweak when the user changes it in the panel.
+      useEffect(() => { setRoute(t.startTab); }, [t.startTab]);
+      useEffect(() => { if (window.lucide) window.lucide.createIcons(); });
+
+      return (
+        <div>
+          <TopBar route={route} onNavigate={setRoute} onUpload={() => setRoute('upload')} />
+          {route === 'run' && <RunPage showStutters={t.stutterMarkers} onNavigate={setRoute} />}
+          {route === 'game' && <GamePage />}
+          {route === 'compare' && <ComparePage scenario={t.scenario} chartFill={t.overlayFill} />}
+          {route === 'upload' && <UploadPage onParsed={() => setRoute('run')} />}
+          {route === 'export' && <ExportPage />}
+          {route === 'account' && <AccountPage />}
+
+          <TweaksPanel>
+            <TweakSection label="Navigation" />
+            <TweakRadio label="Start on tab" value={t.startTab}
+              options={['run', 'game', 'compare', 'upload', 'export', 'account']}
+              onChange={(v) => setTweak('startTab', v)} />
+            <TweakSection label="Compare tab" />
+            <TweakSelect label="Scenario" value={t.scenario}
+              options={[
+                { value: 'expo', label: 'EXPO off → on' },
+                { value: 'dlss', label: 'DLSS off → Quality' },
+                { value: 'driver', label: 'Driver update' },
+              ]}
+              onChange={(v) => { setTweak('scenario', v); setRoute('compare'); }} />
+            <TweakToggle label="Overlay area fill" value={t.overlayFill}
+              onChange={(v) => setTweak('overlayFill', v)} />
+            <TweakSection label="Charts" />
+            <TweakToggle label="Stutter markers" value={t.stutterMarkers}
+              onChange={(v) => setTweak('stutterMarkers', v)} />
+          </TweaksPanel>
+        </div>
+      );
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

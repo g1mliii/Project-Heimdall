@@ -1,0 +1,65 @@
+/* ───────────────────────────────────────────────────────────────
+   Heimdall — Typography tokens
+   Three families: a mechanical grotesque for display, a humanist
+   grotesque for UI/body, and a monospace for ALL numerics. In a
+   benchmarking tool numbers are the content — frame times, FPS,
+   percentiles — so they always render in the mono face with
+   tabular figures for column alignment.
+   ─────────────────────────────────────────────────────────────── */
+
+:root {
+  /* ── Families ────────────────────────────────────────────────── */
+  --font-display: 'Space Grotesk', 'Hanken Grotesk', system-ui, sans-serif;
+  --font-sans: 'Hanken Grotesk', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* ── Type scale (1.25 major-third-ish, tuned) ────────────────── */
+  --text-2xs: 0.6875rem;   /* 11px — axis ticks, dense table meta   */
+  --text-xs: 0.75rem;      /* 12px — captions, badges               */
+  --text-sm: 0.8125rem;    /* 13px — secondary UI, labels           */
+  --text-base: 0.9375rem;  /* 15px — body / default UI              */
+  --text-md: 1.0625rem;    /* 17px — emphasized body                */
+  --text-lg: 1.25rem;      /* 20px — card titles                    */
+  --text-xl: 1.5rem;       /* 24px — section titles                 */
+  --text-2xl: 1.9375rem;   /* 31px — page titles                    */
+  --text-3xl: 2.5rem;      /* 40px — display                        */
+  --text-4xl: 3.25rem;     /* 52px — hero                           */
+  --text-5xl: 4.25rem;     /* 68px — marketing hero / big metric    */
+
+  /* ── Weights ─────────────────────────────────────────────────── */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* ── Line heights ────────────────────────────────────────────── */
+  --leading-tight: 1.05;   /* display / big metrics                 */
+  --leading-snug: 1.25;    /* headings                              */
+  --leading-normal: 1.5;   /* body                                  */
+  --leading-relaxed: 1.65; /* long-form prose                       */
+
+  /* ── Letter spacing ──────────────────────────────────────────── */
+  --tracking-tight: -0.02em;   /* display headings                  */
+  --tracking-snug: -0.01em;    /* titles                            */
+  --tracking-normal: 0;
+  --tracking-wide: 0.04em;     /* small caps labels                 */
+  --tracking-wider: 0.12em;    /* eyebrow / overline LABELS         */
+
+  /* ── Semantic roles ──────────────────────────────────────────── */
+  --type-hero: var(--weight-bold) var(--text-5xl)/var(--leading-tight) var(--font-display);
+  --type-display: var(--weight-bold) var(--text-3xl)/var(--leading-tight) var(--font-display);
+  --type-title: var(--weight-semibold) var(--text-2xl)/var(--leading-snug) var(--font-display);
+  --type-heading: var(--weight-semibold) var(--text-xl)/var(--leading-snug) var(--font-display);
+  --type-subheading: var(--weight-semibold) var(--text-lg)/var(--leading-snug) var(--font-sans);
+  --type-body: var(--weight-regular) var(--text-base)/var(--leading-normal) var(--font-sans);
+  --type-body-sm: var(--weight-regular) var(--text-sm)/var(--leading-normal) var(--font-sans);
+  --type-label: var(--weight-medium) var(--text-sm)/var(--leading-snug) var(--font-sans);
+  --type-caption: var(--weight-regular) var(--text-xs)/var(--leading-snug) var(--font-sans);
+
+  /* Numeric / metric roles — always mono, always tabular figures */
+  --type-metric-xl: var(--weight-semibold) var(--text-5xl)/var(--leading-tight) var(--font-mono);
+  --type-metric-lg: var(--weight-semibold) var(--text-3xl)/var(--leading-tight) var(--font-mono);
+  --type-metric: var(--weight-medium) var(--text-xl)/var(--leading-snug) var(--font-mono);
+  --type-data: var(--weight-medium) var(--text-sm)/var(--leading-normal) var(--font-mono);
+  --type-overline: var(--weight-semibold) var(--text-2xs)/1.4 var(--font-mono);
+}

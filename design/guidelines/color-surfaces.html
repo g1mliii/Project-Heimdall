@@ -1,0 +1,26 @@
+<!-- @dsCard group="Colors" viewport="700x170" name="Surfaces · Dark" subtitle="The instrument-panel elevation stack" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { background: var(--bg-base); padding: var(--space-6); }
+  .row { display: grid; grid-template-columns: repeat(6, 1fr); gap: var(--space-2); }
+  .sw { height: 92px; border-radius: var(--radius-sm); border: 1px solid var(--line-1);
+        padding: var(--space-2); display: flex; flex-direction: column; justify-content: flex-end; }
+  .name { font: var(--type-overline); text-transform: uppercase; color: var(--fg-2); }
+  .hex { font: var(--type-data); font-size: 11px; color: var(--fg-3); }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="sw" style="background: var(--bg-void)"><span class="name">Void</span><span class="hex">#07090d</span></div>
+    <div class="sw" style="background: var(--bg-base)"><span class="name">Base</span><span class="hex">#0b0e14</span></div>
+    <div class="sw" style="background: var(--bg-raised)"><span class="name">Raised</span><span class="hex">#11151d</span></div>
+    <div class="sw" style="background: var(--bg-card)"><span class="name">Card</span><span class="hex">#151a23</span></div>
+    <div class="sw" style="background: var(--bg-card-hover)"><span class="name">Hover</span><span class="hex">#1b212c</span></div>
+    <div class="sw" style="background: var(--bg-inset)"><span class="name">Inset</span><span class="hex">#0a0d12</span></div>
+  </div>
+</body>
+</html>

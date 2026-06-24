@@ -1,0 +1,84 @@
+/* ───────────────────────────────────────────────────────────────
+   Heimdall — Base reset & document defaults
+   Applies the tokens to the document. Dark-first: the app surface
+   is the default; add data-theme="light" on <html> for light pages.
+   ─────────────────────────────────────────────────────────────── */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+* { margin: 0; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font: var(--type-body);
+  color: var(--fg-1);
+  background-color: var(--bg-base);
+  letter-spacing: var(--tracking-normal);
+  font-feature-settings: 'cv01', 'ss01';
+}
+
+/* Numerics align in columns wherever the mono face is used */
+.heimdall-mono,
+[data-mono] {
+  font-family: var(--font-mono);
+  font-feature-settings: 'tnum' 1, 'zero' 1;
+  font-variant-numeric: tabular-nums slashed-zero;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-snug);
+  line-height: var(--leading-snug);
+  color: var(--fg-1);
+}
+
+p { line-height: var(--leading-normal); }
+
+a { color: var(--brand-teal); text-decoration: none; }
+a:hover { color: var(--brand-teal-hover); }
+
+img, svg, video, canvas { display: block; max-width: 100%; }
+
+button, input, select, textarea {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+::selection {
+  background: var(--brand-teal-dim);
+  color: var(--fg-1);
+}
+
+/* Custom scrollbars on dark surfaces */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-3) transparent;
+}
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb {
+  background: var(--line-2);
+  border-radius: var(--radius-pill);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--line-3); background-clip: padding-box; }
+
+/* Eyebrow / overline label utility — recurring brand device */
+.heimdall-overline {
+  font: var(--type-overline);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  color: var(--fg-3);
+}

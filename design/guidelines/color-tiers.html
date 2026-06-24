@@ -1,0 +1,34 @@
+<!-- @dsCard group="Colors" viewport="700x160" name="Smoothness Tiers & Data Series" subtitle="Avg / 1% low / 0.1% low, plus the categorical compare palette" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { background: var(--bg-base); padding: var(--space-6); display: grid; gap: var(--space-5); }
+  .tiers { display: flex; gap: var(--space-3); }
+  .tier { flex: 1; border-radius: var(--radius-md); padding: var(--space-3); background: var(--bg-card); border: 1px solid var(--line-1); }
+  .bar { height: 8px; border-radius: var(--radius-pill); margin-bottom: var(--space-2); }
+  .tlab { font: var(--type-overline); text-transform: uppercase; color: var(--fg-2); }
+  .tval { font: var(--type-metric); color: var(--fg-1); }
+  .series { display: flex; gap: var(--space-2); align-items: center; }
+  .chip { display: flex; align-items: center; gap: var(--space-2); font: var(--type-data); color: var(--fg-3); }
+  .dot { width: 14px; height: 14px; border-radius: var(--radius-xs); }
+</style>
+</head>
+<body>
+  <div class="tiers">
+    <div class="tier"><div class="bar" style="background: var(--tier-avg)"></div><span class="tlab">Avg FPS</span><div class="tval">144</div></div>
+    <div class="tier"><div class="bar" style="background: var(--tier-p1)"></div><span class="tlab">1% Low</span><div class="tval">98</div></div>
+    <div class="tier"><div class="bar" style="background: var(--tier-p01)"></div><span class="tlab">0.1% Low</span><div class="tval">71</div></div>
+  </div>
+  <div class="series">
+    <span class="chip"><span class="dot" style="background:var(--series-1)"></span>S1</span>
+    <span class="chip"><span class="dot" style="background:var(--series-2)"></span>S2</span>
+    <span class="chip"><span class="dot" style="background:var(--series-3)"></span>S3</span>
+    <span class="chip"><span class="dot" style="background:var(--series-4)"></span>S4</span>
+    <span class="chip"><span class="dot" style="background:var(--series-5)"></span>S5</span>
+    <span class="chip"><span class="dot" style="background:var(--series-6)"></span>S6</span>
+  </div>
+</body>
+</html>

@@ -1,0 +1,20 @@
+<!-- @dsCard group="Spacing" viewport="700x170" name="Elevation" subtitle="Hairline top-edge highlight + soft ambient shadow" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { background: var(--bg-base); padding: var(--space-8) var(--space-6); display: flex; gap: var(--space-6); align-items: center; justify-content: space-between; }
+  .col { display: flex; flex-direction: column; align-items: center; gap: var(--space-3); }
+  .box { width: 96px; height: 64px; background: var(--bg-card); border-radius: var(--radius-md); }
+  .tok { font: var(--type-data); color: var(--fg-3); font-size: 11px; }
+</style>
+</head>
+<body>
+  <div class="col"><div class="box" style="box-shadow:var(--elev-1)"></div><span class="tok">elev-1</span></div>
+  <div class="col"><div class="box" style="box-shadow:var(--elev-2)"></div><span class="tok">elev-2</span></div>
+  <div class="col"><div class="box" style="box-shadow:var(--elev-3)"></div><span class="tok">elev-3</span></div>
+  <div class="col"><div class="box" style="box-shadow:var(--elev-4)"></div><span class="tok">elev-4</span></div>
+</body>
+</html>

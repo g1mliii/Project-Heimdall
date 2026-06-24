@@ -1,0 +1,34 @@
+<!-- @dsCard group="Brand" viewport="700x150" name="Iconography · Lucide" subtitle="1.5px stroke line icons; currentColor; 20–24px in UI" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { background: var(--bg-base); padding: var(--space-6); }
+  .row { display: flex; gap: var(--space-6); align-items: center; color: var(--fg-2); }
+  .ico { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); }
+  .ico svg { width: 26px; height: 26px; }
+  .tok { font: var(--type-data); color: var(--fg-3); font-size: 11px; }
+  .teal { color: var(--brand-teal); }
+  .note { margin-top: var(--space-5); font: var(--type-caption); color: var(--fg-3); }
+  code { font: var(--type-data); color: var(--fg-2); }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="ico"><i data-lucide="activity" class="teal"></i><span class="tok">activity</span></div>
+    <div class="ico"><i data-lucide="gauge"></i><span class="tok">gauge</span></div>
+    <div class="ico"><i data-lucide="cpu"></i><span class="tok">cpu</span></div>
+    <div class="ico"><i data-lucide="zap"></i><span class="tok">zap</span></div>
+    <div class="ico"><i data-lucide="triangle-alert"></i><span class="tok">alert</span></div>
+    <div class="ico"><i data-lucide="upload"></i><span class="tok">upload</span></div>
+    <div class="ico"><i data-lucide="share-2"></i><span class="tok">share</span></div>
+    <div class="ico"><i data-lucide="shield-check"></i><span class="tok">verified</span></div>
+    <div class="ico"><i data-lucide="git-compare"></i><span class="tok">compare</span></div>
+  </div>
+  <p class="note">Lucide (MIT) via CDN — <code>data-lucide="…"</code>. Stroke 1.5–2px, inherits <code>currentColor</code>. No emoji in product UI.</p>
+  <script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+  <script>lucide.createIcons();</script>
+</body>
+</html>

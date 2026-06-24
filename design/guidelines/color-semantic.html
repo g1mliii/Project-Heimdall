@@ -1,0 +1,36 @@
+<!-- @dsCard group="Colors" viewport="700x150" name="Semantic · Status" subtitle="Good / warning / bad / info — meaning, never decoration" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { background: var(--bg-base); padding: var(--space-6); }
+  .row { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-3); }
+  .cell { border-radius: var(--radius-md); border: 1px solid var(--line-1); overflow: hidden; }
+  .solid { height: 52px; display: flex; align-items: center; padding: 0 var(--space-3);
+           font: var(--type-label); }
+  .tint { padding: var(--space-2) var(--space-3); font: var(--type-data); }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="cell">
+      <div class="solid" style="background: var(--good); color: #04150e;">Good</div>
+      <div class="tint" style="background: var(--good-dim); color: var(--good);">#3ad29a · smooth · pass</div>
+    </div>
+    <div class="cell">
+      <div class="solid" style="background: var(--warn); color: #1f1402;">Warning</div>
+      <div class="tint" style="background: var(--warn-dim); color: var(--warn);">#f5b13d · caution</div>
+    </div>
+    <div class="cell">
+      <div class="solid" style="background: var(--bad); color: #200505;">Bad</div>
+      <div class="tint" style="background: var(--bad-dim); color: var(--bad);">#f56565 · stutter · fail</div>
+    </div>
+    <div class="cell">
+      <div class="solid" style="background: var(--info); color: #03152b;">Info</div>
+      <div class="tint" style="background: var(--info-dim); color: var(--info);">#4d9fff · neutral</div>
+    </div>
+  </div>
+</body>
+</html>

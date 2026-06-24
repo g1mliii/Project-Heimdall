@@ -1,0 +1,13 @@
+/* ───────────────────────────────────────────────────────────────
+   Heimdall Design System — global stylesheet entry point
+   Consumers link THIS one file. It is a manifest of @import lines
+   only; all real declarations live in the imported token files.
+   ─────────────────────────────────────────────────────────────── */
+
+@import url('tokens/fonts.css');
+@import url('tokens/colors.css');
+@import url('tokens/typography.css');
+@import url('tokens/spacing.css');
+@import url('tokens/effects.css');
+@import url('tokens/base.css');
+@import url('components/components.css');

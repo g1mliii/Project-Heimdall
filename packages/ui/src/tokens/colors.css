@@ -1,0 +1,127 @@
+/* ───────────────────────────────────────────────────────────────
+   Heimdall — Color tokens
+   Dark-first telemetry palette. The product reads dense frame-time
+   data on a near-black instrument surface; color is reserved for
+   meaning (smoothness tiers, diagnostics) and one Bifröst-spectral
+   brand accent. Light theme is provided as a [data-theme="light"]
+   override for marketing/docs surfaces.
+   ─────────────────────────────────────────────────────────────── */
+
+:root {
+  /* ── Base neutrals (dark, the default) ───────────────────────── */
+  --bg-void: #07090d;        /* deepest backdrop, page edges        */
+  --bg-base: #0b0e14;        /* app background                      */
+  --bg-raised: #11151d;      /* panels, sidebars                    */
+  --bg-card: #151a23;        /* cards, raised surfaces              */
+  --bg-card-hover: #1b212c;  /* card hover                          */
+  --bg-inset: #0a0d12;       /* wells, chart backgrounds, inputs    */
+  --bg-overlay: #0b0e14e6;   /* modal scrim base                    */
+
+  --line-1: #ffffff14;       /* hairline borders (8%)               */
+  --line-2: #ffffff24;       /* stronger dividers / control borders */
+  --line-3: #ffffff3d;       /* focus-adjacent, emphasis            */
+
+  --fg-1: #eef1f6;           /* primary text                        */
+  --fg-2: #a4adbe;           /* secondary text, labels              */
+  --fg-3: #6b7486;           /* muted, captions, placeholders       */
+  --fg-4: #454d5d;           /* disabled, faint axis labels         */
+  --fg-on-accent: #04201c;   /* text on the teal accent             */
+
+  /* ── Brand — Bifröst spectral ────────────────────────────────── */
+  /* Signature: an aurora teal. The watchman seeing across the      */
+  /* spectrum → a teal→blue→violet→magenta ramp used sparingly.     */
+  --brand-teal: #2ee6c6;     /* primary accent                      */
+  --brand-teal-hover: #4af0d4;
+  --brand-teal-press: #1fc4a8;
+  --brand-teal-dim: #2ee6c61f;   /* tint fills (12%)                */
+  --brand-teal-ring: #2ee6c652;  /* focus ring                      */
+
+  --brand-blue: #4d9fff;
+  --brand-violet: #8b7bff;
+  --brand-magenta: #e26ad6;
+
+  /* The Bifröst ramp — for hero moments & continuous data scales   */
+  --bifrost: linear-gradient(
+    90deg,
+    #2ee6c6 0%,
+    #4d9fff 34%,
+    #8b7bff 64%,
+    #e26ad6 100%
+  ); /* @kind color */
+  --bifrost-soft: linear-gradient(
+    135deg,
+    #2ee6c61a 0%,
+    #8b7bff14 60%,
+    #e26ad60f 100%
+  ); /* @kind color */
+
+  /* ── Semantic — performance & status ─────────────────────────── */
+  /* These map directly to product meaning: smoothness & diagnostics */
+  --good: #3ad29a;           /* smooth / pass / improvement         */
+  --good-dim: #3ad29a1f;
+  --warn: #f5b13d;           /* caution / best-effort / mild        */
+  --warn-dim: #f5b13d1f;
+  --bad: #f56565;            /* stutter / fail / regression         */
+  --bad-dim: #f565651f;
+  --info: #4d9fff;           /* neutral informational               */
+  --info-dim: #4d9fff1f;
+
+  /* ── Smoothness tiers (Avg / 1% low / 0.1% low) ──────────────── */
+  --tier-avg: #2ee6c6;       /* average FPS                         */
+  --tier-p1: #4d9fff;        /* 1% low                              */
+  --tier-p01: #8b7bff;       /* 0.1% low                            */
+
+  /* ── Categorical data-viz series (hardware compare, etc.) ────── */
+  --series-1: #2ee6c6;
+  --series-2: #4d9fff;
+  --series-3: #8b7bff;
+  --series-4: #f5b13d;
+  --series-5: #e26ad6;
+  --series-6: #3ad29a;
+
+  /* ── Chart structure ─────────────────────────────────────────── */
+  --chart-grid: #ffffff0f;
+  --chart-axis: #6b7486;
+  --chart-frametime: #2ee6c6;   /* the frame-time trace            */
+  --chart-stutter: #f56565;     /* highlighted spikes              */
+  --chart-band: #ffffff08;      /* target/percentile bands         */
+}
+
+/* ── Light theme — marketing pages, docs, print ────────────────── */
+[data-theme="light"] {
+  --bg-void: #eef0f4;
+  --bg-base: #f6f7f9;
+  --bg-raised: #ffffff;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f3f5f8;
+  --bg-inset: #eef0f4;
+  --bg-overlay: #1a1f29cc;
+
+  --line-1: #0b0e1414;
+  --line-2: #0b0e1424;
+  --line-3: #0b0e143d;
+
+  --fg-1: #11151d;
+  --fg-2: #4a5466;
+  --fg-3: #717a8c;
+  --fg-4: #aab1bf;
+  --fg-on-accent: #04201c;
+
+  --brand-teal: #12a98e;
+  --brand-teal-hover: #0e9079;
+  --brand-teal-press: #0b7a66;
+  --brand-teal-dim: #12a98e14;
+  --brand-teal-ring: #12a98e52;
+
+  --good: #18996b;
+  --good-dim: #18996b14;
+  --warn: #c47e10;
+  --warn-dim: #c47e1014;
+  --bad: #d83a3a;
+  --bad-dim: #d83a3a14;
+  --info: #2f7fe6;
+  --info-dim: #2f7fe614;
+
+  --chart-grid: #0b0e140f;
+  --chart-axis: #717a8c;
+}

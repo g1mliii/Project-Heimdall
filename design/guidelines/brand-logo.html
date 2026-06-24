@@ -1,0 +1,37 @@
+<!-- @dsCard group="Brand" viewport="700x180" name="Logo · Mark & Lockup" subtitle="Sentinel aperture + frame-time trace + detected spike" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { background: var(--bg-base); padding: var(--space-6); display: flex; align-items: center; gap: var(--space-10); }
+  .lockup { display: flex; align-items: center; gap: var(--space-3); }
+  .wm { font: var(--type-title); font-weight: var(--weight-bold); letter-spacing: var(--tracking-tight); color: var(--fg-1); }
+  .on-light { background: var(--bg-card); border: 1px solid var(--line-1); border-radius: var(--radius-md); padding: var(--space-4) var(--space-5); }
+  .swatch { display:flex; flex-direction:column; gap: var(--space-2); align-items:center; }
+  .tok { font: var(--type-data); color: var(--fg-3); font-size: 11px; }
+</style>
+</head>
+<body>
+  <div class="swatch">
+    <div class="lockup">
+      <img src="../assets/logo-mark.svg" width="44" height="44" alt="Heimdall mark">
+      <span class="wm">Heimdall</span>
+    </div>
+    <span class="tok">primary lockup</span>
+  </div>
+  <div class="swatch">
+    <div class="on-light">
+      <img src="../assets/logo-mark-mono.svg" width="40" height="40" alt="mono mark" style="color: var(--fg-1)">
+    </div>
+    <span class="tok">mono mark</span>
+  </div>
+  <div class="swatch">
+    <div class="on-light" style="background: var(--brand-teal)">
+      <img src="../assets/logo-mark-mono.svg" width="40" height="40" alt="reversed" style="color: var(--fg-on-accent)">
+    </div>
+    <span class="tok">on accent</span>
+  </div>
+</body>
+</html>

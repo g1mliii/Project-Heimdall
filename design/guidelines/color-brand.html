@@ -1,0 +1,32 @@
+<!-- @dsCard group="Colors" viewport="700x150" name="Brand · Aurora Teal" subtitle="Primary accent and its interactive states" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { background: var(--bg-base); padding: var(--space-6); }
+  .row { display: flex; gap: var(--space-3); }
+  .sw { flex: 1; border-radius: var(--radius-md); padding: var(--space-3); height: 96px;
+        display: flex; flex-direction: column; justify-content: flex-end; border: 1px solid var(--line-1); }
+  .name { font: var(--type-overline); letter-spacing: var(--tracking-wide); text-transform: uppercase; }
+  .hex { font: var(--type-data); color: inherit; opacity: 0.8; margin-top: 2px; }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="sw" style="background: var(--brand-teal); color: var(--fg-on-accent); box-shadow: var(--glow-soft);">
+      <span class="name">Teal · default</span><span class="hex">#2ee6c6</span>
+    </div>
+    <div class="sw" style="background: var(--brand-teal-hover); color: var(--fg-on-accent);">
+      <span class="name">Hover</span><span class="hex">#4af0d4</span>
+    </div>
+    <div class="sw" style="background: var(--brand-teal-press); color: var(--fg-on-accent);">
+      <span class="name">Press</span><span class="hex">#1fc4a8</span>
+    </div>
+    <div class="sw" style="background: var(--brand-teal-dim); color: var(--brand-teal);">
+      <span class="name">Tint 12%</span><span class="hex">teal-dim</span>
+    </div>
+  </div>
+</body>
+</html>

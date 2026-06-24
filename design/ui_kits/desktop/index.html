@@ -1,0 +1,35 @@
+<!-- @dsCard group="Desktop Client" viewport="460x680" -->
+<!-- @startingPoint section="Desktop Client" subtitle="Tauri capture client — hotkey, live capture, signed upload" viewport="460x680" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Heimdall — Capture Client</title>
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  body { background: var(--bg-void); min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+  /* Native window chrome */
+  .win { width: 412px; background: var(--bg-base); border: 1px solid var(--line-2); border-radius: var(--radius-lg); box-shadow: var(--elev-4); overflow: hidden; }
+  .titlebar { height: 38px; display: flex; align-items: center; gap: 8px; padding: 0 12px; background: var(--bg-raised); border-bottom: 1px solid var(--line-1); -webkit-app-region: drag; }
+  .titlebar .name { font: var(--type-caption); color: var(--fg-2); font-weight: var(--weight-medium); display: flex; align-items: center; gap: 7px; }
+  .winctl { margin-left: auto; display: flex; gap: 2px; }
+  .winctl button { width: 26px; height: 24px; display: grid; place-items: center; border: none; background: transparent; color: var(--fg-3); border-radius: var(--radius-xs); cursor: pointer; }
+  .winctl button:hover { background: #ffffff14; color: var(--fg-1); }
+  .winctl .close:hover { background: var(--bad); color: #fff; }
+  .body { padding: 20px; }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+  <script type="text/babel" src="../web/charts.jsx"></script>
+  <script type="text/babel" src="CaptureClient.jsx"></script>
+  <script type="text/babel">
+    ReactDOM.createRoot(document.getElementById('root')).render(<CaptureClient />);
+  </script>
+</body>
+</html>

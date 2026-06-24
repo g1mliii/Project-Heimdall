@@ -1,0 +1,33 @@
+<!-- @dsCard group="Colors" viewport="700x150" name="Text & Lines" subtitle="Foreground hierarchy and hairline borders on dark" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { background: var(--bg-card); padding: var(--space-6); display: grid;
+         grid-template-columns: 1.4fr 1fr; gap: var(--space-8); align-items: center; }
+  .stack > div { display: flex; align-items: baseline; gap: var(--space-3); padding: var(--space-1) 0; }
+  .stack .lab { font: var(--type-data); color: var(--fg-3); width: 56px; }
+  .t1 { color: var(--fg-1); font: var(--type-subheading); }
+  .t2 { color: var(--fg-2); font: var(--type-body); }
+  .t3 { color: var(--fg-3); font: var(--type-body-sm); }
+  .t4 { color: var(--fg-4); font: var(--type-body-sm); }
+  .lines > div { height: 26px; border-radius: var(--radius-xs); margin-bottom: var(--space-2);
+                 display: flex; align-items: center; padding-left: var(--space-3); font: var(--type-data); color: var(--fg-2); }
+</style>
+</head>
+<body>
+  <div class="stack">
+    <div><span class="lab">fg-1</span><span class="t1">Primary heading</span></div>
+    <div><span class="lab">fg-2</span><span class="t2">Secondary body copy</span></div>
+    <div><span class="lab">fg-3</span><span class="t3">Muted caption / placeholder</span></div>
+    <div><span class="lab">fg-4</span><span class="t4">Disabled / faint axis</span></div>
+  </div>
+  <div class="lines">
+    <div style="border:1px solid var(--line-1)">line-1 · 8%</div>
+    <div style="border:1px solid var(--line-2)">line-2 · 14%</div>
+    <div style="border:1px solid var(--line-3)">line-3 · 24%</div>
+  </div>
+</body>
+</html>

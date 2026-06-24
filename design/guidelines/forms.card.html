@@ -1,0 +1,55 @@
+<!-- @dsCard group="Components" viewport="700x400" name="Forms · Inputs, Select, Toggles" subtitle="Text fields, dropdowns, switches, checkboxes, segmented" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  body { background: var(--bg-base); padding: var(--space-6); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-5) var(--space-6); align-items: start; }
+  .lab { display: block; font: var(--type-overline); letter-spacing: var(--tracking-wider); text-transform: uppercase; color: var(--fg-3); margin-bottom: var(--space-3); }
+  .row { display: flex; gap: var(--space-4); flex-wrap: wrap; align-items: center; }
+  .stack { display: flex; flex-direction: column; gap: var(--space-3); }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <script src="../../_ds_bundle.js"></script>
+  <script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+  <script type="text/babel">
+    const { Input, Select, Switch, Checkbox, Segmented } = window.HeimdallDesignSystem_da7d5f;
+    function Demo() {
+      const [units, setUnits] = React.useState('ms');
+      const [verified, setVerified] = React.useState(true);
+      const [pub, setPub] = React.useState(false);
+      return (
+        <div className="grid">
+          <div className="stack">
+            <span className="lab">Text fields</span>
+            <Input label="Run title" placeholder="Cyberpunk 2077 — Ultra, RT" />
+            <Input icon={<i data-lucide="search" />} placeholder="Search games…" />
+            <Input label="Management token" mono error="That token doesn't match this run." defaultValue="hd_8f2c…a91" />
+          </div>
+          <div className="stack">
+            <span className="lab">Select &amp; toggles</span>
+            <Select label="Resolution" options={['1080p','1440p','2160p']} defaultValue="1440p" />
+            <div style={{marginTop:'4px'}}>
+              <span className="lab" style={{marginBottom:'8px'}}>Units</span>
+              <Segmented value={units} onChange={setUnits} options={[{value:'ms',label:'ms'},{value:'fps',label:'FPS'}]} />
+            </div>
+            <div className="stack" style={{gap:'12px',marginTop:'4px'}}>
+              <Switch checked={verified} onChange={e=>setVerified(e.target.checked)} label="Verified submissions only" />
+              <Checkbox checked={pub} onChange={e=>setPub(e.target.checked)} label="Make this run public" />
+            </div>
+          </div>
+        </div>
+      );
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(<Demo />);
+    setTimeout(() => window.lucide && window.lucide.createIcons(), 60);
+  </script>
+</body>
+</html>

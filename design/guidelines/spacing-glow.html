@@ -1,0 +1,20 @@
+<!-- @dsCard group="Spacing" viewport="700x160" name="Glow & Focus" subtitle="Accent glow for live/primary states; 2px teal focus ring" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { background: var(--bg-base); padding: var(--space-8) var(--space-6); display: flex; gap: var(--space-6); align-items: center; justify-content: space-around; }
+  .col { display: flex; flex-direction: column; align-items: center; gap: var(--space-3); }
+  .box { width: 110px; height: 56px; border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; font: var(--type-label); }
+  .tok { font: var(--type-data); color: var(--fg-3); font-size: 11px; }
+</style>
+</head>
+<body>
+  <div class="col"><div class="box" style="background:var(--brand-teal); color:var(--fg-on-accent); box-shadow:var(--glow-soft)">Live</div><span class="tok">glow-soft</span></div>
+  <div class="col"><div class="box" style="background:var(--bg-card); color:var(--good); box-shadow:var(--glow-good); border:1px solid var(--good)">Pass</div><span class="tok">glow-good</span></div>
+  <div class="col"><div class="box" style="background:var(--bg-card); color:var(--bad); box-shadow:var(--glow-bad); border:1px solid var(--bad)">Flagged</div><span class="tok">glow-bad</span></div>
+  <div class="col"><div class="box" style="background:var(--bg-card); color:var(--fg-1); box-shadow:var(--focus-ring)">Focus</div><span class="tok">focus-ring</span></div>
+</body>
+</html>

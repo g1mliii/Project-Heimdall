@@ -1,0 +1,88 @@
+<!-- @dsCard group="Components" viewport="700x440" name="Core · Buttons, Badges, Cards, Stats" subtitle="Actions, status, surfaces & metrics" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  body { background: var(--bg-base); padding: var(--space-6); }
+  .group { margin-bottom: var(--space-6); }
+  .group > .lab { display: block; font: var(--type-overline); letter-spacing: var(--tracking-wider); text-transform: uppercase; color: var(--fg-3); margin-bottom: var(--space-3); }
+  .row { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; }
+  .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-3); }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <script src="../../_ds_bundle.js"></script>
+  <script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+
+  <script type="text/babel">
+    const { Button, IconButton, Badge, Tag, Card, Stat, Avatar } = window.HeimdallDesignSystem_da7d5f;
+    const Ico = (n) => <i data-lucide={n} />;
+
+    function Demo() {
+      return (
+        <div>
+          <div className="group">
+            <span className="lab">Buttons</span>
+            <div className="row">
+              <Button variant="primary" iconLeft={Ico('upload')}>Upload run</Button>
+              <Button variant="secondary">Secondary</Button>
+              <Button variant="ghost">Ghost</Button>
+              <Button variant="subtle">Subtle</Button>
+              <Button variant="danger" iconLeft={Ico('trash-2')}>Delete</Button>
+              <Button variant="primary" size="sm">Small</Button>
+              <Button variant="primary" loading>Saving</Button>
+              <IconButton solid aria-label="Share">{Ico('share-2')}</IconButton>
+            </div>
+          </div>
+
+          <div className="group">
+            <span className="lab">Badges &amp; Tags</span>
+            <div className="row">
+              <Badge tone="good" dot>Validated</Badge>
+              <Badge tone="warn">Best-effort</Badge>
+              <Badge tone="bad" dot>Flagged</Badge>
+              <Badge tone="info">Unlisted</Badge>
+              <Badge tone="brand">DLSS 3</Badge>
+              <Badge tone="solid">Verified</Badge>
+              <Tag onRemove={() => {}}>RTX 4070</Tag>
+              <Tag>DX12 · 1440p</Tag>
+            </div>
+          </div>
+
+          <div className="group">
+            <span className="lab">Stats</span>
+            <div className="grid4">
+              <Stat label="Avg FPS" value="144.7" accent="var(--tier-avg)" />
+              <Stat label="1% Low" value="98" unit="fps" delta="+14%" deltaDir="up" accent="var(--tier-p1)" />
+              <Stat label="0.1% Low" value="71" accent="var(--tier-p01)" />
+              <Stat label="p99 frame-time" value="14.1" unit="ms" delta="-3%" deltaDir="down" />
+            </div>
+          </div>
+
+          <div className="group" style={{marginBottom:0}}>
+            <span className="lab">Card</span>
+            <Card style={{maxWidth:360}}>
+              <Card.Header title="Hardware snapshot" actions={<IconButton aria-label="Copy">{Ico('copy')}</IconButton>} />
+              <Card.Body>
+                <div style={{display:'flex',alignItems:'center',gap:'12px'}}>
+                  <Avatar name="Ada Lovelace" />
+                  <span style={{font:'var(--type-body)',color:'var(--fg-2)'}}>RTX 4070 · Ryzen 7 7800X3D</span>
+                </div>
+              </Card.Body>
+            </Card>
+          </div>
+        </div>
+      );
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(<Demo />);
+    setTimeout(() => window.lucide && window.lucide.createIcons(), 60);
+  </script>
+</body>
+</html>

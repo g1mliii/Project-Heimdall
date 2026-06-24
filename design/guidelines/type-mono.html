@@ -1,0 +1,27 @@
+<!-- @dsCard group="Type" viewport="700x190" name="Metrics · JetBrains Mono" subtitle="Tabular figures for all numerics — they align in columns" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { background: var(--bg-base); padding: var(--space-6); display: grid; grid-template-columns: auto 1fr; gap: var(--space-8); align-items: center; }
+  .big { font: var(--type-metric-lg); color: var(--brand-teal); font-variant-numeric: tabular-nums slashed-zero; }
+  .big small { font: var(--type-data); color: var(--fg-3); display: block; letter-spacing: var(--tracking-wide); text-transform: uppercase; }
+  table { border-collapse: collapse; font: var(--type-data); font-variant-numeric: tabular-nums slashed-zero; width: 100%; }
+  td, th { text-align: right; padding: 3px var(--space-3); color: var(--fg-2); }
+  th { color: var(--fg-3); font-weight: var(--weight-medium); border-bottom: 1px solid var(--line-2); text-transform: uppercase; font-size: 11px; }
+  td:first-child, th:first-child { text-align: left; color: var(--fg-1); }
+  td b { color: var(--fg-1); font-weight: var(--weight-semibold); }
+</style>
+</head>
+<body>
+  <div class="big">144.7<small>avg fps</small></div>
+  <table>
+    <tr><th>Metric</th><th>Value</th><th>ms</th></tr>
+    <tr><td>p50</td><td><b>6.94</b></td><td>108.0</td></tr>
+    <tr><td>p95</td><td><b>10.20</b></td><td>980.5</td></tr>
+    <tr><td>p99</td><td><b>14.08</b></td><td>1004.1</td></tr>
+  </table>
+</body>
+</html>
