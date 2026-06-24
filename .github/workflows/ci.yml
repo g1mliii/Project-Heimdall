@@ -15,11 +15,11 @@ jobs:
     name: Web / shared (pnpm verify)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version-file: .node-version # single source of truth with local dev (§0.8)
           cache: pnpm
@@ -34,7 +34,7 @@ jobs:
     runs-on: windows-latest
     # No-op until the Tauri client exists (Phase 9). Runs once Cargo.toml lands.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - id: detect
         shell: bash
