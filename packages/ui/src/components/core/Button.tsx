@@ -1,4 +1,5 @@
 import type * as React from "react";
+import { cx } from "../../utils/cx";
 
 /**
  * Props for the primary call-to-action button.
@@ -36,15 +37,13 @@ export function Button({
   children,
   ...rest
 }: ButtonProps) {
-  const cls = [
+  const cls = cx(
     "hd-btn",
     `hd-btn--${variant}`,
-    size !== "md" ? `hd-btn--${size}` : "",
-    block ? "hd-btn--block" : "",
+    size !== "md" && `hd-btn--${size}`,
+    block && "hd-btn--block",
     className,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  );
 
   return (
     <button type={type} className={cls} disabled={disabled || loading} {...rest}>

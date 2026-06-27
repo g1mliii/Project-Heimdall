@@ -1,4 +1,5 @@
 import type * as React from "react";
+import { cx } from "../../utils/cx";
 
 export interface TabItem {
   value: string;
@@ -18,7 +19,7 @@ export interface TabsProps extends Omit<React.HTMLAttributes<HTMLDivElement>, "o
 /** Underlined tab bar for run-page sections and dashboard views. */
 export function Tabs({ tabs = [], value, onChange, className = "", ...rest }: TabsProps) {
   return (
-    <div className={["hd-tabs", className].filter(Boolean).join(" ")} role="tablist" {...rest}>
+    <div className={cx("hd-tabs", className)} role="tablist" {...rest}>
       {tabs.map((t) => {
         const v = typeof t === "string" ? t : t.value;
         const label = typeof t === "string" ? t : t.label;

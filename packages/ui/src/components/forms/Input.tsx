@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { cx } from "../../utils/cx";
 
 export interface InputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "size"> {
   /** Field label rendered above the control. */
@@ -34,15 +35,13 @@ export function Input({
   const input = (
     <input
       id={inputId}
-      className={["hd-input", mono ? "hd-input--mono" : "", error ? "hd-input--error" : "", className]
-        .filter(Boolean)
-        .join(" ")}
+      className={cx("hd-input", mono && "hd-input--mono", !!error && "hd-input--error", className)}
       aria-invalid={error ? true : undefined}
       {...rest}
     />
   );
   return (
-    <div className={["hd-field", wrapClassName].filter(Boolean).join(" ")}>
+    <div className={cx("hd-field", wrapClassName)}>
       {label && (
         <label className="hd-field__label" htmlFor={inputId}>
           {label}

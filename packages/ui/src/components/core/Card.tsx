@@ -1,4 +1,5 @@
 import type * as React from "react";
+import { cx } from "../../utils/cx";
 
 /**
  * Props for the surface container.
@@ -21,14 +22,7 @@ export interface CardHeaderProps extends Omit<React.HTMLAttributes<HTMLDivElemen
 
 /** Surface container. Compose with Card.Header / Card.Body or pass children directly. */
 export function Card({ variant, interactive = false, className = "", children, ...rest }: CardProps) {
-  const cls = [
-    "hd-card",
-    variant ? `hd-card--${variant}` : "",
-    interactive ? "hd-card--interactive" : "",
-    className,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const cls = cx("hd-card", variant && `hd-card--${variant}`, interactive && "hd-card--interactive", className);
   return (
     <div className={cls} {...rest}>
       {children}
@@ -38,7 +32,7 @@ export function Card({ variant, interactive = false, className = "", children, .
 
 Card.Header = function CardHeader({ title, actions, className = "", children, ...rest }: CardHeaderProps) {
   return (
-    <div className={["hd-card__head", className].filter(Boolean).join(" ")} {...rest}>
+    <div className={cx("hd-card__head", className)} {...rest}>
       {title ? <span className="hd-card__title">{title}</span> : children}
       {actions}
     </div>
@@ -47,7 +41,7 @@ Card.Header = function CardHeader({ title, actions, className = "", children, ..
 
 Card.Body = function CardBody({ className = "", children, ...rest }: React.HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={["hd-card__body", className].filter(Boolean).join(" ")} {...rest}>
+    <div className={cx("hd-card__body", className)} {...rest}>
       {children}
     </div>
   );

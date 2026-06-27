@@ -1,4 +1,5 @@
 import type * as React from "react";
+import { cx } from "../../utils/cx";
 
 export interface TagProps extends React.HTMLAttributes<HTMLSpanElement> {
   /** When provided, renders a dismiss affordance and calls this on remove. */
@@ -8,7 +9,7 @@ export interface TagProps extends React.HTMLAttributes<HTMLSpanElement> {
 /** Dismissible chip — filters, selected hardware, applied settings. */
 export function Tag({ onRemove, className = "", children, ...rest }: TagProps) {
   return (
-    <span className={["hd-tag", className].filter(Boolean).join(" ")} {...rest}>
+    <span className={cx("hd-tag", className)} {...rest}>
       {children}
       {onRemove && (
         <span

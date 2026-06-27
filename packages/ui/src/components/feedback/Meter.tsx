@@ -1,4 +1,5 @@
 import type * as React from "react";
+import { cx } from "../../utils/cx";
 
 export interface MeterProps extends React.HTMLAttributes<HTMLDivElement> {
   /** Uppercase overline label. */
@@ -25,7 +26,7 @@ export function Meter({
 }: MeterProps) {
   const pct = max > 0 ? Math.max(0, Math.min(100, (value / max) * 100)) : 0;
   return (
-    <div className={["hd-meter", className].filter(Boolean).join(" ")} {...rest}>
+    <div className={cx("hd-meter", className)} {...rest}>
       {(label || display) && (
         <div className="hd-meter__head">
           {label && <span className="hd-meter__label">{label}</span>}

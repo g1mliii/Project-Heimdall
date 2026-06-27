@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { cx } from "../../utils/cx";
 
 export interface CheckboxProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "type"> {
   /** Controlled checked state. */
@@ -16,7 +17,7 @@ export function Checkbox({ checked, onChange, label, id, disabled = false, class
   const reactId = React.useId();
   const cbId = id || reactId;
   return (
-    <label className={["hd-check", className].filter(Boolean).join(" ")} htmlFor={cbId}>
+    <label className={cx("hd-check", className)} htmlFor={cbId}>
       <input id={cbId} type="checkbox" checked={checked} onChange={onChange} disabled={disabled} {...rest} />
       <span className="hd-check__box" aria-hidden="true">
         <svg

@@ -113,7 +113,7 @@ export const tamperedCreateRequest: CreateRunRequest = {
     onePercentLowFps: 239,
     pointOnePercentLowFps: 238,
   },
-  hardware: { ...baseHardware, gpuVendor: "nvidia" },
+  hardware: { ...baseHardware },
 };
 
 /** Deliberately schema-INVALID payloads, keyed by what's wrong (reject tests). */

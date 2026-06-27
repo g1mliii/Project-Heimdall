@@ -1,4 +1,5 @@
 import type * as React from "react";
+import { cx } from "../../utils/cx";
 
 export interface IconButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   /** Control size. @default "md" */
@@ -18,14 +19,7 @@ export function IconButton({
   children,
   ...rest
 }: IconButtonProps) {
-  const cls = [
-    "hd-iconbtn",
-    size !== "md" ? `hd-iconbtn--${size}` : "",
-    solid ? "hd-iconbtn--solid" : "",
-    className,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const cls = cx("hd-iconbtn", size !== "md" && `hd-iconbtn--${size}`, solid && "hd-iconbtn--solid", className);
   return (
     <button type="button" className={cls} disabled={disabled} {...rest}>
       {children}

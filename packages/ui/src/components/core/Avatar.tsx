@@ -1,4 +1,5 @@
 import type * as React from "react";
+import { cx } from "../../utils/cx";
 
 export interface AvatarProps extends React.HTMLAttributes<HTMLSpanElement> {
   /** Image URL; falls back to initials when absent. */
@@ -18,7 +19,7 @@ export function Avatar({ src, name = "", size = "md", className = "", ...rest }:
     .slice(0, 2)
     .join("")
     .toUpperCase();
-  const cls = ["hd-avatar", size !== "md" ? `hd-avatar--${size}` : "", className].filter(Boolean).join(" ");
+  const cls = cx("hd-avatar", size !== "md" && `hd-avatar--${size}`, className);
   return (
     <span className={cls} {...rest}>
       {src ? <img src={src} alt={name} /> : initials || "?"}

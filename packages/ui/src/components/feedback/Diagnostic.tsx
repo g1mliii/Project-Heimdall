@@ -1,6 +1,10 @@
 import type * as React from "react";
+import { cx } from "../../utils/cx";
 
-const ICONS: Record<string, React.ReactNode> = {
+/** Severity drives the icon + color; one source of truth for the prop and the icon map. */
+export type DiagnosticSeverity = "good" | "warn" | "bad" | "info";
+
+const ICONS: Record<DiagnosticSeverity, React.ReactNode> = {
   warn: <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3M12 9v4m0 4h.01" />,
   bad: (
     <g>
@@ -29,7 +33,7 @@ const ICONS: Record<string, React.ReactNode> = {
  */
 export interface DiagnosticProps extends Omit<React.HTMLAttributes<HTMLDivElement>, "title"> {
   /** Severity drives icon + color. @default "info" */
-  severity?: "good" | "warn" | "bad" | "info";
+  severity?: DiagnosticSeverity;
   /** Bold one-line headline (the warning name). */
   title?: React.ReactNode;
 }
@@ -39,7 +43,7 @@ export interface DiagnosticProps extends Omit<React.HTMLAttributes<HTMLDivElemen
  */
 export function Diagnostic({ severity = "info", title, children, className = "", ...rest }: DiagnosticProps) {
   return (
-    <div className={["hd-diag", `hd-diag--${severity}`, className].filter(Boolean).join(" ")} role="status" {...rest}>
+    <div className={cx("hd-diag", `hd-diag--${severity}`, className)} role="status" {...rest}>
       <span className="hd-diag__icon" aria-hidden="true">
         <svg
           viewBox="0 0 24 24"
@@ -49,7 +53,7 @@ export function Diagnostic({ severity = "info", title, children, className = "",
           strokeLinecap="round"
           strokeLinejoin="round"
         >
-          {ICONS[severity] || ICONS.info}
+          {ICONS[severity]}
         </svg>
       </span>
       <div className="hd-diag__body">

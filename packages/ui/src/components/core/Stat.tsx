@@ -1,4 +1,5 @@
 import type * as React from "react";
+import { cx } from "../../utils/cx";
 
 /**
  * Props for the big-number metric tile.
@@ -23,7 +24,7 @@ export interface StatProps extends React.HTMLAttributes<HTMLDivElement> {
 /** Big-number metric tile for run summaries and dashboards. */
 export function Stat({ label, value, unit, delta, deltaDir, accent, className = "", ...rest }: StatProps) {
   return (
-    <div className={["hd-stat", className].filter(Boolean).join(" ")} {...rest}>
+    <div className={cx("hd-stat", className)} {...rest}>
       {accent && <div className="hd-stat__accent" style={{ background: accent }} />}
       <span className="hd-stat__label">{label}</span>
       <span className="hd-stat__value">

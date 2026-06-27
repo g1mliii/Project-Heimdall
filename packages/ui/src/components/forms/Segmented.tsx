@@ -1,4 +1,5 @@
 import type * as React from "react";
+import { cx } from "../../utils/cx";
 
 export interface SegmentedOption {
   value: string;
@@ -18,7 +19,7 @@ export interface SegmentedProps extends Omit<React.HTMLAttributes<HTMLDivElement
 /** Compact segmented toggle for view modes (chart type, time window). */
 export function Segmented({ options = [], value, onChange, className = "", ...rest }: SegmentedProps) {
   return (
-    <div className={["hd-segmented", className].filter(Boolean).join(" ")} role="group" {...rest}>
+    <div className={cx("hd-segmented", className)} role="group" {...rest}>
       {options.map((o) => {
         const v = typeof o === "string" ? o : o.value;
         const label = typeof o === "string" ? o : o.label;

@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { cx } from "../../utils/cx";
 
 export interface SelectOption {
   value: string;
@@ -21,7 +22,7 @@ export function Select({ label, hint, options = [], id, className = "", children
   const reactId = React.useId();
   const selId = id || (label ? reactId : undefined);
   return (
-    <div className={["hd-field", className].filter(Boolean).join(" ")}>
+    <div className={cx("hd-field", className)}>
       {label && (
         <label className="hd-field__label" htmlFor={selId}>
           {label}

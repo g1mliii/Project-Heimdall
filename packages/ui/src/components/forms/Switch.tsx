@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { cx } from "../../utils/cx";
 
 export interface SwitchProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "type"> {
   /** Controlled checked state. */
@@ -16,7 +17,7 @@ export function Switch({ checked, onChange, label, id, disabled = false, classNa
   const reactId = React.useId();
   const swId = id || reactId;
   return (
-    <label className={["hd-switch", className].filter(Boolean).join(" ")} htmlFor={swId}>
+    <label className={cx("hd-switch", className)} htmlFor={swId}>
       <input
         id={swId}
         type="checkbox"
