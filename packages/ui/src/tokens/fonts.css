@@ -1,11 +1,16 @@
 /* ───────────────────────────────────────────────────────────────
    Heimdall — Webfonts
-   NOTE: No brand fonts were supplied by the project. These are
-   Google Fonts chosen to fit the telemetry/technical aesthetic and
-   should be reviewed/replaced if a licensed brand face is chosen.
+   NOTE: No brand fonts were supplied by the project. These three faces
+   fit the telemetry/technical aesthetic and should be reviewed/replaced
+   if a licensed brand face is chosen.
      · Space Grotesk  — display & headings (mechanical grotesque)
      · Hanken Grotesk — UI & body copy (clean humanist grotesque)
      · JetBrains Mono — all numerics, metrics, code, telemetry
-   ─────────────────────────────────────────────────────────────── */
 
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+   The faces are NO LONGER loaded via a render-blocking Google Fonts
+   @import. The web app self-hosts them with `next/font/google`, which
+   exposes each as a CSS variable (--font-space-grotesk /
+   --font-hanken-grotesk / --font-jetbrains-mono). typography.css wires the
+   --font-display / --font-sans / --font-mono tokens to those variables
+   (with literal-family fallbacks), so this file intentionally loads nothing.
+   ─────────────────────────────────────────────────────────────── */

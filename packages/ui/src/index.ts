@@ -4,26 +4,25 @@
 // (the adherence lint forbids deep imports). Apps also import the stylesheet once:
 //   import '@heimdall/ui/styles.css'
 //
-// NOTE: components currently ship as .jsx + .d.ts exactly as authored by the design
-// system. Phase 1 (§3a) finalizes the TS/build wiring when apps/web first consumes them.
+// Components are typed .tsx, built to dist/ by tsup (see package.json exports).
 
-export { Button } from './components/core/Button.jsx';
-export { IconButton } from './components/core/IconButton.jsx';
-export { Badge } from './components/core/Badge.jsx';
-export { Tag } from './components/core/Tag.jsx';
-export { Card } from './components/core/Card.jsx';
-export { Stat } from './components/core/Stat.jsx';
-export { Avatar } from './components/core/Avatar.jsx';
+export { Button, type ButtonProps } from "./components/core/Button";
+export { IconButton, type IconButtonProps } from "./components/core/IconButton";
+export { Badge, type BadgeProps } from "./components/core/Badge";
+export { Tag, type TagProps } from "./components/core/Tag";
+export { Card, type CardProps, type CardHeaderProps } from "./components/core/Card";
+export { Stat, type StatProps } from "./components/core/Stat";
+export { Avatar, type AvatarProps } from "./components/core/Avatar";
 
-export { Input } from './components/forms/Input.jsx';
-export { Select } from './components/forms/Select.jsx';
-export { Switch } from './components/forms/Switch.jsx';
-export { Checkbox } from './components/forms/Checkbox.jsx';
-export { Segmented } from './components/forms/Segmented.jsx';
+export { Input, type InputProps } from "./components/forms/Input";
+export { Select, type SelectProps, type SelectOption } from "./components/forms/Select";
+export { Switch, type SwitchProps } from "./components/forms/Switch";
+export { Checkbox, type CheckboxProps } from "./components/forms/Checkbox";
+export { Segmented, type SegmentedProps, type SegmentedOption } from "./components/forms/Segmented";
 
-export { Diagnostic } from './components/feedback/Diagnostic.jsx';
-export { Meter } from './components/feedback/Meter.jsx';
-export { Tooltip } from './components/feedback/Tooltip.jsx';
-export { Spinner } from './components/feedback/Spinner.jsx';
+export { Diagnostic, type DiagnosticProps } from "./components/feedback/Diagnostic";
+export { Meter, type MeterProps } from "./components/feedback/Meter";
+export { Tooltip, type TooltipProps } from "./components/feedback/Tooltip";
+export { Spinner, type SpinnerProps } from "./components/feedback/Spinner";
 
-export { Tabs } from './components/navigation/Tabs.jsx';
+export { Tabs, type TabsProps, type TabItem } from "./components/navigation/Tabs";

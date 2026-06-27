@@ -1,0 +1,142 @@
+import { describe, expect, it } from "vitest";
+import {
+  createRunRequestSchema,
+  finalizeRunRequestSchema,
+  runResponseSchema,
+  runSummarySchema,
+  hardwareSnapshotSchema,
+  frameSampleSchema,
+  type CreateRunRequest,
+} from "./schemas";
+import {
+  fixtures,
+  validCreateRunRequest,
+  localeVariantRawCreateRequest,
+  malformedCreateRequests,
+} from "./fixtures";
+import { RUN_VISIBILITY } from "./visibility";
+import { CURRENT_SCHEMA_VERSION } from "./constants";
+import type { FrameSample, HardwareSnapshot, RunSummary } from "./types";
+
+describe("schema accept/reject (§3.1)", () => {
+  it("accepts a well-formed create request", () => {
+    expect(createRunRequestSchema.safeParse(validCreateRunRequest).success).toBe(true);
+  });
+
+  it("accepts the valid run response and summary fixtures", () => {
+    expect(runSummarySchema.safeParse(fixtures.validSummary).success).toBe(true);
+    expect(hardwareSnapshotSchema.safeParse(fixtures.validRun.hardware).success).toBe(true);
+  });
+
+  it("accepts a sensor-complete and a sensor-sparse frame", () => {
+    expect(frameSampleSchema.safeParse(fixtures.validFrames[0]).success).toBe(true);
+    expect(frameSampleSchema.safeParse(fixtures.missingSensorFrames[0]).success).toBe(true);
+  });
+
+  it("rejects every malformed payload", () => {
+    for (const [name, payload] of Object.entries(malformedCreateRequests)) {
+      const result =
+        name === "negativeFrameTime"
+          ? frameSampleSchema.safeParse(payload)
+          : createRunRequestSchema.safeParse(payload);
+      expect(result.success, `expected ${name} to be rejected`).toBe(false);
+    }
+  });
+
+  it("accepts the tampered request at the schema layer (it is schema-valid by design)", () => {
+    // Tampering is caught by the server recompute/physics checks (Phase 7),
+    // not by static validation — the schema must not reject it.
+    expect(createRunRequestSchema.safeParse(fixtures.tamperedCreateRequest).success).toBe(true);
+  });
+});
+
+describe("normalization & defaulting idempotence (§3.3)", () => {
+  it("trims the game title and fills defaults", () => {
+    const parsed = createRunRequestSchema.parse(localeVariantRawCreateRequest);
+    expect(parsed.game).toBe("Pokémon — Légendes");
+    expect(parsed.visibility).toBe(RUN_VISIBILITY.unlisted);
+    expect(parsed.generatedFrameTech).toBe("none");
+    expect(parsed.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+  });
+
+  it("is idempotent: parse(parse(x)) deep-equals parse(x)", () => {
+    const once = createRunRequestSchema.parse(localeVariantRawCreateRequest);
+    const twice = createRunRequestSchema.parse(once);
+    expect(twice).toEqual(once);
+  });
+});
+
+describe("DTO round-trip stability (§3.2)", () => {
+  it("survives parse → serialize → parse unchanged", () => {
+    const parsed = createRunRequestSchema.parse(validCreateRunRequest);
+    const roundTripped = createRunRequestSchema.parse(JSON.parse(JSON.stringify(parsed)));
+    expect(roundTripped).toEqual(parsed);
+  });
+
+  it("round-trips the finalize and run-response DTOs", () => {
+    const finalize = finalizeRunRequestSchema.parse({
+      framesObjectKey: "runs/run_valid_0001.parquet",
+      visibility: RUN_VISIBILITY.public,
+      signatureValid: true,
+    });
+    expect(finalizeRunRequestSchema.parse(JSON.parse(JSON.stringify(finalize)))).toEqual(finalize);
+
+    const run = runResponseSchema.parse(fixtures.validRun);
+    expect(runResponseSchema.parse(JSON.parse(JSON.stringify(run)))).toEqual(run);
+  });
+
+  it("round-trips a generated spread of summaries (property-style)", () => {
+    // Lightweight generative property check without pulling in a PBT dependency:
+    // a deterministic LCG drives the inputs, so failures reproduce exactly.
+    let seed = 0x9e3779b1;
+    const rand = () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 0xffffffff;
+    };
+    for (let i = 0; i < 200; i++) {
+      const summary: RunSummary = {
+        avgFps: rand() * 480,
+        onePercentLowFps: rand() * 480,
+        pointOnePercentLowFps: rand() * 480,
+        frameTimeP50Ms: rand() * 50,
+        frameTimeP95Ms: rand() * 50,
+        frameTimeP99Ms: rand() * 50,
+        stutterCount: Math.floor(rand() * 200),
+        generatedFramePct: rand(),
+        pointOnePercentLowConfidence: (["high", "medium", "low"] as const)[
+          Math.floor(rand() * 3)
+        ]!,
+        sampleCount: Math.floor(rand() * 50000),
+        durationSeconds: rand() * 600,
+      };
+      const parsed = runSummarySchema.parse(summary);
+      const again = runSummarySchema.parse(JSON.parse(JSON.stringify(parsed)));
+      expect(again).toEqual(parsed);
+    }
+  });
+});
+
+describe("schema/type drift guards (compile-time)", () => {
+  // These bodies never need to run to do their job: tsc --noEmit type-checks
+  // the file, so any divergence between a domain type and its DTO schema is a
+  // build error. The runtime assertions just keep the test non-empty.
+  it("RunSummary <-> runSummarySchema stay mutually assignable", () => {
+    const fromSchema = runSummarySchema.parse(fixtures.validSummary);
+    const asDomain: RunSummary = fromSchema;
+    const backToSchema: import("./schemas").RunSummaryResponse = asDomain;
+    expect(backToSchema).toEqual(fromSchema);
+  });
+
+  it("HardwareSnapshot and FrameSample stay in sync with their schemas", () => {
+    const hw: HardwareSnapshot = hardwareSnapshotSchema.parse(fixtures.validRun.hardware);
+    const hwBack: import("./schemas").CreateRunRequest["hardware"] = hw;
+    const frame: FrameSample = frameSampleSchema.parse(fixtures.validFrames[0]);
+    expect(hwBack).toEqual(hw);
+    expect(frame.frameTimeMs).toBeGreaterThan(0);
+  });
+
+  it("CreateRunRequest infers to the exported type", () => {
+    const req: CreateRunRequest = createRunRequestSchema.parse(validCreateRunRequest);
+    expect(req.parserVersion).toBeTruthy();
+  });
+});
