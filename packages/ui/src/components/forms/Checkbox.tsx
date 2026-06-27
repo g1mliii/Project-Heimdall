@@ -1,4 +1,6 @@
-import type * as React from "react";
+"use client";
+
+import * as React from "react";
 
 export interface CheckboxProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "type"> {
   /** Controlled checked state. */
@@ -11,7 +13,8 @@ export interface CheckboxProps extends Omit<React.InputHTMLAttributes<HTMLInputE
 
 /** Checkbox for multi-select filters and consent toggles. */
 export function Checkbox({ checked, onChange, label, id, disabled = false, className = "", ...rest }: CheckboxProps) {
-  const cbId = id || `hd-${Math.random().toString(36).slice(2, 8)}`;
+  const reactId = React.useId();
+  const cbId = id || reactId;
   return (
     <label className={["hd-check", className].filter(Boolean).join(" ")} htmlFor={cbId}>
       <input id={cbId} type="checkbox" checked={checked} onChange={onChange} disabled={disabled} {...rest} />

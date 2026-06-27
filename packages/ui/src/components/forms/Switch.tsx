@@ -1,4 +1,6 @@
-import type * as React from "react";
+"use client";
+
+import * as React from "react";
 
 export interface SwitchProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "type"> {
   /** Controlled checked state. */
@@ -11,7 +13,8 @@ export interface SwitchProps extends Omit<React.InputHTMLAttributes<HTMLInputEle
 
 /** Binary toggle — e.g. "Verified only" vs "All submissions". */
 export function Switch({ checked, onChange, label, id, disabled = false, className = "", ...rest }: SwitchProps) {
-  const swId = id || `hd-${Math.random().toString(36).slice(2, 8)}`;
+  const reactId = React.useId();
+  const swId = id || reactId;
   return (
     <label className={["hd-switch", className].filter(Boolean).join(" ")} htmlFor={swId}>
       <input

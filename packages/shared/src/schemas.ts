@@ -115,7 +115,10 @@ export const finalizeRunRequestSchema = z.object({
   framesObjectKey: z.string().min(1),
   visibility: runVisibilitySchema,
   managementTokenHash: z.string().optional(),
-  signatureValid: z.boolean().optional(),
+  // NOTE: `signatureValid` is intentionally NOT accepted here. It is server-derived
+  // evidence (set from the API's own signature verification, §11.7) and lives only on
+  // the response/Run shape — never trust a client-asserted value. Invariant: integrity
+  // is server-side.
 });
 export type FinalizeRunRequest = z.infer<typeof finalizeRunRequestSchema>;
 

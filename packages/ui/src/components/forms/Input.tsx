@@ -1,4 +1,6 @@
-import type * as React from "react";
+"use client";
+
+import * as React from "react";
 
 export interface InputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, "size"> {
   /** Field label rendered above the control. */
@@ -27,7 +29,8 @@ export function Input({
   wrapClassName = "",
   ...rest
 }: InputProps) {
-  const inputId = id || (label ? `hd-${Math.random().toString(36).slice(2, 8)}` : undefined);
+  const reactId = React.useId();
+  const inputId = id || (label ? reactId : undefined);
   const input = (
     <input
       id={inputId}

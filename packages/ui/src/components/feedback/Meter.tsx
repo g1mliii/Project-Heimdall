@@ -23,7 +23,7 @@ export function Meter({
   className = "",
   ...rest
 }: MeterProps) {
-  const pct = Math.max(0, Math.min(100, (value / max) * 100));
+  const pct = max > 0 ? Math.max(0, Math.min(100, (value / max) * 100)) : 0;
   return (
     <div className={["hd-meter", className].filter(Boolean).join(" ")} {...rest}>
       {(label || display) && (
@@ -32,7 +32,13 @@ export function Meter({
           {display && <span className="hd-meter__value">{display}</span>}
         </div>
       )}
-      <div className="hd-meter__track" role="progressbar" aria-valuenow={value} aria-valuemax={max}>
+      <div
+        className="hd-meter__track"
+        role="progressbar"
+        aria-valuenow={value}
+        aria-valuemin={0}
+        aria-valuemax={max}
+      >
         <div className="hd-meter__fill" style={{ width: `${pct}%`, background: color }} />
       </div>
     </div>

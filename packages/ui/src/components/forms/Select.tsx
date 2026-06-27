@@ -1,4 +1,6 @@
-import type * as React from "react";
+"use client";
+
+import * as React from "react";
 
 export interface SelectOption {
   value: string;
@@ -16,7 +18,8 @@ export interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElemen
 
 /** Styled native select for hardware/game/resolution filters. */
 export function Select({ label, hint, options = [], id, className = "", children, ...rest }: SelectProps) {
-  const selId = id || (label ? `hd-${Math.random().toString(36).slice(2, 8)}` : undefined);
+  const reactId = React.useId();
+  const selId = id || (label ? reactId : undefined);
   return (
     <div className={["hd-field", className].filter(Boolean).join(" ")}>
       {label && (

@@ -77,8 +77,10 @@ describe("DTO round-trip stability (§3.2)", () => {
     const finalize = finalizeRunRequestSchema.parse({
       framesObjectKey: "runs/run_valid_0001.parquet",
       visibility: RUN_VISIBILITY.public,
-      signatureValid: true,
+      managementTokenHash: "a".repeat(64),
     });
+    // `signatureValid` is server-derived and not part of the inbound finalize DTO;
+    // its round-trip is covered by the run-response assertion below.
     expect(finalizeRunRequestSchema.parse(JSON.parse(JSON.stringify(finalize)))).toEqual(finalize);
 
     const run = runResponseSchema.parse(fixtures.validRun);
