@@ -1,0 +1,12 @@
+{
+  "rules": [
+    {
+      "allowed": {
+        "origins": ["http://localhost:3000", "https://heimdall.example.com"],
+        "methods": ["PUT", "GET", "HEAD"],
+        "headers": ["content-type", "content-length"]
+      },
+      "maxAgeSeconds": 3600
+    }
+  ]
+}
