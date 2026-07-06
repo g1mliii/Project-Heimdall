@@ -33,6 +33,13 @@ describe("schema accept/reject (§3.1)", () => {
     expect(frameSampleSchema.safeParse(fixtures.missingSensorFrames[0]).success).toBe(true);
   });
 
+  it("accepts busy-time bottleneck fields and rejects negative ones (§7 spike)", () => {
+    const frame = { timeMs: 0, frameTimeMs: 8.3, cpuBusyMs: 5.1, gpuBusyMs: 7.9 };
+    expect(frameSampleSchema.safeParse(frame).success).toBe(true);
+    expect(frameSampleSchema.safeParse({ ...frame, cpuBusyMs: -1 }).success).toBe(false);
+    expect(frameSampleSchema.safeParse({ ...frame, gpuBusyMs: -1 }).success).toBe(false);
+  });
+
   it("rejects every malformed payload", () => {
     for (const [name, payload] of Object.entries(malformedCreateRequests)) {
       const result =
@@ -97,19 +104,19 @@ describe("DTO round-trip stability (§3.2)", () => {
     };
     for (let i = 0; i < 200; i++) {
       const summary: RunSummary = {
-        avgFps: rand() * 480,
-        onePercentLowFps: rand() * 480,
-        pointOnePercentLowFps: rand() * 480,
-        frameTimeP50Ms: rand() * 50,
-        frameTimeP95Ms: rand() * 50,
-        frameTimeP99Ms: rand() * 50,
+        avgFps: 0.001 + rand() * 480,
+        onePercentLowFps: 0.001 + rand() * 480,
+        pointOnePercentLowFps: 0.001 + rand() * 480,
+        frameTimeP50Ms: 0.001 + rand() * 50,
+        frameTimeP95Ms: 0.001 + rand() * 50,
+        frameTimeP99Ms: 0.001 + rand() * 50,
         stutterCount: Math.floor(rand() * 200),
         generatedFramePct: rand(),
         pointOnePercentLowConfidence: (["high", "medium", "low"] as const)[
           Math.floor(rand() * 3)
         ]!,
-        sampleCount: Math.floor(rand() * 50000),
-        durationSeconds: rand() * 600,
+        sampleCount: 1 + Math.floor(rand() * 50000),
+        durationSeconds: 0.001 + rand() * 600,
       };
       const parsed = runSummarySchema.parse(summary);
       const again = runSummarySchema.parse(JSON.parse(JSON.stringify(parsed)));

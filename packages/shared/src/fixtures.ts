@@ -24,6 +24,8 @@ export const validFrames: FrameSample[] = Array.from({ length: 16 }, (_, i) => (
   gpuPowerW: 220,
   vramUsedMb: 9200,
   cpuLoadPct: 41,
+  cpuBusyMs: 5.1,
+  gpuBusyMs: 7.9,
 }));
 
 /** Same capture, but from a source/vendor that omits secondary sensors (§7.3). */
@@ -127,6 +129,14 @@ export const malformedCreateRequests: Record<string, unknown> = {
   generatedPctOutOfRange: {
     ...validCreateRunRequest,
     summary: { ...validSummary, generatedFramePct: 2 },
+  },
+  zeroSampleCount: {
+    ...validCreateRunRequest,
+    summary: { ...validSummary, sampleCount: 0 },
+  },
+  zeroDuration: {
+    ...validCreateRunRequest,
+    summary: { ...validSummary, durationSeconds: 0 },
   },
   badCaptureSource: { ...validCreateRunRequest, captureSource: "fraps" },
   fractionalStutterCount: {

@@ -91,6 +91,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0003_verification_comparisons.sql",
       "0004_indexes.sql",
       "0005_numeric_integrity.sql",
+      "0006_scale_hardening.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
@@ -158,6 +159,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
           'runs_game_gpu_idx',
           'runs_created_at_idx',
           'runs_status_visibility_idx',
+          'runs_user_id_idx',
           'verification_jobs_status_locked_at_idx'
         )`,
     );
@@ -168,9 +170,14 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     expect(byName.get("runs_game_gpu_idx")?.definition).toContain("created_at DESC");
     expect(byName.get("runs_created_at_idx")?.definition).toContain("id DESC");
     expect(byName.get("runs_status_visibility_idx")?.definition).toContain("created_at DESC");
+    expect(byName.get("runs_user_id_idx")?.definition).toContain("created_at DESC");
+    expect(byName.get("runs_user_id_idx")?.definition).toContain("id DESC");
     expect(byName.get("verification_jobs_status_locked_at_idx")?.definition).toContain(
       "created_at",
     );
+    const queuePredicate = byName.get("verification_jobs_status_locked_at_idx")?.predicate ?? "";
+    expect(queuePredicate).toContain("'pending'");
+    expect(queuePredicate).toContain("'running'");
   });
 
   it("CHECK constraints stay in lockstep with the shared enum constants", async () => {
@@ -247,12 +254,20 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     ).rejects.toThrow(/runs_capture_source_check/);
   });
 
-  it("rejects impossible negative summary/job metrics at the DB layer", async () => {
+  it("rejects impossible summary/job metrics at the DB layer", async () => {
     const badSummaryRun = {
       ...fixtureRunWithId("run_bad_negative_summary"),
       summary: { ...validRun.summary, avgFps: -1 },
     };
     await expect(insertRun(badSummaryRun, pool)).rejects.toThrow(
+      /run_summaries_nonnegative_metrics_check/,
+    );
+
+    const zeroSampleRun = {
+      ...fixtureRunWithId("run_bad_zero_sample"),
+      summary: { ...validRun.summary, sampleCount: 0 },
+    };
+    await expect(insertRun(zeroSampleRun, pool)).rejects.toThrow(
       /run_summaries_nonnegative_metrics_check/,
     );
 

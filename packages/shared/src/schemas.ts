@@ -59,20 +59,22 @@ export const frameSampleSchema = z.object({
   gpuPowerW: z.number().min(0).optional(),
   vramUsedMb: z.number().min(0).optional(),
   cpuLoadPct: pct.optional(),
+  cpuBusyMs: z.number().min(0).optional(),
+  gpuBusyMs: z.number().min(0).optional(),
 });
 
 export const runSummarySchema = z.object({
-  avgFps: z.number().nonnegative(),
-  onePercentLowFps: z.number().nonnegative(),
-  pointOnePercentLowFps: z.number().nonnegative(),
-  frameTimeP50Ms: z.number().nonnegative(),
-  frameTimeP95Ms: z.number().nonnegative(),
-  frameTimeP99Ms: z.number().nonnegative(),
+  avgFps: z.number().positive(),
+  onePercentLowFps: z.number().positive(),
+  pointOnePercentLowFps: z.number().positive(),
+  frameTimeP50Ms: z.number().positive(),
+  frameTimeP95Ms: z.number().positive(),
+  frameTimeP99Ms: z.number().positive(),
   stutterCount: z.number().int().nonnegative(),
   generatedFramePct: z.number().min(0).max(1),
   pointOnePercentLowConfidence: confidenceLevelSchema,
-  sampleCount: z.number().int().nonnegative(),
-  durationSeconds: z.number().nonnegative(),
+  sampleCount: z.number().int().positive(),
+  durationSeconds: z.number().positive(),
 });
 
 /** Provenance fields shared by every ingest payload (§2.2). */

@@ -36,6 +36,17 @@ export const POINT_ONE_PERCENT_LOW_CONFIDENCE_FRAMES = {
 } as const;
 
 /**
+ * Stutter detection (§9.1). A frame counts as a stutter only when BOTH
+ * conditions hold, so high-fps micro-blips don't inflate the count.
+ */
+export const STUTTER = {
+  /** Frame time must exceed this multiple of the run's median frame time. */
+  medianMultiplier: 2.5,
+  /** ...and this absolute floor in milliseconds. */
+  minFrameTimeMs: 20,
+} as const;
+
+/**
  * Current ingest schema version. Bump when the wire DTO changes incompatibly so
  * stored uploads can be reprocessed against the right shape (§2.2).
  */

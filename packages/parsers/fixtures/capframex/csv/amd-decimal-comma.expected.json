@@ -1,0 +1,34 @@
+{
+  "summary": {
+    "avgFps": 93.45794392523364,
+    "onePercentLowFps": 20,
+    "pointOnePercentLowFps": 20,
+    "frameTimeP50Ms": 8,
+    "frameTimeP95Ms": 12,
+    "frameTimeP99Ms": 50,
+    "stutterCount": 1,
+    "generatedFramePct": 0,
+    "pointOnePercentLowConfidence": "low",
+    "sampleCount": 20,
+    "durationSeconds": 0.214
+  },
+  "sampleCount": 20,
+  "firstFrame": {
+    "timeMs": 0,
+    "frameTimeMs": 8,
+    "gpuLoadPct": 98,
+    "gpuClockMhz": 2450,
+    "gpuPowerW": 263.5,
+    "vramUsedMb": 11500,
+    "cpuLoadPct": 37.5
+  },
+  "lastFrame": {
+    "timeMs": 206,
+    "frameTimeMs": 8,
+    "gpuLoadPct": 98,
+    "gpuClockMhz": 2450,
+    "gpuPowerW": 263.5,
+    "vramUsedMb": 11500,
+    "cpuLoadPct": 37.5
+  }
+}

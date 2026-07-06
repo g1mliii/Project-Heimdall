@@ -77,6 +77,10 @@ export interface FrameSample {
   vramUsedMb?: number;
   /** CPU utilization percent (0–100). */
   cpuLoadPct?: number;
+  /** PresentMon 2.x CPUBusy — ms the CPU spent producing the frame (§7 spike). */
+  cpuBusyMs?: number;
+  /** PresentMon 2.x GPUBusy / CapFrameX MsGPUActive — ms of GPU work for the frame. */
+  gpuBusyMs?: number;
 }
 
 /**
