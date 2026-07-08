@@ -8,7 +8,7 @@
  */
 
 import { RUN_VISIBILITY, RUN_STATUS } from "./visibility";
-import { CURRENT_SCHEMA_VERSION } from "./constants";
+import { CURRENT_SCHEMA_VERSION, INGEST_LIMITS } from "./constants";
 import type { CreateRunRequest } from "./schemas";
 import type { FrameSample, Run, RunSummary } from "./types";
 
@@ -85,6 +85,7 @@ export const validCreateRunRequest: CreateRunRequest = {
   hardware: { ...baseHardware },
   summary: validSummary,
   generatedFrameTech: "none",
+  parquetByteLength: 2_400_000,
   schemaVersion: CURRENT_SCHEMA_VERSION,
   parserVersion: PARSER_VERSION,
 };
@@ -99,6 +100,7 @@ export const localeVariantRawCreateRequest = {
   captureSource: "capframex",
   hardware: { ...baseHardware },
   summary: validSummary,
+  parquetByteLength: 2_400_000,
   parserVersion: PARSER_VERSION,
 };
 
@@ -142,6 +144,20 @@ export const malformedCreateRequests: Record<string, unknown> = {
   fractionalStutterCount: {
     ...validCreateRunRequest,
     summary: { ...validSummary, stutterCount: 1.5 },
+  },
+  // §11.10 upload-limit rejects: caught BEFORE a presigned URL is issued.
+  oversizedParquet: {
+    ...validCreateRunRequest,
+    parquetByteLength: INGEST_LIMITS.maxParquetBytes + 1,
+  },
+  zeroParquetByteLength: { ...validCreateRunRequest, parquetByteLength: 0 },
+  tooManyFrames: {
+    ...validCreateRunRequest,
+    summary: { ...validSummary, sampleCount: INGEST_LIMITS.maxFramesPerRun + 1 },
+  },
+  tooFewFrames: {
+    ...validCreateRunRequest,
+    summary: { ...validSummary, sampleCount: INGEST_LIMITS.minFramesPerRun - 1 },
   },
 };
 

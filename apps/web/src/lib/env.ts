@@ -27,6 +27,31 @@ const r2EnvSchema = z.object({
   R2_BUCKET: z.string().min(1),
 });
 
+const ingestEnvSchema = z.object({
+  /**
+   * Bearer token guarding POST /api/internal/jobs/drain. Optional so dev and
+   * DB-only tests boot without it, but the drain route itself 401s when the
+   * token is unset — an unguarded drain endpoint is worse than none.
+   */
+  INTERNAL_JOBS_TOKEN: z
+    .string()
+    .min(24)
+    .optional()
+    // Treat blank (the .env.example default) as absent, like the signing key.
+    .or(z.literal("").transform(() => undefined)),
+  /** Base64 SPKI Ed25519 public key (§11.7); absent → signature_valid stays null. */
+  HEIMDALL_SIGNING_PUBLIC_KEY: z
+    .string()
+    .regex(/^[A-Za-z0-9+/=]+$/, "must be base64")
+    .optional()
+    // Treat blank (the .env.example default) as absent.
+    .or(z.literal("").transform(() => undefined)),
+  /** Per-IP fixed-window limits, requests per hour (§11.10). */
+  RATE_LIMIT_CREATE_RUNS_PER_HOUR: z.coerce.number().int().min(1).default(30),
+  RATE_LIMIT_FINALIZE_PER_HOUR: z.coerce.number().int().min(1).default(60),
+  RATE_LIMIT_DELETE_PER_HOUR: z.coerce.number().int().min(1).default(20),
+});
+
 function parseEnv<T extends z.ZodRawShape>(schema: z.ZodObject<T>, label: string) {
   const result = schema.safeParse(process.env);
   if (!result.success) {
@@ -38,6 +63,7 @@ function parseEnv<T extends z.ZodRawShape>(schema: z.ZodObject<T>, label: string
 
 let dbEnvCache: z.infer<typeof dbEnvSchema> | undefined;
 let r2EnvCache: z.infer<typeof r2EnvSchema> | undefined;
+let ingestEnvCache: z.infer<typeof ingestEnvSchema> | undefined;
 
 export function getDbEnv(): z.infer<typeof dbEnvSchema> {
   dbEnvCache ??= parseEnv(dbEnvSchema, "Postgres");
@@ -47,4 +73,9 @@ export function getDbEnv(): z.infer<typeof dbEnvSchema> {
 export function getR2Env(): z.infer<typeof r2EnvSchema> {
   r2EnvCache ??= parseEnv(r2EnvSchema, "R2");
   return r2EnvCache;
+}
+
+export function getIngestEnv(): z.infer<typeof ingestEnvSchema> {
+  ingestEnvCache ??= parseEnv(ingestEnvSchema, "ingest");
+  return ingestEnvCache;
 }

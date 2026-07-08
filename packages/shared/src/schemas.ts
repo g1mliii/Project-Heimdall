@@ -9,7 +9,7 @@
 
 import { z } from "zod";
 import { RUN_VISIBILITY, RUN_STATUS } from "./visibility";
-import { CURRENT_SCHEMA_VERSION } from "./constants";
+import { CURRENT_SCHEMA_VERSION, INGEST_LIMITS } from "./constants";
 
 /* ── Primitive enums (kept in lockstep with the domain unions in types.ts) ── */
 
@@ -90,15 +90,31 @@ const provenance = {
  * (link-scoped, never aggregated) per the pre-auth visibility model (§11 note).
  * The game title is trimmed so normalization is idempotent.
  */
-export const createRunRequestSchema = z.object({
-  game: z.string().trim().min(1),
-  captureSource: captureSourceSchema,
-  visibility: runVisibilitySchema.default(RUN_VISIBILITY.unlisted),
-  hardware: hardwareSnapshotSchema,
-  summary: runSummarySchema,
-  generatedFrameTech: generatedFrameTechSchema.default("none"),
-  ...provenance,
-});
+export const createRunRequestSchema = z
+  .object({
+    game: z.string().trim().min(1),
+    captureSource: captureSourceSchema,
+    visibility: runVisibilitySchema.default(RUN_VISIBILITY.unlisted),
+    hardware: hardwareSnapshotSchema,
+    summary: runSummarySchema,
+    generatedFrameTech: generatedFrameTechSchema.default("none"),
+    /**
+     * Exact byte length of the Parquet the client will PUT (§11.10). Bounds the
+     * presigned URL's Content-Length so an oversize upload is rejected BEFORE a
+     * URL is ever issued.
+     */
+    parquetByteLength: z.number().int().min(1).max(INGEST_LIMITS.maxParquetBytes),
+    ...provenance,
+  })
+  .refine(
+    (req) =>
+      req.summary.sampleCount >= INGEST_LIMITS.minFramesPerRun &&
+      req.summary.sampleCount <= INGEST_LIMITS.maxFramesPerRun,
+    {
+      path: ["summary", "sampleCount"],
+      message: `sampleCount must be between ${INGEST_LIMITS.minFramesPerRun} and ${INGEST_LIMITS.maxFramesPerRun}`,
+    },
+  );
 export type CreateRunRequest = z.infer<typeof createRunRequestSchema>;
 
 /** `POST /api/runs` response — the created id + the presigned R2 PUT URL. */
@@ -116,13 +132,46 @@ export type CreateRunResponse = z.infer<typeof createRunResponseSchema>;
 export const finalizeRunRequestSchema = z.object({
   framesObjectKey: z.string().min(1),
   visibility: runVisibilitySchema,
-  managementTokenHash: z.string().optional(),
+  managementTokenHash: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/, "must be a lowercase sha-256 hex digest")
+    .optional(),
+  /**
+   * Optional client signature over the uploaded Parquet bytes (§11.7),
+   * base64-encoded Ed25519. Verified server-side against
+   * HEIMDALL_SIGNING_PUBLIC_KEY; recorded as evidence, never gatekeeping.
+   */
+  signature: z.string().max(512).optional(),
   // NOTE: `signatureValid` is intentionally NOT accepted here. It is server-derived
   // evidence (set from the API's own signature verification, §11.7) and lives only on
   // the response/Run shape — never trust a client-asserted value. Invariant: integrity
   // is server-side.
 });
 export type FinalizeRunRequest = z.infer<typeof finalizeRunRequestSchema>;
+
+/** `POST /api/runs/:id/finalize` response — the run enters the verify queue. */
+export const finalizeRunResponseSchema = z.object({
+  id: z.string().min(1),
+  status: runStatusSchema,
+});
+export type FinalizeRunResponse = z.infer<typeof finalizeRunResponseSchema>;
+
+/** `GET /api/runs/:id/frames` response — a short-lived signed R2 read URL. */
+export const framesUrlResponseSchema = z.object({
+  url: z.string().url(),
+  expiresInSeconds: z.number().int().positive(),
+});
+export type FramesUrlResponse = z.infer<typeof framesUrlResponseSchema>;
+
+/** Uniform API error envelope every route returns on failure. */
+export const apiErrorSchema = z.object({
+  error: z.object({
+    code: z.string().min(1),
+    message: z.string().min(1),
+    details: z.unknown().optional(),
+  }),
+});
+export type ApiError = z.infer<typeof apiErrorSchema>;
 
 /** `GET /api/runs/:id` response — the run with its (possibly provisional) summary. */
 export const runResponseSchema = z.object({

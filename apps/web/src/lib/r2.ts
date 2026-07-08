@@ -23,7 +23,10 @@ import { getR2Env } from "./env";
 
 /* ── Object keys (single source — must not drift from the DTO's framesObjectKey) ── */
 
-export const PARQUET_CONTENT_TYPE = "application/vnd.apache.parquet";
+// Single definition lives in @heimdall/shared (the browser PUT needs it too);
+// re-exported here so server code keeps importing it from the R2 module.
+export { PARQUET_CONTENT_TYPE } from "@heimdall/shared";
+import { PARQUET_CONTENT_TYPE } from "@heimdall/shared";
 export const MAX_PRESIGNED_PUT_BYTES = 512 * 1024 * 1024;
 export const MAX_OBJECT_READ_BYTES = 64 * 1024 * 1024;
 
@@ -86,7 +89,7 @@ const bucket = () => getR2Env().R2_BUCKET;
 /** Browser direct-upload window (§11.2/§11.3): long enough for a slow-link Parquet PUT. */
 const PUT_TTL_SECONDS = 15 * 60;
 /** Dashboard read window (§5.1): a page view, not a durable share link. */
-const GET_TTL_SECONDS = 60 * 60;
+export const GET_TTL_SECONDS = 60 * 60;
 
 interface PresignPutOptions {
   contentLengthBytes: number;

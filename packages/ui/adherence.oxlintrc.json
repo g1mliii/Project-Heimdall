@@ -32,35 +32,35 @@
       "warn",
       {
         "selector": "Literal[value=/#[0-9a-fA-F]{3,8}\\b/]",
-        "message": "Raw hex color — use a design-system color token via var()."
+        "message": "Raw hex color \u2014 use a design-system color token via var()."
       },
       {
         "selector": "Literal[value=/\\b\\d+px\\b/]",
-        "message": "Raw px value — use a design-system spacing token via var()."
+        "message": "Raw px value \u2014 use a design-system spacing token via var()."
       },
       {
         "selector": "Literal[value=/font-family\\s*:\\s*(?!['\\\"]?(?:Space Grotesk|Hanken Grotesk|JetBrains Mono))/i]",
         "message": "Font not provided by the design system. Available: Space Grotesk, Hanken Grotesk, JetBrains Mono."
       },
       {
-        "selector": "JSXOpeningElement[name.name='Avatar'] > JSXAttribute > JSXIdentifier[name!=/^(?:src|name|size|key|ref|className|style|children)$/]",
-        "message": "<Avatar> doesn't accept that prop. Declared props: src, name, size."
+        "selector": "JSXOpeningElement[name.name='Avatar'] > JSXAttribute > JSXIdentifier[name!=/^(?:src|name|size|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",
+        "message": "<Avatar> doesn't accept that prop. Declared props: src, name, size (native DOM/aria/data passthrough props are allowed)."
       },
       {
         "selector": "JSXOpeningElement[name.name='Avatar'] > JSXAttribute[name.name='size'] > Literal[value!=/^(?:sm|md|lg)$/]",
         "message": "<Avatar> size must be one of 'sm' | 'md' | 'lg'."
       },
       {
-        "selector": "JSXOpeningElement[name.name='Badge'] > JSXAttribute > JSXIdentifier[name!=/^(?:tone|dot|key|ref|className|style|children)$/]",
-        "message": "<Badge> doesn't accept that prop. Declared props: tone, dot."
+        "selector": "JSXOpeningElement[name.name='Badge'] > JSXAttribute > JSXIdentifier[name!=/^(?:tone|dot|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",
+        "message": "<Badge> doesn't accept that prop. Declared props: tone, dot (native DOM/aria/data passthrough props are allowed)."
       },
       {
         "selector": "JSXOpeningElement[name.name='Badge'] > JSXAttribute[name.name='tone'] > Literal[value!=/^(?:neutral|good|warn|bad|info|brand|solid)$/]",
         "message": "<Badge> tone must be one of 'neutral' | 'good' | 'warn' | 'bad' | 'info' | 'brand' | 'solid'."
       },
       {
-        "selector": "JSXOpeningElement[name.name='Button'] > JSXAttribute > JSXIdentifier[name!=/^(?:variant|size|block|loading|iconLeft|iconRight|key|ref|className|style|children)$/]",
-        "message": "<Button> doesn't accept that prop. Declared props: variant, size, block, loading, iconLeft, iconRight."
+        "selector": "JSXOpeningElement[name.name='Button'] > JSXAttribute > JSXIdentifier[name!=/^(?:variant|size|block|loading|iconLeft|iconRight|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",
+        "message": "<Button> doesn't accept that prop. Declared props: variant, size, block, loading, iconLeft, iconRight (native DOM/aria/data passthrough props are allowed)."
       },
       {
         "selector": "JSXOpeningElement[name.name='Button'] > JSXAttribute[name.name='variant'] > Literal[value!=/^(?:primary|secondary|ghost|subtle|danger)$/]",
@@ -71,76 +71,76 @@
         "message": "<Button> size must be one of 'sm' | 'md' | 'lg'."
       },
       {
-        "selector": "JSXOpeningElement[name.name='Card'] > JSXAttribute > JSXIdentifier[name!=/^(?:variant|interactive|key|ref|className|style|children)$/]",
-        "message": "<Card> doesn't accept that prop. Declared props: variant, interactive."
+        "selector": "JSXOpeningElement[name.name='Card'] > JSXAttribute > JSXIdentifier[name!=/^(?:variant|interactive|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",
+        "message": "<Card> doesn't accept that prop. Declared props: variant, interactive (native DOM/aria/data passthrough props are allowed)."
       },
       {
         "selector": "JSXOpeningElement[name.name='Card'] > JSXAttribute[name.name='variant'] > Literal[value!=/^(?:inset|flat)$/]",
         "message": "<Card> variant must be one of 'inset' | 'flat'."
       },
       {
-        "selector": "JSXOpeningElement[name.name='Checkbox'] > JSXAttribute > JSXIdentifier[name!=/^(?:checked|onChange|label|key|ref|className|style|children)$/]",
-        "message": "<Checkbox> doesn't accept that prop. Declared props: checked, onChange, label."
+        "selector": "JSXOpeningElement[name.name='Checkbox'] > JSXAttribute > JSXIdentifier[name!=/^(?:checked|onChange|label|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",
+        "message": "<Checkbox> doesn't accept that prop. Declared props: checked, onChange, label (native DOM/aria/data passthrough props are allowed)."
       },
       {
-        "selector": "JSXOpeningElement[name.name='Diagnostic'] > JSXAttribute > JSXIdentifier[name!=/^(?:severity|title|key|ref|className|style|children)$/]",
-        "message": "<Diagnostic> doesn't accept that prop. Declared props: severity, title."
+        "selector": "JSXOpeningElement[name.name='Diagnostic'] > JSXAttribute > JSXIdentifier[name!=/^(?:severity|title|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",
+        "message": "<Diagnostic> doesn't accept that prop. Declared props: severity, title (native DOM/aria/data passthrough props are allowed)."
       },
       {
         "selector": "JSXOpeningElement[name.name='Diagnostic'] > JSXAttribute[name.name='severity'] > Literal[value!=/^(?:good|warn|bad|info)$/]",
         "message": "<Diagnostic> severity must be one of 'good' | 'warn' | 'bad' | 'info'."
       },
       {
-        "selector": "JSXOpeningElement[name.name='IconButton'] > JSXAttribute > JSXIdentifier[name!=/^(?:size|solid|key|ref|className|style|children)$/]",
-        "message": "<IconButton> doesn't accept that prop. Declared props: size, solid."
+        "selector": "JSXOpeningElement[name.name='IconButton'] > JSXAttribute > JSXIdentifier[name!=/^(?:size|solid|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",
+        "message": "<IconButton> doesn't accept that prop. Declared props: size, solid (native DOM/aria/data passthrough props are allowed)."
       },
       {
         "selector": "JSXOpeningElement[name.name='IconButton'] > JSXAttribute[name.name='size'] > Literal[value!=/^(?:sm|md|lg)$/]",
         "message": "<IconButton> size must be one of 'sm' | 'md' | 'lg'."
       },
       {
-        "selector": "JSXOpeningElement[name.name='Input'] > JSXAttribute > JSXIdentifier[name!=/^(?:label|hint|error|icon|mono|wrapClassName|key|ref|className|style|children)$/]",
-        "message": "<Input> doesn't accept that prop. Declared props: label, hint, error, icon, mono, wrapClassName."
+        "selector": "JSXOpeningElement[name.name='Input'] > JSXAttribute > JSXIdentifier[name!=/^(?:label|hint|error|icon|mono|wrapClassName|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",
+        "message": "<Input> doesn't accept that prop. Declared props: label, hint, error, icon, mono, wrapClassName (native DOM/aria/data passthrough props are allowed)."
       },
       {
-        "selector": "JSXOpeningElement[name.name='Meter'] > JSXAttribute > JSXIdentifier[name!=/^(?:label|value|max|display|color|key|ref|className|style|children)$/]",
-        "message": "<Meter> doesn't accept that prop. Declared props: label, value, max, display, color."
+        "selector": "JSXOpeningElement[name.name='Meter'] > JSXAttribute > JSXIdentifier[name!=/^(?:label|value|max|display|color|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",
+        "message": "<Meter> doesn't accept that prop. Declared props: label, value, max, display, color (native DOM/aria/data passthrough props are allowed)."
       },
       {
-        "selector": "JSXOpeningElement[name.name='SegmentedOption'] > JSXAttribute > JSXIdentifier[name!=/^(?:value|label|icon|key|ref|className|style|children)$/]",
-        "message": "<SegmentedOption> doesn't accept that prop. Declared props: value, label, icon."
+        "selector": "JSXOpeningElement[name.name='SegmentedOption'] > JSXAttribute > JSXIdentifier[name!=/^(?:value|label|icon|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",
+        "message": "<SegmentedOption> doesn't accept that prop. Declared props: value, label, icon (native DOM/aria/data passthrough props are allowed)."
       },
       {
-        "selector": "JSXOpeningElement[name.name='SelectOption'] > JSXAttribute > JSXIdentifier[name!=/^(?:value|label|key|ref|className|style|children)$/]",
-        "message": "<SelectOption> doesn't accept that prop. Declared props: value, label."
+        "selector": "JSXOpeningElement[name.name='SelectOption'] > JSXAttribute > JSXIdentifier[name!=/^(?:value|label|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",
+        "message": "<SelectOption> doesn't accept that prop. Declared props: value, label (native DOM/aria/data passthrough props are allowed)."
       },
       {
-        "selector": "JSXOpeningElement[name.name='Spinner'] > JSXAttribute > JSXIdentifier[name!=/^(?:size|label|key|ref|className|style|children)$/]",
-        "message": "<Spinner> doesn't accept that prop. Declared props: size, label."
+        "selector": "JSXOpeningElement[name.name='Spinner'] > JSXAttribute > JSXIdentifier[name!=/^(?:size|label|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",
+        "message": "<Spinner> doesn't accept that prop. Declared props: size, label (native DOM/aria/data passthrough props are allowed)."
       },
       {
-        "selector": "JSXOpeningElement[name.name='Stat'] > JSXAttribute > JSXIdentifier[name!=/^(?:label|value|unit|delta|deltaDir|accent|key|ref|className|style|children)$/]",
-        "message": "<Stat> doesn't accept that prop. Declared props: label, value, unit, delta, deltaDir, accent."
+        "selector": "JSXOpeningElement[name.name='Stat'] > JSXAttribute > JSXIdentifier[name!=/^(?:label|value|unit|delta|deltaDir|accent|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",
+        "message": "<Stat> doesn't accept that prop. Declared props: label, value, unit, delta, deltaDir, accent (native DOM/aria/data passthrough props are allowed)."
       },
       {
         "selector": "JSXOpeningElement[name.name='Stat'] > JSXAttribute[name.name='deltaDir'] > Literal[value!=/^(?:up|down)$/]",
         "message": "<Stat> deltaDir must be one of 'up' | 'down'."
       },
       {
-        "selector": "JSXOpeningElement[name.name='Switch'] > JSXAttribute > JSXIdentifier[name!=/^(?:checked|onChange|label|key|ref|className|style|children)$/]",
-        "message": "<Switch> doesn't accept that prop. Declared props: checked, onChange, label."
+        "selector": "JSXOpeningElement[name.name='Switch'] > JSXAttribute > JSXIdentifier[name!=/^(?:checked|onChange|label|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",
+        "message": "<Switch> doesn't accept that prop. Declared props: checked, onChange, label (native DOM/aria/data passthrough props are allowed)."
       },
       {
-        "selector": "JSXOpeningElement[name.name='TabItem'] > JSXAttribute > JSXIdentifier[name!=/^(?:value|label|icon|key|ref|className|style|children)$/]",
-        "message": "<TabItem> doesn't accept that prop. Declared props: value, label, icon."
+        "selector": "JSXOpeningElement[name.name='TabItem'] > JSXAttribute > JSXIdentifier[name!=/^(?:value|label|icon|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",
+        "message": "<TabItem> doesn't accept that prop. Declared props: value, label, icon (native DOM/aria/data passthrough props are allowed)."
       },
       {
-        "selector": "JSXOpeningElement[name.name='Tag'] > JSXAttribute > JSXIdentifier[name!=/^(?:onRemove|key|ref|className|style|children)$/]",
-        "message": "<Tag> doesn't accept that prop. Declared props: onRemove."
+        "selector": "JSXOpeningElement[name.name='Tag'] > JSXAttribute > JSXIdentifier[name!=/^(?:onRemove|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",
+        "message": "<Tag> doesn't accept that prop. Declared props: onRemove (native DOM/aria/data passthrough props are allowed)."
       },
       {
-        "selector": "JSXOpeningElement[name.name='Tooltip'] > JSXAttribute > JSXIdentifier[name!=/^(?:content|key|ref|className|style|children)$/]",
-        "message": "<Tooltip> doesn't accept that prop. Declared props: content."
+        "selector": "JSXOpeningElement[name.name='Tooltip'] > JSXAttribute > JSXIdentifier[name!=/^(?:content|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",
+        "message": "<Tooltip> doesn't accept that prop. Declared props: content (native DOM/aria/data passthrough props are allowed)."
       }
     ]
   },

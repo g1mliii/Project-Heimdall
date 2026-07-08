@@ -92,6 +92,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0004_indexes.sql",
       "0005_numeric_integrity.sql",
       "0006_scale_hardening.sql",
+      "0007_rate_limits.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
@@ -105,6 +106,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
         "games",
         "hardware",
         "hardware_aliases",
+        "rate_limits",
         "run_summaries",
         "runs",
         "schema_migrations",
