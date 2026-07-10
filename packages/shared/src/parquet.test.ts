@@ -5,6 +5,7 @@ import {
   framesToColumnData,
   rowsToFrameSamples,
 } from "./parquet";
+import { MIN_FRAME_TIME_MS } from "./constants";
 import { frameSampleSchema } from "./schemas";
 import { validFrames, missingSensorFrames } from "./fixtures";
 import type { FrameSample } from "./types";
@@ -53,7 +54,10 @@ describe("frame parquet column contract", () => {
     expect(() => rowsToFrameSamples([{ time_ms: 0, frame_time_ms: "8.3" }])).toThrow(
       /frame_time_ms/,
     );
-    expect(() => rowsToFrameSamples([{ time_ms: 0, frame_time_ms: 0 }])).toThrow(/> 0/);
+    expect(() => rowsToFrameSamples([{ time_ms: 0, frame_time_ms: 0 }])).toThrow(/frame_time_ms/);
+    expect(() =>
+      rowsToFrameSamples([{ time_ms: 0, frame_time_ms: MIN_FRAME_TIME_MS / 10 }]),
+    ).toThrow(/frame_time_ms/);
     expect(() => rowsToFrameSamples([{ time_ms: -1, frame_time_ms: 8.3 }])).toThrow(/>= 0/);
     expect(() => rowsToFrameSamples([{ time_ms: 0, frame_time_ms: Number.NaN }])).toThrow(
       /finite/,

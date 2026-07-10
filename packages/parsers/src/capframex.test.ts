@@ -120,6 +120,19 @@ describe("parseCapFrameX — JSON (§7.1 hardware extraction)", () => {
     }
   });
 
+  it("skips implausibly tiny positive frame times", () => {
+    const frameTimes = Array.from({ length: 40 }, () => 10);
+    frameTimes[7] = 1e-300;
+    const result = parseCapFrameX(
+      JSON.stringify({ Runs: [{ CaptureData: { MsBetweenPresents: frameTimes } }] }),
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.frames).toHaveLength(39);
+      expect(result.warnings).toContainEqual(expect.objectContaining({ code: "skipped-rows", count: 1 }));
+    }
+  });
+
   it("returns invalid-json on truncated JSON", () => {
     const result = parseCapFrameX('{"Runs": [');
     expect(result).toMatchObject({ ok: false, error: { code: "invalid-json", source: "capframex" } });
@@ -137,6 +150,17 @@ describe("parseCapFrameX — row policy", () => {
   it("skips isolated bad rows with a skipped-rows warning", () => {
     const rows = Array.from({ length: 40 }, (_, i) => `${(i * 0.01).toFixed(2)},10`);
     rows[7] = "garbage,not-a-number";
+    const result = parseCapFrameX(header + rows.join("\n"));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.frames).toHaveLength(39);
+      expect(result.warnings).toContainEqual(expect.objectContaining({ code: "skipped-rows", count: 1 }));
+    }
+  });
+
+  it("skips implausibly tiny positive frame times", () => {
+    const rows = Array.from({ length: 40 }, (_, i) => `${(i * 0.01).toFixed(2)},10`);
+    rows[7] = "0.07,1e-300";
     const result = parseCapFrameX(header + rows.join("\n"));
     expect(result.ok).toBe(true);
     if (result.ok) {

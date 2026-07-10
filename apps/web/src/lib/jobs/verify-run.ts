@@ -11,7 +11,12 @@ import { createPublicKey, verify as cryptoVerify } from "node:crypto";
 import { parquetMetadata, parquetReadObjects } from "hyparquet";
 import type { FileMetaData } from "hyparquet";
 import { computeRunSummary } from "@heimdall/parsers";
-import { FRAME_PARQUET_COLUMNS, INGEST_LIMITS, rowsToFrameSamples } from "@heimdall/shared";
+import {
+  FRAME_PARQUET_COLUMNS,
+  INGEST_LIMITS,
+  RUN_STATUS,
+  rowsToFrameSamples,
+} from "@heimdall/shared";
 import type { RunSummary } from "@heimdall/shared";
 import { readRun, type Queryable } from "../db";
 import { readRunSignature } from "../repo/runs";
@@ -188,12 +193,18 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
       : null;
 
   const mismatch = summaryMismatch(run.summary, recomputed);
-  const status = mismatch === null ? "validated" : "flagged";
+  const status = mismatch === null && run.status !== RUN_STATUS.flagged ? "validated" : "flagged";
   // Either way the recompute becomes the stored truth — "corrected and
   // flagged" (§12.4) is exactly the flagged arm of this write.
   await applyVerificationResult(job.runId, recomputed, status, signatureValid, job, db);
 
-  return mismatch === null
+  return status === "validated"
     ? { kind: "validated" }
-    : { kind: "flagged", reason: `client summary mismatch on ${mismatch}` };
+    : {
+        kind: "flagged",
+        reason:
+          mismatch === null
+            ? "run was already flagged by a prior verification attempt"
+            : `client summary mismatch on ${mismatch}`,
+      };
 }

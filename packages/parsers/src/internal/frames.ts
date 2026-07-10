@@ -5,7 +5,7 @@
  * normalization behave identically across CapFrameX / PresentMon / MangoHud.
  */
 
-import type { CaptureSource, FrameSample } from "@heimdall/shared";
+import { MIN_FRAME_TIME_MS, type CaptureSource, type FrameSample } from "@heimdall/shared";
 
 import { BAD_ROW_FRACTION_LIMIT, failure, type ParseResult, type ParseWarning } from "../errors";
 import { parseLocaleNumber, splitCsvLine, findColumn, type CsvDialect, type FoundHeader } from "./csv";
@@ -159,7 +159,7 @@ export function parseFrameRows(input: FrameRowsInput): ParseResult<FrameSample[]
     dataRows++;
 
     const frameTimeMs = parseLocaleNumber(cells[frameTimeIndex], dialect);
-    if (frameTimeMs === undefined || frameTimeMs <= 0) {
+    if (frameTimeMs === undefined || frameTimeMs < MIN_FRAME_TIME_MS) {
       markBad(lineIndex);
       continue;
     }

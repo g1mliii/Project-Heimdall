@@ -138,6 +138,28 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     expect(run?.summary.avgFps).toBe(honestSummary.avgFps);
   });
 
+  it("preserves a flagged verdict when a stale verification job is reclaimed", async () => {
+    const id = "run_wk_tampered_reclaimed";
+    await setupFinalizedRun(
+      id,
+      runFixture(id, {
+        visibility: RUN_VISIBILITY.public,
+        summary: { ...honestSummary, avgFps: 999.9, onePercentLowFps: 998 },
+      }),
+    );
+    expect(await drainJobs({}, realDeps(async () => parquetBytes))).toMatchObject({ flagged: 1 });
+    expect((await readRun(id, db.pool))?.status).toBe(RUN_STATUS.flagged);
+
+    // Model a worker dying after it stored the canonical flagged summary but
+    // before it marked its job succeeded; the stale lock is then reclaimed.
+    await db.pool.query(
+      "update verification_jobs set status = 'running', locked_at = now() - interval '11 minutes' where run_id = $1",
+      [id],
+    );
+    expect(await drainJobs({}, realDeps(async () => parquetBytes))).toMatchObject({ flagged: 1, validated: 0 });
+    expect((await readRun(id, db.pool))?.status).toBe(RUN_STATUS.flagged);
+  });
+
   it("canonical recompute corrects ambiguous generated-frame metadata", async () => {
     const generatedFrames = frames.map((frame, index) => ({
       ...frame,

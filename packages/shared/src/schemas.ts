@@ -9,7 +9,7 @@
 
 import { z } from "zod";
 import { RUN_VISIBILITY, RUN_STATUS } from "./visibility";
-import { CURRENT_SCHEMA_VERSION, INGEST_LIMITS } from "./constants";
+import { CURRENT_SCHEMA_VERSION, INGEST_LIMITS, MIN_FRAME_TIME_MS } from "./constants";
 
 /* ── Primitive enums (kept in lockstep with the domain unions in types.ts) ── */
 
@@ -46,8 +46,8 @@ export const hardwareSnapshotSchema = z.object({
   cpu: z.string().min(1),
   gpuVendor: gpuVendorSchema.optional(),
   ramGb: z.number().positive().optional(),
-  ramSpeedMtps: z.number().positive().optional(),
-  ramRatedSpeedMtps: z.number().positive().optional(),
+  ramSpeedMtps: z.number().int().positive().optional(),
+  ramRatedSpeedMtps: z.number().int().positive().optional(),
   os: z.string().optional(),
   gpuDriver: z.string().optional(),
   resolution: z.string().optional(),
@@ -57,7 +57,7 @@ export const hardwareSnapshotSchema = z.object({
 
 export const frameSampleSchema = z.object({
   timeMs: z.number().min(0),
-  frameTimeMs: z.number().positive(),
+  frameTimeMs: z.number().min(MIN_FRAME_TIME_MS),
   generated: z.boolean().optional(),
   gpuLoadPct: pct.optional(),
   gpuClockMhz: z.number().min(0).optional(),

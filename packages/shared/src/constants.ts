@@ -47,6 +47,9 @@ export const STUTTER = {
   minFrameTimeMs: 20,
 } as const;
 
+/** Fastest plausible frame cadence: 100,000 FPS. Rejects numerical abuse. */
+export const MIN_FRAME_TIME_MS = 0.01;
+
 /**
  * Current ingest schema version. Bump when the wire DTO changes incompatibly so
  * stored uploads can be reprocessed against the right shape (§2.2).

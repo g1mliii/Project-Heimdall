@@ -6,7 +6,7 @@
  * Bare CSVs carry no hardware block, so `hardware` is only present on JSON.
  */
 
-import type { FrameSample, HardwareSnapshot } from "@heimdall/shared";
+import { MIN_FRAME_TIME_MS, type FrameSample, type HardwareSnapshot } from "@heimdall/shared";
 
 import { failure, success, type ParsedCapture, type ParseResult } from "./errors";
 import { decodeInput, splitLines } from "./internal/decode";
@@ -140,7 +140,7 @@ function parseJson(text: string): ParseResult<ParsedCapture> {
     for (let i = 0; i < frameTimes.length; i++) {
       totalRows++;
       const frameTimeMs = numberAt(frameTimes, i);
-      if (frameTimeMs === undefined || frameTimeMs <= 0) {
+      if (frameTimeMs === undefined || frameTimeMs < MIN_FRAME_TIME_MS) {
         badRows++;
         continue;
       }

@@ -11,6 +11,7 @@
  * Pure and dependency-free: the parquet libraries themselves live in apps/web.
  */
 
+import { MIN_FRAME_TIME_MS } from "./constants";
 import type { FrameSample } from "./types";
 
 /** Bump when the column layout changes incompatibly (mirrors §2.2 versioning). */
@@ -88,8 +89,10 @@ export function rowsToFrameSamples(rows: readonly Record<string, unknown>[]): Fr
         `parquet row ${index}: time_ms must not decrease (previous ${previousTimeMs}, got ${timeMs})`,
       );
     }
-    if (frameTimeMs <= 0) {
-      throw new Error(`parquet row ${index}: frame_time_ms must be > 0, got ${frameTimeMs}`);
+    if (frameTimeMs < MIN_FRAME_TIME_MS) {
+      throw new Error(
+        `parquet row ${index}: frame_time_ms must be >= ${MIN_FRAME_TIME_MS}, got ${frameTimeMs}`,
+      );
     }
     previousTimeMs = timeMs;
     const frame: FrameSample = { timeMs, frameTimeMs };

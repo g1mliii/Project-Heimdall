@@ -40,6 +40,12 @@ describe("schema accept/reject (§3.1)", () => {
     expect(frameSampleSchema.safeParse({ ...frame, gpuBusyMs: -1 }).success).toBe(false);
   });
 
+  it("rejects fractional RAM transfer rates and implausibly tiny frame times", () => {
+    expect(hardwareSnapshotSchema.safeParse({ ...fixtures.validRun.hardware, ramSpeedMtps: 6000.5 }).success).toBe(false);
+    expect(hardwareSnapshotSchema.safeParse({ ...fixtures.validRun.hardware, ramRatedSpeedMtps: 6400.5 }).success).toBe(false);
+    expect(frameSampleSchema.safeParse({ timeMs: 0, frameTimeMs: 1e-300 }).success).toBe(false);
+  });
+
   it("rejects every malformed payload", () => {
     for (const [name, payload] of Object.entries(malformedCreateRequests)) {
       const result =
