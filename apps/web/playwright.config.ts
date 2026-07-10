@@ -19,9 +19,10 @@ export default defineConfig({
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    // The dev server consumes @heimdall/ui's built dist/styles.css, so build the
-    // package before running snapshots (CI: `pnpm --filter @heimdall/ui build`).
-    command: "pnpm --dir ../.. dev",
+    // CI has already run the production build, so reuse it for browser tests.
+    command: process.env.CI
+      ? "pnpm --dir ../.. --filter @heimdall/web start"
+      : "pnpm --dir ../.. dev",
     url: "http://localhost:3000",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

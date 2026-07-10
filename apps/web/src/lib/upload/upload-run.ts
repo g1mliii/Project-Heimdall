@@ -47,11 +47,20 @@ export interface UploadSuccess {
   warnings: ParseWarning[];
 }
 
+export interface UploadRecovery {
+  /** The run that may have finalized before its response was lost. */
+  runId: string;
+  /** Plaintext delete token generated before the finalize request. */
+  managementToken: string;
+}
+
 export interface UploadFailure {
   ok: false;
   /** Parser error code, API error code, or a transport-level code. */
   code: string;
   message: string;
+  /** Present after the direct PUT when finalization may have committed. */
+  recovery?: UploadRecovery;
 }
 
 export type UploadResult = UploadSuccess | UploadFailure;
@@ -113,6 +122,7 @@ async function failureFromResponse(response: Response, fallback: string): Promis
 export async function uploadCapture(file: File, options: UploadOptions): Promise<UploadResult> {
   const transport = options.transport ?? defaultTransport();
   const emit = options.onProgress ?? (() => {});
+  let finalizeRecovery: UploadRecovery | undefined;
 
   try {
     emit({ stage: "parsing" });
@@ -200,6 +210,7 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
       visibility: options.visibility,
       managementTokenHash: await hashManagementToken(managementToken),
     };
+    finalizeRecovery = { runId: created.id, managementToken };
     const finalizeResponse = await transport.fetch(`/api/runs/${created.id}/finalize`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -223,6 +234,7 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
       ok: false,
       code: "upload-failed",
       message: error instanceof Error ? error.message : String(error),
+      ...(finalizeRecovery === undefined ? {} : { recovery: finalizeRecovery }),
     };
   }
 }

@@ -18,7 +18,7 @@ function fulfillR2Cors(route: Route) {
   });
 }
 
-test("upload page renders the ingest flow (idle state)", async ({ page }) => {
+test("@visual upload page renders the ingest flow (idle state)", async ({ page }) => {
   await page.goto("/upload");
 
   await expect(page.getByRole("heading", { name: "Upload a benchmark log" })).toBeVisible();
@@ -80,7 +80,34 @@ test("single-file upload flow reaches done with mocked ingest APIs", async ({ pa
   await expect(page.getByText(/Uploaded — /)).toBeVisible();
   await expect(page.getByText("Save your delete token — it's shown once")).toBeVisible();
   await expect(page.getByRole("link", { name: "Back to benchmarks" })).toHaveAttribute("href", "/");
-  await expect(page).toHaveScreenshot("upload-done.png", { fullPage: true });
+});
+
+test("ambiguous finalize failures keep the delete token visible", async ({ page }) => {
+  await page.route("**/api/runs", (route) =>
+    route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "run_e2e_recovery",
+        uploadUrl: "https://r2.invalid/recovery-put",
+        uploadObjectKey: "staging/runs/run_e2e_recovery.parquet",
+      }),
+    }),
+  );
+  await page.route("https://r2.invalid/recovery-put", fulfillR2Cors);
+  await page.route("**/api/runs/run_e2e_recovery/finalize", (route) =>
+    route.abort("connectionreset"),
+  );
+
+  await page.goto("/upload");
+  await page.getByRole("textbox", { name: "Game" }).fill("Cyberpunk 2077");
+  await page
+    .locator('input[type="file"]')
+    .setInputFiles(path.join(FIXTURES, "capframex", "csv", "nvidia-full-sensors.csv"));
+
+  await expect(page.getByText("Finalization may have completed.")).toBeVisible();
+  await expect(page.getByText("/runs/run_e2e_recovery")).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Recovery delete token" })).not.toHaveValue("");
 });
 
 test("batch upload: per-file status, one bad file never blocks the rest (§11.8)", async ({

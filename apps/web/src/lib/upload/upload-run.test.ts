@@ -51,7 +51,7 @@ interface TransportLog {
 
 function mockTransport(
   log: TransportLog,
-  overrides: { createStatus?: number; finalizeStatus?: number } = {},
+  overrides: { createStatus?: number; finalizeStatus?: number; finalizeError?: Error } = {},
 ): UploadTransport {
   return {
     fetch: vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -76,6 +76,9 @@ function mockTransport(
       }
       log.finalizeUrl = url;
       log.finalizeBody = body;
+      if (overrides.finalizeError) {
+        throw overrides.finalizeError;
+      }
       if (overrides.finalizeStatus) {
         return Response.json(
           { error: { code: "object-missing", message: "upload first" } },
@@ -213,6 +216,7 @@ describe("uploadCapture engine", () => {
   });
 
   it("surfaces server error envelopes as typed failures", async () => {
+    const log: TransportLog = {};
     const rejected = await uploadCapture(fixtureFile("capframex/csv/nvidia-full-sensors.csv"), {
       game: "Test Game",
       visibility: "unlisted",
@@ -225,10 +229,30 @@ describe("uploadCapture engine", () => {
       {
         game: "Test Game",
         visibility: "unlisted",
-        transport: mockTransport({}, { finalizeStatus: 409 }),
+        transport: mockTransport(log, { finalizeStatus: 409 }),
       },
     );
     expect(finalizeFailed).toMatchObject({ ok: false, code: "object-missing" });
+    if (!finalizeFailed.ok) {
+      expect(finalizeFailed.recovery).toBeUndefined();
+    }
+  });
+
+  it("keeps recovery details when a finalize response may have been lost", async () => {
+    const log: TransportLog = {};
+    const result = await uploadCapture(fixtureFile("capframex/csv/nvidia-full-sensors.csv"), {
+      game: "Test Game",
+      visibility: "unlisted",
+      transport: mockTransport(log, { finalizeError: new Error("finalize response timed out") }),
+    });
+
+    expect(result).toMatchObject({ ok: false, code: "upload-failed" });
+    if (!result.ok) {
+      expect(result.recovery?.runId).toBe("run_test01");
+      expect(await hashManagementToken(result.recovery!.managementToken)).toBe(
+        finalizeRunRequestSchema.parse(log.finalizeBody).managementTokenHash,
+      );
+    }
   });
 
   it("a failing PUT is a typed failure, not a throw (§11.8 batch safety)", async () => {

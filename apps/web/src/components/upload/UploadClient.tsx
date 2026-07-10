@@ -11,7 +11,7 @@
 import * as React from "react";
 import { Badge, Button, Card, Diagnostic, Input, Segmented, Spinner, Stat } from "@heimdall/ui";
 import { uploadCapture } from "@/lib/upload/upload-run";
-import type { UploadProgress, UploadResult, UploadSuccess } from "@/lib/upload/upload-run";
+import type { UploadFailure, UploadProgress, UploadResult, UploadSuccess } from "@/lib/upload/upload-run";
 import {
   ArrowRightIcon,
   CheckIcon,
@@ -37,7 +37,7 @@ type Mode =
   | { kind: "idle" }
   | { kind: "single"; fileName: string; progress: UploadProgress }
   | { kind: "single-done"; fileName: string; result: UploadSuccess }
-  | { kind: "single-error"; fileName: string; message: string }
+  | { kind: "single-error"; fileName: string; message: string; recovery?: UploadFailure["recovery"] }
   | { kind: "batch"; items: BatchItem[] };
 
 const BATCH_CONCURRENCY = 2;
@@ -69,6 +69,40 @@ function progressLine(progress: UploadProgress): { title: string; data: string }
   }
 }
 
+function TokenCopyField({
+  token,
+  ariaLabel,
+  copied,
+  onCopy,
+}: {
+  token: string;
+  ariaLabel: string;
+  copied: boolean;
+  onCopy: (token: string) => Promise<void>;
+}) {
+  return (
+    <span
+      style={{
+        display: "flex",
+        gap: "var(--space-2)",
+        marginTop: "var(--space-3)",
+        alignItems: "center",
+      }}
+    >
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <Input mono readOnly value={token} aria-label={ariaLabel} />
+      </span>
+      <Button
+        variant="secondary"
+        iconLeft={<CopyIcon size={15} />}
+        onClick={() => void onCopy(token)}
+      >
+        {copied ? "Copied" : "Copy"}
+      </Button>
+    </span>
+  );
+}
+
 export function UploadClient() {
   const [mode, setMode] = React.useState<Mode>({ kind: "idle" });
   const [game, setGame] = React.useState("");
@@ -93,7 +127,7 @@ export function UploadClient() {
     setMode(
       result.ok
         ? { kind: "single-done", fileName: file.name, result }
-        : { kind: "single-error", fileName: file.name, message: result.message },
+        : { kind: "single-error", fileName: file.name, message: result.message, recovery: result.recovery },
     );
   }
 
@@ -119,7 +153,7 @@ export function UploadClient() {
               managementToken: result.managementToken,
             });
           } else {
-            update(index, { status: "error", error: result.message });
+            update(index, { status: "error", error: result.message, ...result.recovery });
           }
         }
       }),
@@ -151,7 +185,7 @@ export function UploadClient() {
 
   function downloadTokens(items: BatchItem[]) {
     const lines = items
-      .filter((item) => item.status === "done" && item.managementToken)
+      .filter((item) => item.runId && item.managementToken)
       .map((item) => `${item.file.name}\t/runs/${item.runId}\t${item.managementToken}`);
     const blob = new Blob([`file\trun\tdelete token\n${lines.join("\n")}\n`], {
       type: "text/plain",
@@ -166,6 +200,8 @@ export function UploadClient() {
 
   const doneCount =
     mode.kind === "batch" ? mode.items.filter((item) => item.status === "done").length : 0;
+  const tokenCount =
+    mode.kind === "batch" ? mode.items.filter((item) => item.runId && item.managementToken).length : 0;
   const singleProgress = mode.kind === "single" ? progressLine(mode.progress) : null;
   const batchSettled =
     mode.kind === "batch" &&
@@ -333,7 +369,21 @@ export function UploadClient() {
       {mode.kind === "single-error" && (
         <div style={{ marginTop: "var(--space-4)" }}>
           <Diagnostic severity="bad" title={`Could not ingest ${mode.fileName}`}>
-            {mode.message}
+            <span>{mode.message}</span>
+            {mode.recovery && (
+              <>
+                <span style={{ display: "block", marginTop: "var(--space-3)" }}>
+                  Finalization may have completed. Save this token before retrying; it protects
+                  <span data-mono> /runs/{mode.recovery.runId}</span> if that run exists.
+                </span>
+                <TokenCopyField
+                  token={mode.recovery.managementToken}
+                  ariaLabel="Recovery delete token"
+                  copied={copied}
+                  onCopy={copyToken}
+                />
+              </>
+            )}
           </Diagnostic>
         </div>
       )}
@@ -393,30 +443,12 @@ export function UploadClient() {
               Anyone with this token can delete the run; we store only its hash, so it cannot be
               recovered later.
             </span>
-            <span
-              style={{
-                display: "flex",
-                gap: "var(--space-2)",
-                marginTop: "var(--space-3)",
-                alignItems: "center",
-              }}
-            >
-              <span style={{ flex: 1, minWidth: 0 }}>
-                <Input
-                  mono
-                  readOnly
-                  value={mode.result.managementToken}
-                  aria-label="Delete token"
-                />
-              </span>
-              <Button
-                variant="secondary"
-                iconLeft={<CopyIcon size={15} />}
-                onClick={() => void copyToken(mode.result.managementToken)}
-              >
-                {copied ? "Copied" : "Copy"}
-              </Button>
-            </span>
+            <TokenCopyField
+              token={mode.result.managementToken}
+              ariaLabel="Delete token"
+              copied={copied}
+              onCopy={copyToken}
+            />
           </Diagnostic>
 
           {mode.result.warnings.length > 0 && (
@@ -514,7 +546,7 @@ export function UploadClient() {
                     flexWrap: "wrap",
                   }}
                 >
-                  {doneCount > 0 && (
+                  {tokenCount > 0 && (
                     <Button variant="secondary" onClick={() => downloadTokens(mode.items)}>
                       Save delete tokens (.txt)
                     </Button>
@@ -526,11 +558,11 @@ export function UploadClient() {
               )}
             </Card.Body>
           </Card>
-          {batchSettled && doneCount > 0 && (
+          {batchSettled && tokenCount > 0 && (
             <div style={{ marginTop: "var(--space-4)" }}>
               <Diagnostic severity="info" title="Delete tokens are shown once">
-                Save the token file if you may want to remove these runs later — we store only
-                hashes.
+                Save this file if you may want to remove these runs later. It also includes a
+                recovery token if a finalization response was lost.
               </Diagnostic>
             </div>
           )}

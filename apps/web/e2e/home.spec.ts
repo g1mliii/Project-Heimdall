@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("throwaway page renders @heimdall/ui primitives on the dark canvas", async ({ page }) => {
+test("@visual throwaway page renders @heimdall/ui primitives on the dark canvas", async ({ page }) => {
   await page.goto("/");
 
   // Primitives mount and are interactive.

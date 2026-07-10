@@ -51,6 +51,11 @@ jobs:
           # Forked pull requests cannot access repository secrets; trusted
           # pushes and same-repository PRs must still exercise live R2.
           R2_LIVE_REQUIRED: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
+      - run: pnpm build
+      - run: pnpm --filter @heimdall/web exec playwright install --with-deps chromium
+      # Cross-platform visual baselines are tracked separately; keep the
+      # functional upload flows mandatory on every PR.
+      - run: pnpm --filter @heimdall/web test:e2e:functional
 
   desktop:
     name: Desktop (cargo fmt / clippy / test)
