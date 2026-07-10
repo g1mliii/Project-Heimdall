@@ -76,15 +76,22 @@ export function framesToColumnData(frames: readonly FrameSample[]): FrameColumnD
  * one of ours, and the caller (§11.5 worker) must treat that as terminal.
  */
 export function rowsToFrameSamples(rows: readonly Record<string, unknown>[]): FrameSample[] {
+  let previousTimeMs: number | undefined;
   return rows.map((row, index) => {
     const timeMs = requiredNumber(row, "time_ms", index);
     const frameTimeMs = requiredNumber(row, "frame_time_ms", index);
     if (timeMs < 0) {
       throw new Error(`parquet row ${index}: time_ms must be >= 0, got ${timeMs}`);
     }
+    if (previousTimeMs !== undefined && timeMs < previousTimeMs) {
+      throw new Error(
+        `parquet row ${index}: time_ms must not decrease (previous ${previousTimeMs}, got ${timeMs})`,
+      );
+    }
     if (frameTimeMs <= 0) {
       throw new Error(`parquet row ${index}: frame_time_ms must be > 0, got ${frameTimeMs}`);
     }
+    previousTimeMs = timeMs;
     const frame: FrameSample = { timeMs, frameTimeMs };
     const generated = row["generated"];
     if (generated !== null && generated !== undefined) {

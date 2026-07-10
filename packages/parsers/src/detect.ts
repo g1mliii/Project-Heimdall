@@ -24,13 +24,25 @@ const SOURCE_MARKERS: Record<CaptureSource, readonly string[]> = {
   mangohud: ["gpu_core_clock", "gpu_vram_used", "cpuscheduler", "cpu_load"],
 };
 
+// A bare MangoHud frame log starts with this header. Match it as a header,
+// rather than the broad `fps` substring, so a PresentMon CSV that happens to
+// include an FPS column retains its timestamp-aware parser.
+const MANGOHUD_FPS_HEADER = /(?:^|[\r\n])\s*fps\s*[,;]\s*frametime(?:\s*[,;\r\n]|$)/;
+
 /** Most marker hits in the file head goes first; ties keep the default order. */
 export function detectionOrder(input: string | Uint8Array): CaptureSource[] {
   const head = (
     typeof input === "string" ? input.slice(0, 4096) : decodeInput(input.subarray(0, 4096))
   ).toLowerCase();
-  const score = (source: CaptureSource) =>
-    SOURCE_MARKERS[source].reduce((hits, marker) => hits + (head.includes(marker) ? 1 : 0), 0);
+  const score = (source: CaptureSource) => {
+    const markerHits = SOURCE_MARKERS[source].reduce(
+      (hits, marker) => hits + (head.includes(marker) ? 1 : 0),
+      0,
+    );
+    return source === "mangohud" && !head.includes("timeinseconds") && MANGOHUD_FPS_HEADER.test(head)
+      ? markerHits + 1
+      : markerHits;
+  };
   return [...DEFAULT_DETECTION_ORDER].sort((a, b) => score(b) - score(a));
 }
 

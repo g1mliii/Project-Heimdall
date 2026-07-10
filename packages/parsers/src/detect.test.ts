@@ -35,6 +35,20 @@ describe("parseAnyCapture", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("prefers a bare MangoHud frame-time log over generic PresentMon parsing", () => {
+    const input = ["fps,frametime", "100,10", "100,10", "33.3,30", "100,10"].join("\n");
+
+    expect(detectionOrder(input)[0]).toBe("mangohud");
+    const result = parseAnyCapture(input);
+    expect(result).toMatchObject({ ok: true, source: "mangohud" });
+  });
+
+  it("keeps a PresentMon CSV with an FPS column on the timestamp-aware parser", () => {
+    const input = ["FrameTime,TimeInSeconds,FPS", "10,0,100", "10,0.01,100"].join("\n");
+
+    expect(parseAnyCapture(input)).toMatchObject({ ok: true, source: "presentmon" });
+  });
+
   it.each(["le", "be"] as const)("detects a UTF-16%s PresentMon v1 capture", (endian) => {
     const input = encodeUtf16WithBom(
       [

@@ -60,6 +60,22 @@ describe("frame parquet column contract", () => {
     );
   });
 
+  it("rejects a timestamp that moves backwards but permits equal timestamps", () => {
+    expect(() =>
+      rowsToFrameSamples([
+        { time_ms: 0, frame_time_ms: 8.3 },
+        { time_ms: 8.3, frame_time_ms: 8.3 },
+        { time_ms: 8.2, frame_time_ms: 8.3 },
+      ]),
+    ).toThrow(/row 2: time_ms must not decrease/);
+    expect(
+      rowsToFrameSamples([
+        { time_ms: 0, frame_time_ms: 8.3 },
+        { time_ms: 0, frame_time_ms: 8.3 },
+      ]),
+    ).toHaveLength(2);
+  });
+
   it("rejects out-of-range sensor values (load percent above 100)", () => {
     expect(() =>
       rowsToFrameSamples([{ time_ms: 0, frame_time_ms: 8.3, gpu_load_pct: 101 }]),
