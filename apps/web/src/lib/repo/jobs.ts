@@ -116,8 +116,8 @@ export async function applyVerificationResult(
        update runs
           set status = $13, signature_valid = $14,
               generated_frame_tech = case
-                when generated_frame_tech in ($15, $16)
-                  then case when $9::double precision > 0 then $15 else $16 end
+                when $9::double precision = 0 then $16
+                when generated_frame_tech in ($15, $16) then $15
                 else generated_frame_tech
               end
         where id = $1

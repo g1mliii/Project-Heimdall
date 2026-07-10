@@ -15,7 +15,7 @@ import {
   failVerificationJob,
 } from "../repo/jobs";
 import { pruneRateLimits } from "../repo/rate-limit";
-import { deleteRun, readStalePendingRuns } from "../repo/runs";
+import { deletePendingRun, readStalePendingRuns } from "../repo/runs";
 import { verifyRunJob, type VerifyDeps } from "./verify-run";
 
 /** A job claimed this many times without finishing is dead — stop retrying. */
@@ -119,7 +119,7 @@ export async function cleanupStalePending(
       console.error(`stale-pending cleanup: object delete failed for ${id}`, error);
       continue;
     }
-    if (await deleteRun(id, db)) {
+    if (await deletePendingRun(id, db)) {
       cleaned += 1;
     }
   }

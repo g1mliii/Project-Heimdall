@@ -102,9 +102,9 @@ const hasR2Creds = Boolean(
     process.env.R2_BUCKET,
 );
 if (!hasR2Creds) {
-  if (process.env.CI) {
+  if (process.env.R2_LIVE_REQUIRED === "true") {
     throw new Error(
-      "[r2.test] no R2 credentials in CI — provide R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, " +
+      "[r2.test] no R2 credentials in trusted CI — provide R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, " +
         "R2_SECRET_ACCESS_KEY, and R2_BUCKET; refusing to silently skip live bucket coverage.",
     );
   }

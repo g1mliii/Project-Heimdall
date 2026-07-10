@@ -149,6 +149,19 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     );
   });
 
+  it("canonical recompute resets vendor frame generation when no frames are generated", async () => {
+    const id = "run_wk_native";
+    await setupFinalizedRun(
+      id,
+      runFixture(id, { generatedFrameTech: GENERATED_FRAME_TECH.dlss3 }),
+    );
+
+    const result = await drainJobs({}, realDeps(async () => parquetBytes));
+
+    expect(result).toMatchObject({ claimed: 1, validated: 1 });
+    expect((await readRun(id, db.pool))?.generatedFrameTech).toBe(GENERATED_FRAME_TECH.none);
+  });
+
   it("transient storage error retries; the attempts cap terminalizes (12.5)", async () => {
     await setupFinalizedRun("run_wk_retry");
     const flaky = async () => {
@@ -286,5 +299,43 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     });
 
     expect(await readRun(id, db.pool)).not.toBeNull();
+  });
+
+  it("does not delete a stale run that finalizes after the reaper reads it", async () => {
+    const id = "run_wk_stale_race";
+    const finalizedKey = `runs/${id}.parquet`;
+    await insertRun(runFixture(id), db.pool);
+    await db.pool.query("update runs set created_at = now() - interval '30 hours' where id = $1", [
+      id,
+    ]);
+
+    let finalizedDuringCleanup = false;
+    await cleanupStalePending({
+      db: db.pool,
+      deleteObject: async (key) => {
+        if (key !== `staging/runs/${id}.parquet`) {
+          return;
+        }
+        finalizedDuringCleanup = await finalizeRun(
+          {
+            id,
+            framesObjectKey: finalizedKey,
+            visibility: RUN_VISIBILITY.unlisted,
+            managementTokenHash: null,
+            signature: null,
+            gameId: null,
+            gpuHardwareId: null,
+            cpuHardwareId: null,
+          },
+          db.pool,
+        );
+      },
+    });
+
+    expect(finalizedDuringCleanup).toBe(true);
+    expect((await readRun(id, db.pool))?.framesObjectKey).toBe(finalizedKey);
+    expect(
+      (await db.pool.query("select 1 from verification_jobs where run_id = $1", [id])).rows,
+    ).toHaveLength(1);
   });
 });

@@ -139,6 +139,19 @@ export async function deleteRun(id: string, db: Queryable = getPool()): Promise<
 }
 
 /**
+ * Reaper-only conditional delete. The stale-id read and staging-object delete
+ * are intentionally not one database transaction, so finalize may win between
+ * them; in that case its row and verification job must survive.
+ */
+export async function deletePendingRun(id: string, db: Queryable = getPool()): Promise<boolean> {
+  const result = await db.query(
+    "delete from runs where id = $1 and status = 'pending' and frames_object_key is null",
+    [id],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
  * Stale unfinalized runs for the §11.11 TTL reaper. `frames_object_key is
  * null` scopes this to never-finalized rows — the uploaded-but-unfinalized R2
  * staging object is still covered because its key is deterministic

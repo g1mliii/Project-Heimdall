@@ -139,8 +139,7 @@ export const finalizeRunRequestSchema = z.object({
   visibility: preAuthRunVisibilitySchema,
   managementTokenHash: z
     .string()
-    .regex(/^[0-9a-f]{64}$/, "must be a lowercase sha-256 hex digest")
-    .optional(),
+    .regex(/^[0-9a-f]{64}$/, "must be a lowercase sha-256 hex digest"),
   /**
    * Optional client signature over the uploaded Parquet bytes (§11.7),
    * base64-encoded Ed25519. Verified server-side against

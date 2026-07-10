@@ -94,6 +94,15 @@ describe("DTO round-trip stability (§3.2)", () => {
     expect(runResponseSchema.parse(JSON.parse(JSON.stringify(run)))).toEqual(run);
   });
 
+  it("requires a management token hash for pre-auth finalize", () => {
+    expect(
+      finalizeRunRequestSchema.safeParse({
+        uploadObjectKey: "staging/runs/run_valid_0001.parquet",
+        visibility: RUN_VISIBILITY.unlisted,
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects owner-only private visibility on the pre-auth ingest DTOs", () => {
     expect(
       createRunRequestSchema.safeParse({
@@ -105,6 +114,7 @@ describe("DTO round-trip stability (§3.2)", () => {
       finalizeRunRequestSchema.safeParse({
         uploadObjectKey: "staging/runs/run_valid_0001.parquet",
         visibility: RUN_VISIBILITY.private,
+        managementTokenHash: "a".repeat(64),
       }).success,
     ).toBe(false);
   });

@@ -32,10 +32,22 @@ export const runtime = "nodejs";
 
 type Context = { params: Promise<{ id: string }> };
 
+class FinalizedCopyCleanupError extends Error {
+  override readonly cause: unknown;
+
+  constructor(id: string, key: string, context: string, cause: unknown) {
+    super(`finalize ${id}: ${context} cleanup failed for ${key}`);
+    this.name = "FinalizedCopyCleanupError";
+    this.cause = cause;
+  }
+}
+
 async function cleanupFinalizedCopy(id: string, key: string, context: string): Promise<void> {
-  await deleteObject(key).catch((error) => {
-    console.error(`finalize ${id}: ${context} cleanup failed`, error);
-  });
+  try {
+    await deleteObject(key);
+  } catch (error) {
+    throw new FinalizedCopyCleanupError(id, key, context, error);
+  }
 }
 
 export async function POST(request: Request, context: Context): Promise<NextResponse> {
@@ -125,7 +137,7 @@ export async function POST(request: Request, context: Context): Promise<NextResp
         id,
         framesObjectKey: finalizedObjectKey,
         visibility: body.visibility,
-        managementTokenHash: body.managementTokenHash ?? null,
+        managementTokenHash: body.managementTokenHash,
         signature: body.signature ?? null,
         gameId: idOrNull(gameSettled, "game"),
         gpuHardwareId: idOrNull(gpuSettled, "gpu"),
@@ -172,6 +184,13 @@ export async function POST(request: Request, context: Context): Promise<NextResp
     return NextResponse.json(response);
   } catch (error) {
     console.error("POST /api/runs/:id/finalize failed", error);
+    if (error instanceof FinalizedCopyCleanupError) {
+      return jsonError(
+        502,
+        "storage-cleanup-failed",
+        "could not clean up the copied frames object — retry later",
+      );
+    }
     return jsonError(500, "internal", "finalize failed");
   }
 }

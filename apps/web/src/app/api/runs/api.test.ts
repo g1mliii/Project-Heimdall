@@ -73,10 +73,12 @@ async function finalize(
   id: string,
   overrides: Record<string, unknown> = {},
 ): Promise<Response> {
+  const managementTokenHash = await hashManagementToken(generateManagementToken());
   return finalizeRun(
     jsonRequest(`http://test/api/runs/${id}/finalize`, "POST", {
       uploadObjectKey: `staging/runs/${id}.parquet`,
       visibility: RUN_VISIBILITY.unlisted,
+      managementTokenHash,
       ...overrides,
     }),
     ctx(id),
@@ -214,6 +216,44 @@ describe.skipIf(!canRun)("ingest API routes (§11)", () => {
     expect(again.status).toBe(409);
     expect((await db.pool.query("select 1 from verification_jobs where run_id = $1", [id])).rows)
       .toHaveLength(1);
+  });
+
+  it("finalize: requires a management token hash before copying", async () => {
+    const { id } = await createValidRun();
+    vi.mocked(r2.copyObject).mockClear();
+
+    const response = await finalize(id, { managementTokenHash: undefined });
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.code).toBe("invalid-request");
+    expect(r2.copyObject).not.toHaveBeenCalled();
+  });
+
+  it("finalize: surfaces failure to clean up an untracked finalized copy", async () => {
+    const managementTokenHash = await hashManagementToken(generateManagementToken());
+    const first = await createValidRun();
+    expect((await finalize(first.id, { managementTokenHash })).status).toBe(200);
+
+    const second = await createValidRun();
+    const copiedKey = `runs/${second.id}/finalized.parquet`;
+    vi.mocked(r2.deleteObject).mockImplementation(async (key) => {
+      if (key === copiedKey) {
+        throw new Error("simulated R2 cleanup outage");
+      }
+    });
+    try {
+      const response = await finalize(second.id, { managementTokenHash });
+      expect(response.status).toBe(502);
+      expect((await response.json()).error.code).toBe("storage-cleanup-failed");
+      expect(r2.deleteObject).toHaveBeenCalledWith(copiedKey);
+      const row = await db.pool.query(
+        "select status, frames_object_key from runs where id = $1",
+        [second.id],
+      );
+      expect(row.rows[0]).toEqual({ status: RUN_STATUS.pending, frames_object_key: null });
+    } finally {
+      vi.mocked(r2.deleteObject).mockResolvedValue(undefined);
+    }
   });
 
   it("finalize: 403 on a foreign object key, 404 on unknown run", async () => {
