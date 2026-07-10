@@ -217,7 +217,10 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
       body: JSON.stringify(finalizeRequest),
     });
     if (!finalizeResponse.ok) {
-      return failureFromResponse(finalizeResponse, "finalize failed");
+      const failure = await failureFromResponse(finalizeResponse, "finalize failed");
+      // A 5xx can be emitted after the server commits but before its response
+      // reaches the browser. Deterministic 4xx errors never expose a token.
+      return finalizeResponse.status >= 500 ? { ...failure, recovery: finalizeRecovery } : failure;
     }
 
     emit({ stage: "done", runId: created.id });

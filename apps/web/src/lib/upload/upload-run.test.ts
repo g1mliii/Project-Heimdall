@@ -16,7 +16,12 @@ import {
   hashManagementToken,
   rowsToFrameSamples,
 } from "@heimdall/shared";
-import { uploadCapture, type UploadProgress, type UploadTransport } from "./upload-run";
+import {
+  uploadCapture,
+  type UploadFailure,
+  type UploadProgress,
+  type UploadTransport,
+} from "./upload-run";
 
 const FIXTURES = path.resolve(
   import.meta.dirname,
@@ -81,7 +86,12 @@ function mockTransport(
       }
       if (overrides.finalizeStatus) {
         return Response.json(
-          { error: { code: "object-missing", message: "upload first" } },
+          {
+            error:
+              overrides.finalizeStatus >= 500
+                ? { code: "internal", message: "try again later" }
+                : { code: "object-missing", message: "upload first" },
+          },
           { status: overrides.finalizeStatus },
         );
       }
@@ -94,6 +104,16 @@ function mockTransport(
       onProgress(bytes.byteLength);
     }),
   };
+}
+
+async function expectFinalizeRecovery(failure: UploadFailure, log: TransportLog) {
+  expect(failure.recovery?.runId).toBe("run_test01");
+  if (!failure.recovery) {
+    throw new Error("expected an ambiguous finalize recovery token");
+  }
+  expect(await hashManagementToken(failure.recovery.managementToken)).toBe(
+    finalizeRunRequestSchema.parse(log.finalizeBody).managementTokenHash,
+  );
 }
 
 describe("uploadCapture engine", () => {
@@ -248,10 +268,21 @@ describe("uploadCapture engine", () => {
 
     expect(result).toMatchObject({ ok: false, code: "upload-failed" });
     if (!result.ok) {
-      expect(result.recovery?.runId).toBe("run_test01");
-      expect(await hashManagementToken(result.recovery!.managementToken)).toBe(
-        finalizeRunRequestSchema.parse(log.finalizeBody).managementTokenHash,
-      );
+      await expectFinalizeRecovery(result, log);
+    }
+  });
+
+  it("keeps recovery details for ambiguous finalize 5xx responses", async () => {
+    const log: TransportLog = {};
+    const result = await uploadCapture(fixtureFile("capframex/csv/nvidia-full-sensors.csv"), {
+      game: "Test Game",
+      visibility: "unlisted",
+      transport: mockTransport(log, { finalizeStatus: 503 }),
+    });
+
+    expect(result).toMatchObject({ ok: false, code: "internal" });
+    if (!result.ok) {
+      await expectFinalizeRecovery(result, log);
     }
   });
 

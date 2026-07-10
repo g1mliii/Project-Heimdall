@@ -8,13 +8,17 @@
  */
 
 import { createPublicKey, verify as cryptoVerify } from "node:crypto";
-import { parquetReadObjects } from "hyparquet";
+import { parquetMetadata, parquetReadObjects } from "hyparquet";
+import type { FileMetaData } from "hyparquet";
 import { computeRunSummary } from "@heimdall/parsers";
-import { INGEST_LIMITS, rowsToFrameSamples } from "@heimdall/shared";
+import { FRAME_PARQUET_COLUMNS, INGEST_LIMITS, rowsToFrameSamples } from "@heimdall/shared";
 import type { RunSummary } from "@heimdall/shared";
 import { readRun, type Queryable } from "../db";
 import { readRunSignature } from "../repo/runs";
 import { applyVerificationResult, type ClaimedJob } from "../repo/jobs";
+
+const FRAME_PARQUET_COLUMN_NAMES = FRAME_PARQUET_COLUMNS.map((column) => column.name);
+const MAX_DECODED_FRAME_PARQUET_BYTES = BigInt(INGEST_LIMITS.maxParquetBytes);
 
 export interface VerifyDeps {
   db: Queryable;
@@ -86,6 +90,52 @@ function verifyEd25519(publicKeyBase64: string, data: Uint8Array, signatureBase6
   }
 }
 
+/** Reject oversized or internally inconsistent captures before decoding rows. */
+export function frameCountFromMetadata(
+  metadata: Pick<FileMetaData, "num_rows" | "row_groups">,
+): number {
+  const rowCount = metadata.num_rows;
+  const min = BigInt(INGEST_LIMITS.minFramesPerRun);
+  const max = BigInt(INGEST_LIMITS.maxFramesPerRun);
+  if (rowCount < min || rowCount > max) {
+    throw new Error(`frame count ${rowCount} outside ingest limits`);
+  }
+  const rowGroupCount = metadata.row_groups.reduce((total, group) => total + group.num_rows, 0n);
+  if (rowCount !== rowGroupCount) {
+    throw new Error(`parquet metadata row count ${rowCount} disagrees with row groups ${rowGroupCount}`);
+  }
+  return Number(rowCount);
+}
+
+/** Reject malformed physical frame columns before the reader decodes page data. */
+export function validateFrameParquetMetadata(
+  metadata: Pick<FileMetaData, "num_rows" | "row_groups">,
+): number {
+  const frameCount = frameCountFromMetadata(metadata);
+  let uncompressedBytes = 0n;
+  for (const rowGroup of metadata.row_groups) {
+    const columns = new Map(
+      rowGroup.columns.flatMap((chunk) =>
+        chunk.meta_data ? [[chunk.meta_data.path_in_schema[0], chunk.meta_data] as const] : [],
+      ),
+    );
+    for (const frameColumn of FRAME_PARQUET_COLUMNS) {
+      const column = columns.get(frameColumn.name);
+      if (!column) {
+        throw new Error(`parquet is missing required column ${frameColumn.name}`);
+      }
+      if (column.type !== frameColumn.type || column.num_values !== rowGroup.num_rows) {
+        throw new Error(`parquet column ${frameColumn.name} has an invalid physical layout`);
+      }
+      uncompressedBytes += column.total_uncompressed_size;
+      if (uncompressedBytes > MAX_DECODED_FRAME_PARQUET_BYTES) {
+        throw new Error(`parquet frame columns exceed decoded-byte limit ${MAX_DECODED_FRAME_PARQUET_BYTES}`);
+      }
+    }
+  }
+  return frameCount;
+}
+
 export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<VerifyOutcome> {
   const { db } = deps;
 
@@ -115,13 +165,17 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
       bytes.byteOffset,
       bytes.byteOffset + bytes.byteLength,
     ) as ArrayBuffer;
-    const rows = await parquetReadObjects({ file: buffer });
+    const metadata = parquetMetadata(buffer);
+    const frameCount = validateFrameParquetMetadata(metadata);
+    const rows = await parquetReadObjects({
+      file: buffer,
+      metadata,
+      columns: FRAME_PARQUET_COLUMN_NAMES,
+      rowEnd: frameCount,
+    });
     const frames = rowsToFrameSamples(rows);
-    if (
-      frames.length < INGEST_LIMITS.minFramesPerRun ||
-      frames.length > INGEST_LIMITS.maxFramesPerRun
-    ) {
-      return { kind: "failed", error: `frame count ${frames.length} outside ingest limits` };
+    if (frames.length !== frameCount) {
+      return { kind: "failed", error: `decoded ${frames.length} frames but metadata declared ${frameCount}` };
     }
     recomputed = computeRunSummary(frames);
   } catch (error) {
