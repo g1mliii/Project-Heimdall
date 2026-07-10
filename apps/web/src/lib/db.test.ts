@@ -205,8 +205,13 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       ["verification_jobs_status_check", verificationJobStatuses],
     ];
     for (const [constraint, values] of cases) {
+      // API/worker/repo suites migrate isolated schemas in parallel in CI; this
+      // suite owns public, so inspect only its constraints.
       const { rows } = await pool.query<{ def: string }>(
-        "select pg_get_constraintdef(oid) as def from pg_constraint where conname = $1",
+        `select pg_get_constraintdef(oid) as def
+           from pg_constraint
+          where conname = $1
+            and connamespace = 'public'::regnamespace`,
         [constraint],
       );
       expect(rows, `constraint ${constraint} exists`).toHaveLength(1);
