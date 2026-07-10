@@ -7,7 +7,7 @@
  * (enforced by the caller via `failVerificationJob(..., terminal)`).
  */
 
-import { GENERATED_FRAME_TECH, type RunSummary } from "@heimdall/shared";
+import { GENERATED_FRAME_TECH, RUN_STATUS, type RunSummary } from "@heimdall/shared";
 import { query, getPool, type Queryable } from "../db";
 
 export interface ClaimedJob {
@@ -51,12 +51,18 @@ export async function claimNextVerificationJob(
 
 export async function completeVerificationJob(
   id: string,
+  attempts: number,
   db: Queryable = getPool(),
-): Promise<void> {
-  await db.query(
-    "update verification_jobs set status = 'succeeded', locked_at = null, last_error = null where id = $1",
-    [id],
+): Promise<boolean> {
+  const result = await db.query(
+    `update verification_jobs
+        set status = 'succeeded', locked_at = null, last_error = null
+      where id = $1
+        and status = 'running'
+        and attempts = $2`,
+    [id, attempts],
   );
+  return (result.rowCount ?? 0) > 0;
 }
 
 /**
@@ -66,32 +72,61 @@ export async function completeVerificationJob(
  */
 export async function releaseVerificationJob(
   id: string,
+  attempts: number,
   db: Queryable = getPool(),
-): Promise<void> {
-  await db.query(
+): Promise<boolean> {
+  const result = await db.query(
     `update verification_jobs
         set status = 'pending', locked_at = null, attempts = greatest(attempts - 1, 0)
-      where id = $1`,
-    [id],
+      where id = $1
+        and status = 'running'
+        and attempts = $2`,
+    [id, attempts],
   );
+  return (result.rowCount ?? 0) > 0;
 }
 
 /**
- * Record a failure. `terminal` sends the job to `failed` (done forever);
- * otherwise it returns to `pending` for a later drain pass to retry.
+ * Record a failure. Terminal failures atomically flag their finalized pending
+ * run, making provisional data non-public; retryable failures stay pending.
  */
 export async function failVerificationJob(
   id: string,
+  attempts: number,
   error: string,
   terminal: boolean,
   db: Queryable = getPool(),
-): Promise<void> {
-  await db.query(
-    `update verification_jobs
-        set status = $2, locked_at = null, last_error = $3
-      where id = $1`,
-    [id, terminal ? "failed" : "pending", error.slice(0, 2000)],
+): Promise<boolean> {
+  const rows = await query<{ updated: boolean }>(
+    `with job_update as (
+       update verification_jobs
+          set status = $2, locked_at = null, last_error = $3
+        where id = $1
+          and status = 'running'
+          and attempts = $4
+        returning run_id
+     ), run_update as (
+     update runs
+        set status = $5
+       from job_update
+      where $6::boolean
+        and runs.id = job_update.run_id
+        and runs.status = $7
+        and runs.frames_object_key is not null
+     )
+     select exists (select 1 from job_update) as updated`,
+    [
+      id,
+      terminal ? "failed" : "pending",
+      error.slice(0, 2000),
+      attempts,
+      RUN_STATUS.flagged,
+      terminal,
+      RUN_STATUS.pending,
+    ],
+    db,
   );
+  return rows[0]?.updated ?? false;
 }
 
 /**
@@ -105,6 +140,7 @@ export async function applyVerificationResult(
   summary: RunSummary,
   runStatus: "validated" | "flagged",
   signatureValid: boolean | null,
+  claim: Pick<ClaimedJob, "id" | "attempts">,
   db: Queryable = getPool(),
 ): Promise<void> {
   // `status <> 'hidden'` — a moderation takedown outranks a late verification
@@ -112,7 +148,14 @@ export async function applyVerificationResult(
   // validated/flagged (and, if public, back into aggregate eligibility). The
   // summary update is gated on the same condition via the CTE.
   await db.query(
-    `with run_update as (
+    `with job_claim as (
+       select 1
+         from verification_jobs
+        where id = $17
+          and run_id = $1
+          and status = 'running'
+          and attempts = $18
+     ), run_update as (
        update runs
           set status = $13, signature_valid = $14,
               generated_frame_tech = case
@@ -122,6 +165,7 @@ export async function applyVerificationResult(
               end
         where id = $1
           and status <> 'hidden'
+          and exists (select 1 from job_claim)
         returning id
      )
      update run_summaries
@@ -148,6 +192,8 @@ export async function applyVerificationResult(
       signatureValid,
       GENERATED_FRAME_TECH.unknown,
       GENERATED_FRAME_TECH.none,
+      claim.id,
+      claim.attempts,
     ],
   );
 }

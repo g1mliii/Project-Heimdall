@@ -20,10 +20,12 @@ import {
 } from "@heimdall/shared";
 import type { FrameSample, Run } from "@heimdall/shared";
 import { insertRun, readRun } from "../db";
+import { framesUploadObjectKey, stagingCleanupNotBefore } from "../r2";
 import { createTestDb, testDbAvailable, type TestDb } from "../testing/test-db";
-import { finalizeRun } from "../repo/runs";
+import { finalizeRun, readVisibleRun } from "../repo/runs";
 import {
   MAX_VERIFICATION_ATTEMPTS,
+  cleanupFinalizedStaging,
   cleanupStalePending,
   drainJobs,
   type DrainDeps,
@@ -40,6 +42,13 @@ function makeParquet(input: readonly FrameSample[]): Uint8Array {
 }
 
 const parquetBytes = makeParquet(frames);
+
+function stagingCleanup(id: string) {
+  return {
+    objectKey: framesUploadObjectKey(id),
+    notBefore: stagingCleanupNotBefore(),
+  };
+}
 
 function runFixture(id: string, overrides: Partial<Run> = {}): Run {
   return {
@@ -73,6 +82,7 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
       {
         id,
         framesObjectKey: `runs/${id}.parquet`,
+        stagingCleanup: stagingCleanup(id),
         visibility: run.visibility,
         managementTokenHash: null,
         signature: null,
@@ -172,6 +182,7 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     expect(first).toMatchObject({ claimed: 1, retried: 1, failed: 0 });
     let jobs = await db.pool.query("select status, attempts from verification_jobs");
     expect(jobs.rows[0]).toMatchObject({ status: "pending", attempts: 1 });
+    expect((await readRun("run_wk_retry", db.pool))?.status).toBe(RUN_STATUS.pending);
 
     // Fast-forward to the last allowed attempt.
     await db.pool.query("update verification_jobs set attempts = $1", [
@@ -183,18 +194,22 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     expect(jobs.rows[0]?.status).toBe("failed");
     expect(jobs.rows[0]?.last_error).toContain("R2 outage");
 
-    // The run never validated — and never becomes aggregate-eligible.
+    // The run never validated and is no longer visible before ownership exists.
     const run = await readRun("run_wk_retry", db.pool);
-    expect(run?.status).toBe(RUN_STATUS.pending);
+    expect(run?.status).toBe(RUN_STATUS.flagged);
   });
 
-  it("corrupt parquet is a terminal failure; run stays pending (12.5)", async () => {
-    await setupFinalizedRun("run_wk_corrupt");
+  it("corrupt parquet is terminally flagged and hidden from pre-auth reads (12.5)", async () => {
+    await setupFinalizedRun(
+      "run_wk_corrupt",
+      runFixture("run_wk_corrupt", { visibility: RUN_VISIBILITY.public }),
+    );
     const garbage = new Uint8Array([0x50, 0x41, 0x52, 0x31, 1, 2, 3, 4]);
     const result = await drainJobs({}, realDeps(async () => garbage));
     expect(result).toMatchObject({ claimed: 1, failed: 1 });
     const run = await readRun("run_wk_corrupt", db.pool);
-    expect(run?.status).toBe(RUN_STATUS.pending);
+    expect(run?.status).toBe(RUN_STATUS.flagged);
+    expect(await readVisibleRun("run_wk_corrupt", db.pool)).toBeNull();
   });
 
   it("pending/flagged runs never match the aggregate-eligibility guard (12.5)", async () => {
@@ -231,6 +246,7 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
       {
         id: "run_wk_signed",
         framesObjectKey: "runs/run_wk_signed.parquet",
+        stagingCleanup: stagingCleanup("run_wk_signed"),
         visibility: RUN_VISIBILITY.unlisted,
         managementTokenHash: null,
         signature: goodSig,
@@ -250,6 +266,7 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
       {
         id: "run_wk_badsig",
         framesObjectKey: "runs/run_wk_badsig.parquet",
+        stagingCleanup: stagingCleanup("run_wk_badsig"),
         visibility: RUN_VISIBILITY.unlisted,
         managementTokenHash: null,
         signature: Buffer.from("forged").toString("base64"),
@@ -301,6 +318,116 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     expect(await readRun(id, db.pool)).not.toBeNull();
   });
 
+  it("reaps expired finalized staging objects after the PUT window closes", async () => {
+    const id = "run_wk_finalized_staging";
+    await setupFinalizedRun(id);
+    await db.pool.query(
+      "update staging_cleanup_jobs set not_before = now() - interval '1 minute' where run_id = $1",
+      [id],
+    );
+    const deleted: string[] = [];
+
+    expect(
+      await cleanupFinalizedStaging(
+        {
+          db: db.pool,
+          deleteObject: async (key) => {
+            deleted.push(key);
+          },
+        },
+        { deadlineAt: Date.now() - 1 },
+      ),
+    ).toBe(0);
+    expect(deleted).toEqual([]);
+
+    const cleaned = await cleanupFinalizedStaging({
+      db: db.pool,
+      deleteObject: async (key) => {
+        deleted.push(key);
+      },
+    });
+
+    expect(cleaned).toBeGreaterThanOrEqual(1);
+    expect(deleted).toContain(`staging/runs/${id}.parquet`);
+    expect(
+      (await db.pool.query("select 1 from staging_cleanup_jobs where run_id = $1", [id])).rows,
+    ).toEqual([]);
+  });
+
+  it("claims finalized staging cleanup once across concurrent maintenance passes", async () => {
+    const id = "run_wk_finalized_staging_concurrent";
+    await setupFinalizedRun(id);
+    await db.pool.query(
+      "update staging_cleanup_jobs set not_before = now() - interval '1 minute' where run_id = $1",
+      [id],
+    );
+
+    let deleteCount = 0;
+    let releaseDelete!: () => void;
+    let signalDeleteStarted!: () => void;
+    const deleteStarted = new Promise<void>((resolve) => {
+      signalDeleteStarted = resolve;
+    });
+    const holdDelete = new Promise<void>((resolve) => {
+      releaseDelete = resolve;
+    });
+    const deps = {
+      db: db.pool,
+      deleteObject: async () => {
+        deleteCount += 1;
+        signalDeleteStarted();
+        await holdDelete;
+      },
+    };
+
+    const first = cleanupFinalizedStaging(deps);
+    await deleteStarted;
+    const second = cleanupFinalizedStaging(deps);
+    expect(
+      await Promise.race([
+        second,
+        new Promise<"timed-out">((resolve) => setTimeout(() => resolve("timed-out"), 100)),
+      ]),
+    ).toBe(0);
+
+    releaseDelete();
+    await Promise.all([first, second]);
+    expect(deleteCount).toBe(1);
+  });
+
+  it("keeps failed finalized staging cleanup durable for a later retry", async () => {
+    const id = "run_wk_finalized_staging_retry";
+    await setupFinalizedRun(id);
+    await db.pool.query(
+      "update staging_cleanup_jobs set not_before = now() - interval '1 minute' where run_id = $1",
+      [id],
+    );
+
+    await cleanupFinalizedStaging({
+      db: db.pool,
+      deleteObject: async () => {
+        throw new Error("simulated R2 outage");
+      },
+    });
+
+    const pending = await db.pool.query<{ attempts: number; last_error: string }>(
+      "select attempts, last_error from staging_cleanup_jobs where run_id = $1",
+      [id],
+    );
+    expect(pending.rows[0]).toMatchObject({ attempts: 1, last_error: "Error: simulated R2 outage" });
+
+    await db.pool.query(
+      "update staging_cleanup_jobs set not_before = now() - interval '1 minute' where run_id = $1",
+      [id],
+    );
+    expect(
+      await cleanupFinalizedStaging({ db: db.pool, deleteObject: async () => {} }),
+    ).toBeGreaterThanOrEqual(1);
+    expect(
+      (await db.pool.query("select 1 from staging_cleanup_jobs where run_id = $1", [id])).rows,
+    ).toEqual([]);
+  });
+
   it("does not delete a stale run that finalizes after the reaper reads it", async () => {
     const id = "run_wk_stale_race";
     const finalizedKey = `runs/${id}.parquet`;
@@ -320,6 +447,7 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
           {
             id,
             framesObjectKey: finalizedKey,
+            stagingCleanup: stagingCleanup(id),
             visibility: RUN_VISIBILITY.unlisted,
             managementTokenHash: null,
             signature: null,

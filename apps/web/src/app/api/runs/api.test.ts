@@ -28,6 +28,7 @@ vi.mock("@/lib/r2", () => ({
   copyObject: vi.fn(async () => true),
   deleteObject: vi.fn(async () => {}),
   getObject: vi.fn(async () => new Uint8Array()),
+  stagingCleanupNotBefore: vi.fn(() => new Date()),
   GET_TTL_SECONDS: 3600,
   MAX_OBJECT_READ_BYTES: 64 * 1024 * 1024,
   PARQUET_CONTENT_TYPE: "application/vnd.apache.parquet",
@@ -210,6 +211,13 @@ describe.skipIf(!canRun)("ingest API routes (§11)", () => {
       [id],
     );
     expect(jobs.rows).toEqual([{ status: "pending" }]);
+    const cleanup = await db.pool.query(
+      "select object_key, attempts, last_error from staging_cleanup_jobs where run_id = $1",
+      [id],
+    );
+    expect(cleanup.rows).toEqual([
+      { object_key: `staging/runs/${id}.parquet`, attempts: 0, last_error: null },
+    ]);
 
     // Re-finalize: 409, still exactly one job row (12.3).
     const again = await finalize(id);
@@ -254,6 +262,23 @@ describe.skipIf(!canRun)("ingest API routes (§11)", () => {
     } finally {
       vi.mocked(r2.deleteObject).mockResolvedValue(undefined);
     }
+  });
+
+  it("finalize: retains durable staging cleanup when immediate deletion fails", async () => {
+    const { id } = await createValidRun();
+    vi.mocked(r2.deleteObject).mockRejectedValueOnce(new Error("simulated R2 outage"));
+
+    const response = await finalize(id);
+
+    expect(response.status).toBe(200);
+    expect(
+      (
+        await db.pool.query(
+          "select object_key from staging_cleanup_jobs where run_id = $1",
+          [id],
+        )
+      ).rows,
+    ).toEqual([{ object_key: `staging/runs/${id}.parquet` }]);
   });
 
   it("finalize: 403 on a foreign object key, 404 on unknown run", async () => {
@@ -325,6 +350,7 @@ describe.skipIf(!canRun)("ingest API routes (§11)", () => {
       [id],
     );
     expect((await getRun(new Request("http://test"), ctx(id))).status).toBe(404);
+    expect((await getFrames(new Request("http://test"), ctx(id))).status).toBe(404);
     await db.pool.query(
       "update runs set visibility = 'unlisted', status = 'hidden' where id = $1",
       [id],

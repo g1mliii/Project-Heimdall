@@ -6,7 +6,8 @@
 
 import { describe, expect, it } from "vitest";
 import type { CaptureSource } from "@heimdall/shared";
-import { parseAnyCapture } from "./detect";
+import { detectionOrder, parseAnyCapture } from "./detect";
+import { encodeUtf16WithBom } from "./testing/encoding";
 import { readFixture } from "./testing/fixtures";
 
 const CASES: { fixture: string; source: CaptureSource }[] = [
@@ -32,5 +33,24 @@ describe("parseAnyCapture", () => {
   it("returns a typed error for garbage input", () => {
     const result = parseAnyCapture(readFixture("malformed/binary-garbage.bin"));
     expect(result.ok).toBe(false);
+  });
+
+  it.each(["le", "be"] as const)("detects a UTF-16%s PresentMon v1 capture", (endian) => {
+    const input = encodeUtf16WithBom(
+      [
+        "SwapChainAddress,TimeInSeconds,MsBetweenPresents",
+        "0x1,0,10",
+        "0x1,0.01,10",
+        "0x1,0.02,10",
+      ].join("\n"),
+      endian,
+    );
+
+    expect(detectionOrder(input)[0]).toBe("presentmon");
+    const result = parseAnyCapture(input);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.source).toBe("presentmon");
+    }
   });
 });

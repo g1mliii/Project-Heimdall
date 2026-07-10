@@ -94,6 +94,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0006_scale_hardening.sql",
       "0007_rate_limits.sql",
       "0008_generated_frame_unknown.sql",
+      "0009_staging_cleanup_jobs.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
@@ -111,6 +112,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
         "run_summaries",
         "runs",
         "schema_migrations",
+        "staging_cleanup_jobs",
         "users",
         "verification_jobs",
         "verifications",
@@ -143,9 +145,20 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "verifications_verified_by_idx",
       "verification_jobs_run_id_idx",
       "verification_jobs_status_locked_at_idx",
+      "staging_cleanup_jobs_not_before_idx",
     ]) {
       expect(names).toContain(expected);
     }
+  });
+
+  it("keeps staging cleanup durable after anonymous run deletion", async () => {
+    const { rows } = await pool.query(
+      `select 1
+         from pg_constraint
+        where conrelid = 'staging_cleanup_jobs'::regclass
+          and contype = 'f'`,
+    );
+    expect(rows).toEqual([]);
   });
 
   it("keeps aggregate and queue hot-path indexes scale-oriented", async () => {
@@ -286,6 +299,12 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
         badJobRun.id,
       ]),
     ).rejects.toThrow(/verification_jobs_attempts_nonnegative_check/);
+    await expect(
+      pool.query(
+        `insert into staging_cleanup_jobs (run_id, object_key, not_before, attempts)
+         values ('run_bad_cleanup_attempts', 'staging/runs/run_bad_cleanup_attempts.parquet', now(), -1)`,
+      ),
+    ).rejects.toThrow(/staging_cleanup_jobs_attempts_nonnegative_check/);
     await pool.query("delete from runs where id = $1", [badJobRun.id]);
   });
 

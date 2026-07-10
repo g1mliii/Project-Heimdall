@@ -29,7 +29,7 @@ export type VerifyOutcome =
   | { kind: "flagged"; reason: string }
   /** Transient (storage hiccup): job goes back to pending. */
   | { kind: "retry"; error: string }
-  /** Terminal (corrupt/impossible data): job is failed, run stays pending. */
+  /** Terminal (corrupt/impossible data): job and finalized run are flagged. */
   | { kind: "failed"; error: string };
 
 /**
@@ -137,7 +137,7 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
   const status = mismatch === null ? "validated" : "flagged";
   // Either way the recompute becomes the stored truth — "corrected and
   // flagged" (§12.4) is exactly the flagged arm of this write.
-  await applyVerificationResult(job.runId, recomputed, status, signatureValid, db);
+  await applyVerificationResult(job.runId, recomputed, status, signatureValid, job, db);
 
   return mismatch === null
     ? { kind: "validated" }

@@ -111,7 +111,13 @@ const bucket = () => getR2Env().R2_BUCKET;
 /* ── Presigned URLs (bounded TTLs — links must expire, not linger) ──────── */
 
 /** Browser direct-upload window (§11.2/§11.3): long enough for a slow-link Parquet PUT. */
-const PUT_TTL_SECONDS = 15 * 60;
+export const PUT_TTL_SECONDS = 15 * 60;
+
+/** First safe point to sweep a staging key after its browser PUT URL expires. */
+export function stagingCleanupNotBefore(nowMs = Date.now()): Date {
+  return new Date(nowMs + PUT_TTL_SECONDS * 1000);
+}
+
 /** Dashboard read window (§5.1): a page view, not a durable share link. */
 export const GET_TTL_SECONDS = 60 * 60;
 

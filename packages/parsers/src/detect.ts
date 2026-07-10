@@ -12,6 +12,7 @@
 import type { CaptureSource } from "@heimdall/shared";
 
 import type { ParseError, ParsedCapture, ParseWarning } from "./errors";
+import { decodeInput } from "./internal/decode";
 import { parseCapture } from "./parse";
 
 const DEFAULT_DETECTION_ORDER: CaptureSource[] = ["capframex", "presentmon", "mangohud"];
@@ -26,7 +27,7 @@ const SOURCE_MARKERS: Record<CaptureSource, readonly string[]> = {
 /** Most marker hits in the file head goes first; ties keep the default order. */
 export function detectionOrder(input: string | Uint8Array): CaptureSource[] {
   const head = (
-    typeof input === "string" ? input.slice(0, 4096) : new TextDecoder().decode(input.subarray(0, 4096))
+    typeof input === "string" ? input.slice(0, 4096) : decodeInput(input.subarray(0, 4096))
   ).toLowerCase();
   const score = (source: CaptureSource) =>
     SOURCE_MARKERS[source].reduce((hits, marker) => hits + (head.includes(marker) ? 1 : 0), 0);

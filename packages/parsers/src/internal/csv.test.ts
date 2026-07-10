@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { buildHeaderMap, detectDialect, findColumn, parseLocaleNumber, splitCsvLine } from "./csv";
 import { decodeInput, splitLines } from "./decode";
+import { encodeUtf16WithBom } from "../testing/encoding";
 
 const BOM = String.fromCharCode(0xfeff);
 
@@ -23,15 +24,8 @@ describe("decodeInput", () => {
 
   it("decodes UTF-16 via BOM sniff (PowerShell `>` writes UTF-16LE)", () => {
     const text = "FrameTime\n10";
-    const le = new Uint8Array(2 + text.length * 2);
-    const be = new Uint8Array(2 + text.length * 2);
-    le[0] = 0xff; le[1] = 0xfe;
-    be[0] = 0xfe; be[1] = 0xff;
-    for (let i = 0; i < text.length; i++) {
-      const code = text.charCodeAt(i);
-      le[2 + i * 2] = code & 0xff; le[3 + i * 2] = code >> 8;
-      be[2 + i * 2] = code >> 8; be[3 + i * 2] = code & 0xff;
-    }
+    const le = encodeUtf16WithBom(text, "le");
+    const be = encodeUtf16WithBom(text, "be");
     expect(decodeInput(le)).toBe(text);
     expect(decodeInput(be)).toBe(text);
   });

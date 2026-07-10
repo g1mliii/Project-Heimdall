@@ -21,6 +21,8 @@ import {
   presignGet,
   presignPut,
   putObject,
+  PUT_TTL_SECONDS,
+  stagingCleanupNotBefore,
 } from "./r2";
 
 describe("r2 object keys", () => {
@@ -38,6 +40,10 @@ describe("r2 object keys", () => {
 
   it("uses the Parquet content type for frame objects", () => {
     expect(PARQUET_CONTENT_TYPE).toBe("application/vnd.apache.parquet");
+  });
+
+  it("schedules staging cleanup after the full browser PUT window", () => {
+    expect(stagingCleanupNotBefore(0).getTime()).toBe(PUT_TTL_SECONDS * 1000);
   });
 
   it("rejects run ids that could escape the runs/ prefix", () => {

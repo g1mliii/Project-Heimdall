@@ -8,6 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { RUN_STATUS, RUN_VISIBILITY, validRun, validSummary } from "@heimdall/shared";
 import type { Run } from "@heimdall/shared";
 import { insertRun, readRun } from "../db";
+import { framesUploadObjectKey, stagingCleanupNotBefore } from "../r2";
 import { createTestDb, testDbAvailable, type TestDb } from "../testing/test-db";
 import { consumeRateLimit, pruneRateLimits } from "./rate-limit";
 import {
@@ -43,12 +44,20 @@ function tokenHashFor(id: string): string {
   return createHash("sha256").update(id).digest("hex");
 }
 
+function stagingCleanup(id: string) {
+  return {
+    objectKey: framesUploadObjectKey(id),
+    notBefore: stagingCleanupNotBefore(),
+  };
+}
+
 async function finalizeFixture(db: TestDb["pool"], id: string) {
   await insertRun(pendingRun(id), db);
   return finalizeRun(
     {
       id,
       framesObjectKey: `runs/${id}.parquet`,
+      stagingCleanup: stagingCleanup(id),
       visibility: RUN_VISIBILITY.unlisted,
       managementTokenHash: tokenHashFor(id),
       signature: null,
@@ -122,6 +131,10 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
         "select status from verification_jobs where run_id = 'run_fin_0001'",
       );
       expect(jobs.rows).toEqual([{ status: "pending" }]);
+      const cleanup = await db.pool.query(
+        "select object_key from staging_cleanup_jobs where run_id = 'run_fin_0001'",
+      );
+      expect(cleanup.rows).toEqual([{ object_key: "staging/runs/run_fin_0001.parquet" }]);
     });
 
     it("re-finalize is a no-op: no second job row, returns false (12.3)", async () => {
@@ -130,6 +143,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
         {
           id: "run_fin_0002",
           framesObjectKey: "runs/run_fin_0002.parquet",
+          stagingCleanup: stagingCleanup("run_fin_0002"),
           visibility: RUN_VISIBILITY.public,
           managementTokenHash: null,
           signature: null,
@@ -155,6 +169,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
           {
             id: "run_missing",
             framesObjectKey: "runs/run_missing.parquet",
+            stagingCleanup: stagingCleanup("run_missing"),
             visibility: RUN_VISIBILITY.unlisted,
             managementTokenHash: null,
             signature: null,
@@ -180,7 +195,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       expect(JSON.stringify(run)).not.toContain(tokenHashFor("run_fin_0003"));
     });
 
-    it("deleteRun removes the row and cascades", async () => {
+    it("deleteRun removes the row but preserves late staging cleanup", async () => {
       await finalizeFixture(db.pool, "run_del_0001");
       expect(await deleteRun("run_del_0001", db.pool)).toBe(true);
       expect(await deleteRun("run_del_0001", db.pool)).toBe(false);
@@ -188,6 +203,10 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
         "select 1 from verification_jobs where run_id = 'run_del_0001'",
       );
       expect(jobs.rows).toEqual([]);
+      const cleanup = await db.pool.query(
+        "select object_key from staging_cleanup_jobs where run_id = 'run_del_0001'",
+      );
+      expect(cleanup.rows).toEqual([{ object_key: "staging/runs/run_del_0001.parquet" }]);
     });
   });
 
@@ -209,7 +228,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       // Nothing else is claimable while the job is running with a fresh lock.
       expect(await claimNextVerificationJob({}, db.pool)).toBeNull();
 
-      await completeVerificationJob(claimed!.id, db.pool);
+      await completeVerificationJob(claimed!.id, claimed!.attempts, db.pool);
       const done = await db.pool.query(
         "select status, locked_at from verification_jobs where id = $1",
         [claimed!.id],
@@ -223,12 +242,18 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       await finalizeFixture(db.pool, "run_job_0003");
       const first = await claimNextVerificationJob({}, db.pool);
       expect(first?.runId).toBe("run_job_0003");
-      await failVerificationJob(first!.id, "transient: R2 timeout", false, db.pool);
+      await failVerificationJob(first!.id, first!.attempts, "transient: R2 timeout", false, db.pool);
 
       const second = await claimNextVerificationJob({}, db.pool);
       expect(second?.id).toBe(first!.id);
       expect(second?.attempts).toBe(2);
-      await failVerificationJob(second!.id, "terminal: corrupt parquet", true, db.pool);
+      await failVerificationJob(
+        second!.id,
+        second!.attempts,
+        "terminal: corrupt parquet",
+        true,
+        db.pool,
+      );
 
       const finalState = await db.pool.query(
         "select status, last_error from verification_jobs where id = $1",
@@ -251,18 +276,63 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       const reclaimed = await claimNextVerificationJob({ staleRunningMinutes: 10 }, db.pool);
       expect(reclaimed?.id).toBe(crashed!.id);
       expect(reclaimed?.attempts).toBe(2);
-      await completeVerificationJob(reclaimed!.id, db.pool);
+      await completeVerificationJob(reclaimed!.id, reclaimed!.attempts, db.pool);
     });
 
     it("applyVerificationResult overwrites the summary and moves run status", async () => {
       await finalizeFixture(db.pool, "run_job_0005");
       const corrected = { ...validSummary, avgFps: 100.5, stutterCount: 7 };
-      await applyVerificationResult("run_job_0005", corrected, "flagged", false, db.pool);
+      const claimed = await claimNextVerificationJob({}, db.pool);
+      expect(claimed?.runId).toBe("run_job_0005");
+      await applyVerificationResult("run_job_0005", corrected, "flagged", false, claimed!, db.pool);
+      await completeVerificationJob(claimed!.id, claimed!.attempts, db.pool);
       const run = await readRun("run_job_0005", db.pool);
       expect(run?.status).toBe(RUN_STATUS.flagged);
       expect(run?.summary.avgFps).toBe(100.5);
       expect(run?.summary.stutterCount).toBe(7);
       expect(run?.signatureValid).toBe(false);
+    });
+
+    it("does not let a stale claim overwrite a newer completed verification", async () => {
+      await finalizeFixture(db.pool, "run_job_stale_claim");
+      const first = await claimNextVerificationJob({}, db.pool);
+      expect(first?.runId).toBe("run_job_stale_claim");
+      await db.pool.query(
+        "update verification_jobs set locked_at = now() - interval '11 minutes' where id = $1",
+        [first!.id],
+      );
+      const second = await claimNextVerificationJob({}, db.pool);
+      expect(second?.attempts).toBe(first!.attempts + 1);
+
+      await applyVerificationResult(
+        "run_job_stale_claim",
+        { ...validSummary, avgFps: 333 },
+        "flagged",
+        null,
+        first!,
+        db.pool,
+      );
+      expect((await readRun("run_job_stale_claim", db.pool))?.summary.avgFps).toBe(
+        validSummary.avgFps,
+      );
+
+      await applyVerificationResult(
+        "run_job_stale_claim",
+        validSummary,
+        "validated",
+        null,
+        second!,
+        db.pool,
+      );
+      expect(await completeVerificationJob(second!.id, second!.attempts, db.pool)).toBe(true);
+      expect(
+        await failVerificationJob(first!.id, first!.attempts, "late worker", true, db.pool),
+      ).toBe(false);
+
+      expect((await readRun("run_job_stale_claim", db.pool))?.status).toBe(RUN_STATUS.validated);
+      expect(
+        (await db.pool.query("select status from verification_jobs where id = $1", [first!.id])).rows,
+      ).toEqual([{ status: "succeeded" }]);
     });
   });
 

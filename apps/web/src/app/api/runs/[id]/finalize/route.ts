@@ -25,6 +25,7 @@ import {
   finalizedFramesObjectKey,
   framesUploadObjectKey,
   headObject,
+  stagingCleanupNotBefore,
 } from "@/lib/r2";
 import { jsonError, parseJsonBody, rateLimits, requireRateLimit } from "@/lib/api/http";
 
@@ -136,6 +137,10 @@ export async function POST(request: Request, context: Context): Promise<NextResp
       finalized = await finalizeRun({
         id,
         framesObjectKey: finalizedObjectKey,
+        stagingCleanup: {
+          objectKey: expectedUploadKey,
+          notBefore: stagingCleanupNotBefore(),
+        },
         visibility: body.visibility,
         managementTokenHash: body.managementTokenHash,
         signature: body.signature ?? null,
@@ -167,9 +172,8 @@ export async function POST(request: Request, context: Context): Promise<NextResp
       return jsonError(409, "already-finalized", "run was already finalized");
     }
 
-    // Best effort only: a still-valid PUT may recreate staging after this
-    // delete, but it can no longer affect the finalized object. The stale
-    // staging prefix is independently safe to reap.
+    // Best effort only: a durable queue row remains until the PUT URL has
+    // expired, so a later staging replay is reaped even if this succeeds.
     await deleteObject(expectedUploadKey).catch((error) => {
       console.error(`finalize ${id}: staging cleanup failed`, error);
     });

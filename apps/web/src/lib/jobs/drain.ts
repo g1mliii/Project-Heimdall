@@ -15,7 +15,13 @@ import {
   failVerificationJob,
 } from "../repo/jobs";
 import { pruneRateLimits } from "../repo/rate-limit";
-import { deletePendingRun, readStalePendingRuns } from "../repo/runs";
+import {
+  completeStagingCleanupJob,
+  claimNextStagingCleanupJob,
+  deletePendingRun,
+  readStalePendingRuns,
+  retryStagingCleanupJob,
+} from "../repo/runs";
 import { verifyRunJob, type VerifyDeps } from "./verify-run";
 
 /** A job claimed this many times without finishing is dead — stop retrying. */
@@ -42,6 +48,14 @@ function realDeps(): DrainDeps {
   };
 }
 
+function realMaintenanceDeps(): Pick<DrainDeps, "db" | "deleteObject"> {
+  return { db: getPool(), deleteObject };
+}
+
+function hasTimeRemaining(deadlineAt?: number): boolean {
+  return deadlineAt === undefined || Date.now() < deadlineAt;
+}
+
 export async function drainJobs(
   { maxJobs = 10, budgetMs = 25_000 }: { maxJobs?: number; budgetMs?: number } = {},
   deps: DrainDeps = realDeps(),
@@ -62,7 +76,7 @@ export async function drainJobs(
     result.claimed += 1;
 
     if (job.attempts > MAX_VERIFICATION_ATTEMPTS) {
-      await failVerificationJob(job.id, "attempts cap exceeded", true, deps.db);
+      await failVerificationJob(job.id, job.attempts, "attempts cap exceeded", true, deps.db);
       result.failed += 1;
       continue;
     }
@@ -70,18 +84,18 @@ export async function drainJobs(
     const outcome = await verifyRunJob(job, deps);
     switch (outcome.kind) {
       case "validated":
-        await completeVerificationJob(job.id, deps.db);
+        await completeVerificationJob(job.id, job.attempts, deps.db);
         result.validated += 1;
         break;
       case "flagged":
         // The job itself SUCCEEDED — it produced a canonical verdict; the
         // run's flagged status is the verdict, not a job failure.
-        await completeVerificationJob(job.id, deps.db);
+        await completeVerificationJob(job.id, job.attempts, deps.db);
         result.flagged += 1;
         break;
       case "retry": {
         const terminal = job.attempts >= MAX_VERIFICATION_ATTEMPTS;
-        await failVerificationJob(job.id, outcome.error, terminal, deps.db);
+        await failVerificationJob(job.id, job.attempts, outcome.error, terminal, deps.db);
         if (terminal) {
           result.failed += 1;
         } else {
@@ -90,7 +104,7 @@ export async function drainJobs(
         break;
       }
       case "failed":
-        await failVerificationJob(job.id, outcome.error, true, deps.db);
+        await failVerificationJob(job.id, job.attempts, outcome.error, true, deps.db);
         result.failed += 1;
         break;
     }
@@ -104,13 +118,19 @@ export async function drainJobs(
  * blind — R2 deletes of missing keys are no-ops).
  */
 export async function cleanupStalePending(
-  deps: Pick<DrainDeps, "db" | "deleteObject"> = realDeps(),
-  { limit = 100 }: { limit?: number } = {},
+  deps: Pick<DrainDeps, "db" | "deleteObject"> = realMaintenanceDeps(),
+  { limit = 100, deadlineAt }: { limit?: number; deadlineAt?: number } = {},
 ): Promise<number> {
   const db: Queryable = deps.db;
+  if (!hasTimeRemaining(deadlineAt)) {
+    return 0;
+  }
   const staleIds = await readStalePendingRuns(INGEST_LIMITS.stalePendingTtlHours, limit, db);
   let cleaned = 0;
   for (const id of staleIds) {
+    if (!hasTimeRemaining(deadlineAt)) {
+      break;
+    }
     try {
       await deps.deleteObject(framesUploadObjectKey(id));
     } catch (error) {
@@ -126,23 +146,59 @@ export async function cleanupStalePending(
   return cleaned;
 }
 
+/**
+ * Reap finalized runs' browser-writable staging keys after their PUT URLs
+ * expire. The DB queue intentionally survives run deletion so a late PUT is
+ * still discoverable; failed storage deletes stay queued with backoff.
+ */
+export async function cleanupFinalizedStaging(
+  deps: Pick<DrainDeps, "db" | "deleteObject"> = realMaintenanceDeps(),
+  { limit = 100, deadlineAt }: { limit?: number; deadlineAt?: number } = {},
+): Promise<number> {
+  const db: Queryable = deps.db;
+  let cleaned = 0;
+  let claimed = 0;
+  while (claimed < limit && hasTimeRemaining(deadlineAt)) {
+    const job = await claimNextStagingCleanupJob({}, db);
+    if (!job) {
+      break;
+    }
+    claimed += 1;
+    try {
+      await deps.deleteObject(job.objectKey);
+    } catch (error) {
+      await retryStagingCleanupJob(job.runId, job.attempts, String(error), db);
+      console.error(`finalized staging cleanup: object delete failed for ${job.runId}`, error);
+      continue;
+    }
+    if (await completeStagingCleanupJob(job.runId, job.attempts, db)) {
+      cleaned += 1;
+    }
+  }
+  return cleaned;
+}
+
 export interface MaintenancePassResult extends DrainResult {
   cleanedStalePending: number;
+  cleanedFinalizedStaging: number;
   prunedRateLimitWindows: number;
 }
 
 /**
- * The full §11.5/§11.11 housekeeping pass — drain jobs, reap stale pending
- * runs, prune rate-limit windows. The ONE definition both entry points (the
- * cron route and the CLI) call, so a step added here can never silently run in
- * only one deployment mode.
+ * The full §11.5/§11.11 housekeeping pass — drain jobs, reap stale and
+ * finalized staging objects, and prune rate-limit windows. Both entry points
+ * (the cron route and the CLI) call this definition, so a step added here can
+ * never silently run in only one deployment mode.
  */
 export async function runMaintenancePass(
   opts: { maxJobs?: number; budgetMs?: number } = {},
   deps: DrainDeps = realDeps(),
 ): Promise<MaintenancePassResult> {
-  const drained = await drainJobs(opts, deps);
-  const cleanedStalePending = await cleanupStalePending(deps);
+  const { maxJobs = 10, budgetMs = 25_000 } = opts;
+  const deadlineAt = Date.now() + budgetMs;
+  const drained = await drainJobs({ maxJobs, budgetMs }, deps);
+  const cleanedStalePending = await cleanupStalePending(deps, { deadlineAt });
+  const cleanedFinalizedStaging = await cleanupFinalizedStaging(deps, { deadlineAt });
   const prunedRateLimitWindows = await pruneRateLimits(deps.db);
-  return { ...drained, cleanedStalePending, prunedRateLimitWindows };
+  return { ...drained, cleanedStalePending, cleanedFinalizedStaging, prunedRateLimitWindows };
 }

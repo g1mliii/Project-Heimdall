@@ -30,6 +30,8 @@ export async function readVisibleRun(id: string, db: Queryable = getPool()): Pro
 export interface FinalizeRunParams {
   id: string;
   framesObjectKey: string;
+  /** Durable post-expiry cleanup for the browser-writable staging object. */
+  stagingCleanup: { objectKey: string; notBefore: Date };
   visibility: Run["visibility"];
   managementTokenHash: string | null;
   signature: string | null;
@@ -63,10 +65,16 @@ export async function finalizeRun(
           and status = 'pending'
           and frames_object_key is null
         returning id
+     ), verification as (
+       insert into verification_jobs (run_id)
+       select id from updated
+       returning run_id
+     ), staging_cleanup as (
+       insert into staging_cleanup_jobs (run_id, object_key, not_before)
+       select id, $9, $10
+         from updated
      )
-     insert into verification_jobs (run_id)
-     select id from updated
-     returning run_id`,
+     select run_id from verification`,
     [
       params.id,
       params.framesObjectKey,
@@ -76,6 +84,8 @@ export async function finalizeRun(
       params.gameId,
       params.gpuHardwareId,
       params.cpuHardwareId,
+      params.stagingCleanup.objectKey,
+      params.stagingCleanup.notBefore,
     ],
     db,
   );
@@ -149,6 +159,73 @@ export async function deletePendingRun(id: string, db: Queryable = getPool()): P
     [id],
   );
   return (result.rowCount ?? 0) > 0;
+}
+
+export interface ClaimedStagingCleanupJob {
+  runId: string;
+  objectKey: string;
+  attempts: number;
+}
+
+/**
+ * Atomically claim the next due staging cleanup. A stale lock is reclaimable
+ * after the same bounded window as verification work; the claim generation
+ * prevents an older worker from completing or retrying a newer claim.
+ */
+export async function claimNextStagingCleanupJob(
+  { staleLockMinutes = 10 }: { staleLockMinutes?: number } = {},
+  db: Queryable = getPool(),
+): Promise<ClaimedStagingCleanupJob | null> {
+  const rows = await query<{ run_id: string; object_key: string; attempts: number }>(
+    `update staging_cleanup_jobs scj
+        set locked_at = now(), attempts = scj.attempts + 1, last_attempt_at = now()
+      where scj.run_id = (
+        select run_id
+          from staging_cleanup_jobs
+         where not_before <= now()
+           and (locked_at is null or locked_at < now() - make_interval(mins => $1))
+         order by not_before, run_id
+         for update skip locked
+         limit 1
+      )
+      returning scj.run_id, scj.object_key, scj.attempts`,
+    [staleLockMinutes],
+    db,
+  );
+  const row = rows[0];
+  return row ? { runId: row.run_id, objectKey: row.object_key, attempts: row.attempts } : null;
+}
+
+/** Delete only the cleanup job generation this worker claimed. */
+export async function completeStagingCleanupJob(
+  runId: string,
+  attempts: number,
+  db: Queryable = getPool(),
+): Promise<boolean> {
+  const result = await db.query(
+    "delete from staging_cleanup_jobs where run_id = $1 and attempts = $2 and locked_at is not null",
+    [runId, attempts],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** Keep only this claimed cleanup generation durable and back off before retrying. */
+export async function retryStagingCleanupJob(
+  runId: string,
+  attempts: number,
+  error: string,
+  db: Queryable = getPool(),
+): Promise<void> {
+  await db.query(
+    `update staging_cleanup_jobs
+        set last_error = $2,
+            locked_at = null,
+            not_before = now() + interval '5 minutes'
+      where run_id = $1
+        and attempts = $3
+        and locked_at is not null`,
+    [runId, error.slice(0, 2000), attempts],
+  );
 }
 
 /**

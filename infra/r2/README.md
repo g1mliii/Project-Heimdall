@@ -31,9 +31,10 @@ Notes:
 
 ## Lifecycle — expire browser-writable staging objects
 
-A finalized run never reads from `staging/runs/`, but the 15-minute PUT URL can recreate that
-object after finalize's best-effort delete. Apply a one-day prefix lifecycle so late/replayed PUTs
-cannot become permanent storage orphans:
+A finalized run never reads from `staging/runs/`. The application records a durable cleanup job at
+finalize and reaps its staging key after the 15-minute PUT URL expires, including after anonymous
+run deletion. Apply this one-day prefix lifecycle as defense in depth if the in-app reaper is
+unavailable for an extended period:
 
 ```bash
 pnpm wrangler r2 bucket lifecycle add heimdall-runs expire-staging-uploads staging/runs/ --expire-days 1
