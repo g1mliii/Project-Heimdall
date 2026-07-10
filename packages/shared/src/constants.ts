@@ -53,6 +53,17 @@ export const STUTTER = {
 export const CURRENT_SCHEMA_VERSION = 1;
 
 /**
+ * Placeholder hardware strings for captures whose log carries no hardware
+ * metadata (PresentMon CSV). These are display-only sentinels: canonical-id
+ * resolution must skip them — a shared "Unknown GPU" hardware row would bucket
+ * unrelated machines together in per-hardware aggregates (§4.4).
+ */
+export const UNKNOWN_HARDWARE = {
+  gpu: "Unknown GPU",
+  cpu: "Unknown CPU",
+} as const;
+
+/**
  * Upload/abuse guardrails (§11.10). Enforced client-side for fast feedback and
  * server-side as the real gate — reject BEFORE issuing a presigned URL where
  * possible (an unbounded multi-hour capture is a storage-DoS vector).
@@ -61,9 +72,9 @@ export const INGEST_LIMITS = {
   /** ~2.3 h at 60 fps; keeps the Parquet far below the server read cap. */
   maxFramesPerRun: 500_000,
   /**
-   * Hard cap on the uploaded Parquet. Must equal the web app's R2
-   * MAX_OBJECT_READ_BYTES so the verification worker can always read back an
-   * object the API accepted (a test in apps/web pins the two together).
+   * Hard cap on the uploaded Parquet. The web app's R2 MAX_OBJECT_READ_BYTES
+   * is defined AS this constant, so the verification worker can always read
+   * back an object the API accepted — equal by construction, not by test.
    */
   maxParquetBytes: 64 * 1024 * 1024,
   /** Below this a capture is noise, not a benchmark. */

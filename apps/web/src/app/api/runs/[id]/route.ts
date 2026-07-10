@@ -8,12 +8,11 @@
  */
 
 import { NextResponse } from "next/server";
-import { RUN_STATUS, RUN_VISIBILITY, verifyManagementToken } from "@heimdall/shared";
+import { verifyManagementToken } from "@heimdall/shared";
 import type { RunResponse } from "@heimdall/shared";
-import { readRun } from "@/lib/db";
-import { deleteRun, readRunManagementTokenHash } from "@/lib/repo/runs";
+import { deleteRun, readRunManagementTokenHash, readVisibleRun } from "@/lib/repo/runs";
 import { deleteObject } from "@/lib/r2";
-import { jsonError, rateLimits, requireRateLimit } from "@/lib/api/http";
+import { bearerToken, jsonError, rateLimits, requireRateLimit } from "@/lib/api/http";
 
 export const runtime = "nodejs";
 
@@ -22,8 +21,8 @@ type Context = { params: Promise<{ id: string }> };
 export async function GET(_request: Request, context: Context): Promise<NextResponse> {
   try {
     const { id } = await context.params;
-    const run = await readRun(id);
-    if (!run || run.visibility === RUN_VISIBILITY.private || run.status === RUN_STATUS.hidden) {
+    const run = await readVisibleRun(id);
+    if (!run) {
       return jsonError(404, "not-found", "run not found");
     }
     const response: RunResponse = run;
@@ -42,8 +41,7 @@ export async function DELETE(request: Request, context: Context): Promise<NextRe
     }
 
     const { id } = await context.params;
-    const auth = request.headers.get("authorization");
-    const token = auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length).trim() : null;
+    const token = bearerToken(request);
 
     const state = await readRunManagementTokenHash(id);
     if (

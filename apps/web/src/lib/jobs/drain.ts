@@ -13,8 +13,8 @@ import {
   claimNextVerificationJob,
   completeVerificationJob,
   failVerificationJob,
-  releaseVerificationJob,
 } from "../repo/jobs";
+import { pruneRateLimits } from "../repo/rate-limit";
 import { deleteRun, readStalePendingRuns } from "../repo/runs";
 import { verifyRunJob, type VerifyDeps } from "./verify-run";
 
@@ -51,15 +51,11 @@ export async function drainJobs(
   const attemptedThisPass = new Set<string>();
 
   while (result.claimed < maxJobs && Date.now() - startedAt < budgetMs) {
-    const job = await claimNextVerificationJob({}, deps.db);
+    // Jobs this pass already retried are excluded from the claim — retry
+    // belongs to a LATER pass, but one transiently failing job at the head
+    // of the queue must not starve every younger job behind it.
+    const job = await claimNextVerificationJob({ excludeIds: [...attemptedThisPass] }, deps.db);
     if (!job) {
-      break;
-    }
-    if (attemptedThisPass.has(job.id)) {
-      // A job this pass already retried is back at the head of the queue —
-      // release it untouched and stop; hammering it in a tight loop would
-      // burn the whole attempts budget against one transient outage.
-      await releaseVerificationJob(job.id, deps.db);
       break;
     }
     attemptedThisPass.add(job.id);
@@ -111,7 +107,7 @@ export async function cleanupStalePending(
   deps: Pick<DrainDeps, "db" | "deleteObject"> = realDeps(),
   { limit = 100 }: { limit?: number } = {},
 ): Promise<number> {
-  const db: Queryable = deps.db ?? getPool();
+  const db: Queryable = deps.db;
   const staleIds = await readStalePendingRuns(INGEST_LIMITS.stalePendingTtlHours, limit, db);
   let cleaned = 0;
   for (const id of staleIds) {
@@ -127,4 +123,25 @@ export async function cleanupStalePending(
     }
   }
   return cleaned;
+}
+
+export interface MaintenancePassResult extends DrainResult {
+  cleanedStalePending: number;
+  prunedRateLimitWindows: number;
+}
+
+/**
+ * The full §11.5/§11.11 housekeeping pass — drain jobs, reap stale pending
+ * runs, prune rate-limit windows. The ONE definition both entry points (the
+ * cron route and the CLI) call, so a step added here can never silently run in
+ * only one deployment mode.
+ */
+export async function runMaintenancePass(
+  opts: { maxJobs?: number; budgetMs?: number } = {},
+  deps: DrainDeps = realDeps(),
+): Promise<MaintenancePassResult> {
+  const drained = await drainJobs(opts, deps);
+  const cleanedStalePending = await cleanupStalePending(deps);
+  const prunedRateLimitWindows = await pruneRateLimits(deps.db);
+  return { ...drained, cleanedStalePending, prunedRateLimitWindows };
 }

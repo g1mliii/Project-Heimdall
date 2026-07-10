@@ -56,7 +56,7 @@ export function Input({
         input
       )}
       {(error || hint) && (
-        <span className={`hd-field__hint${error ? " hd-field__hint--error" : ""}`}>{error || hint}</span>
+        <span className={cx("hd-field__hint", !!error && "hd-field__hint--error")}>{error || hint}</span>
       )}
     </div>
   );

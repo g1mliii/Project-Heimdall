@@ -4,7 +4,23 @@
  * token hash and signature never ride the general read path (`readRun`).
  */
 
-import { query, getPool, type Queryable } from "../db";
+import { RUN_STATUS, RUN_VISIBILITY } from "@heimdall/shared";
+import type { Run } from "@heimdall/shared";
+import { query, getPool, readRun, type Queryable } from "../db";
+
+/**
+ * Pre-auth read gate shared by GET /api/runs/:id and GET /api/runs/:id/frames:
+ * missing, private, and hidden are indistinguishable (all null → 404) so a
+ * probe can't confirm a private run exists. Ownership arrives in Phase 8 —
+ * keep the gate HERE so both routes change together.
+ */
+export async function readVisibleRun(id: string, db: Queryable = getPool()): Promise<Run | null> {
+  const run = await readRun(id, db);
+  if (!run || run.visibility === RUN_VISIBILITY.private || run.status === RUN_STATUS.hidden) {
+    return null;
+  }
+  return run;
+}
 
 export interface FinalizeRunParams {
   id: string;

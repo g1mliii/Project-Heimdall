@@ -12,7 +12,7 @@ import { parquetReadObjects } from "hyparquet";
 import { computeRunSummary } from "@heimdall/parsers";
 import { INGEST_LIMITS, rowsToFrameSamples } from "@heimdall/shared";
 import type { RunSummary } from "@heimdall/shared";
-import { getPool, readRun, type Queryable } from "../db";
+import { readRun, type Queryable } from "../db";
 import { readRunSignature } from "../repo/runs";
 import { applyVerificationResult, type ClaimedJob } from "../repo/jobs";
 
@@ -87,10 +87,12 @@ function verifyEd25519(publicKeyBase64: string, data: Uint8Array, signatureBase6
 }
 
 export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<VerifyOutcome> {
-  const db = deps.db ?? getPool();
+  const { db } = deps;
 
-  const run = await readRun(job.runId, db);
-  const stored = await readRunSignature(job.runId, db);
+  const [run, stored] = await Promise.all([
+    readRun(job.runId, db),
+    readRunSignature(job.runId, db),
+  ]);
   if (!run || !stored) {
     return { kind: "failed", error: "run row disappeared" };
   }

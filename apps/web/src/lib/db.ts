@@ -47,6 +47,19 @@ export function getPool(): pg.Pool {
   return globalForDb.__heimdallPgPool;
 }
 
+/**
+ * True when `error` is a Postgres unique violation (23505), optionally for one
+ * specific constraint/index — lets routes turn expected conflicts into 4xx
+ * instead of the catch-all 500.
+ */
+export function isUniqueViolation(error: unknown, constraint?: string): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  const pgError = error as { code?: string; constraint?: string };
+  return pgError.code === "23505" && (constraint === undefined || pgError.constraint === constraint);
+}
+
 /** Typed query wrapper. */
 export async function query<Row extends pg.QueryResultRow>(
   text: string,

@@ -11,5 +11,6 @@ export * from "./capframex";
 export * from "./presentmon";
 export * from "./mangohud";
 export * from "./parse";
+export * from "./detect";
 export * from "./metrics";
 export * from "./sensor-availability";

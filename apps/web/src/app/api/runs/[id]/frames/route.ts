@@ -4,9 +4,8 @@
  */
 
 import { NextResponse } from "next/server";
-import { RUN_STATUS, RUN_VISIBILITY } from "@heimdall/shared";
 import type { FramesUrlResponse } from "@heimdall/shared";
-import { readRun } from "@/lib/db";
+import { readVisibleRun } from "@/lib/repo/runs";
 import { GET_TTL_SECONDS, presignGet } from "@/lib/r2";
 import { jsonError } from "@/lib/api/http";
 
@@ -17,8 +16,8 @@ type Context = { params: Promise<{ id: string }> };
 export async function GET(_request: Request, context: Context): Promise<NextResponse> {
   try {
     const { id } = await context.params;
-    const run = await readRun(id);
-    if (!run || run.visibility === RUN_VISIBILITY.private || run.status === RUN_STATUS.hidden) {
+    const run = await readVisibleRun(id);
+    if (!run) {
       return jsonError(404, "not-found", "run not found");
     }
     if (!run.framesObjectKey) {

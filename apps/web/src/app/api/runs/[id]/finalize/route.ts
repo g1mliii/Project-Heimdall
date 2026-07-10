@@ -7,9 +7,15 @@
  */
 
 import { NextResponse } from "next/server";
-import { INGEST_LIMITS, RUN_STATUS, finalizeRunRequestSchema } from "@heimdall/shared";
+import {
+  INGEST_LIMITS,
+  RUN_STATUS,
+  UNKNOWN_HARDWARE,
+  finalizeRunRequestSchema,
+} from "@heimdall/shared";
 import type { FinalizeRunResponse } from "@heimdall/shared";
-import { readRun } from "@/lib/db";
+import { isUniqueViolation, readRun } from "@/lib/db";
+import { isRunId } from "@/lib/ids";
 import { finalizeRun, readRunFinalizeState } from "@/lib/repo/runs";
 import { resolveGameId, resolveHardwareId } from "@/lib/repo/catalog";
 import { drainJobs } from "@/lib/jobs/drain";
@@ -28,7 +34,7 @@ export async function POST(request: Request, context: Context): Promise<NextResp
     }
 
     const { id } = await context.params;
-    if (!/^[A-Za-z0-9_-]+$/.test(id)) {
+    if (!isRunId(id)) {
       return jsonError(404, "not-found", "run not found");
     }
     const body = await parseJsonBody(request, finalizeRunRequestSchema);
@@ -60,34 +66,54 @@ export async function POST(request: Request, context: Context): Promise<NextResp
       return jsonError(413, "object-too-large", "uploaded parquet exceeds the size limit");
     }
 
-    // §11.9 canonical resolution — enrichment, never a gate: failures leave
-    // the raw strings standing and the ids null.
-    let gameId: string | null = null;
-    let gpuHardwareId: string | null = null;
-    let cpuHardwareId: string | null = null;
-    try {
-      gameId = await resolveGameId(run.captureSource, run.game);
-      gpuHardwareId = await resolveHardwareId(
-        "gpu",
-        run.captureSource,
-        run.hardware.gpu,
-        run.hardware.gpuVendor ?? null,
-      );
-      cpuHardwareId = await resolveHardwareId("cpu", run.captureSource, run.hardware.cpu, null);
-    } catch (error) {
-      console.error(`finalize ${id}: canonical resolution failed (non-fatal)`, error);
-    }
+    // §11.9 canonical resolution — enrichment, never a gate: a failed resolver
+    // leaves its id null and the raw strings standing. The three lookups are
+    // independent, so they run concurrently and fail independently. The
+    // UNKNOWN_HARDWARE placeholders never get canonical rows: a shared
+    // "Unknown GPU" bucket would mix unrelated machines into per-hardware
+    // aggregates.
+    const idOrNull = (settled: PromiseSettledResult<string | null>, what: string) => {
+      if (settled.status === "fulfilled") {
+        return settled.value;
+      }
+      console.error(`finalize ${id}: ${what} resolution failed (non-fatal)`, settled.reason);
+      return null;
+    };
+    const [gameSettled, gpuSettled, cpuSettled] = await Promise.allSettled([
+      resolveGameId(run.captureSource, run.game),
+      run.hardware.gpu === UNKNOWN_HARDWARE.gpu
+        ? Promise.resolve(null)
+        : resolveHardwareId("gpu", run.captureSource, run.hardware.gpu, run.hardware.gpuVendor ?? null),
+      run.hardware.cpu === UNKNOWN_HARDWARE.cpu
+        ? Promise.resolve(null)
+        : resolveHardwareId("cpu", run.captureSource, run.hardware.cpu, null),
+    ]);
 
-    const finalized = await finalizeRun({
-      id,
-      framesObjectKey: expectedKey,
-      visibility: body.visibility,
-      managementTokenHash: body.managementTokenHash ?? null,
-      signature: body.signature ?? null,
-      gameId,
-      gpuHardwareId,
-      cpuHardwareId,
-    });
+    let finalized: boolean;
+    try {
+      finalized = await finalizeRun({
+        id,
+        framesObjectKey: expectedKey,
+        visibility: body.visibility,
+        managementTokenHash: body.managementTokenHash ?? null,
+        signature: body.signature ?? null,
+        gameId: idOrNull(gameSettled, "game"),
+        gpuHardwareId: idOrNull(gpuSettled, "gpu"),
+        cpuHardwareId: idOrNull(cpuSettled, "cpu"),
+      });
+    } catch (error) {
+      // The hash is client-supplied and unique across runs (0004): a reused
+      // delete token is an expected conflict, not an internal error. The
+      // update rolled back, so retrying with a FRESH token succeeds.
+      if (isUniqueViolation(error, "runs_anonymous_management_token_hash_idx")) {
+        return jsonError(
+          409,
+          "management-token-in-use",
+          "management token already protects another run — generate a fresh token and retry",
+        );
+      }
+      throw error;
+    }
     if (!finalized) {
       const state = await readRunFinalizeState(id);
       if (!state) {

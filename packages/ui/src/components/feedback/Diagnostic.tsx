@@ -53,7 +53,9 @@ export function Diagnostic({ severity = "info", title, children, className = "",
           strokeLinecap="round"
           strokeLinejoin="round"
         >
-          {ICONS[severity]}
+          {/* Runtime fallback on purpose: severity often arrives from server
+              diagnostics data, which may outrun this union. */}
+          {ICONS[severity] ?? ICONS.info}
         </svg>
       </span>
       <div className="hd-diag__body">

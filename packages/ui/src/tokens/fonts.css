@@ -12,5 +12,8 @@
    exposes each as a CSS variable (--font-space-grotesk /
    --font-hanken-grotesk / --font-jetbrains-mono). typography.css wires the
    --font-display / --font-sans / --font-mono tokens to those variables
-   (with literal-family fallbacks), so this file intentionally loads nothing.
+   with the named family as the var() fallback, so consumers that don't
+   define the next/font variables (desktop webview, Storybook) still get
+   the named face if installed, then the system stack — never the browser
+   default serif. This file intentionally loads nothing.
    ─────────────────────────────────────────────────────────────── */

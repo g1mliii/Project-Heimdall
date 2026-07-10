@@ -26,9 +26,12 @@ import { getR2Env } from "./env";
 // Single definition lives in @heimdall/shared (the browser PUT needs it too);
 // re-exported here so server code keeps importing it from the R2 module.
 export { PARQUET_CONTENT_TYPE } from "@heimdall/shared";
-import { PARQUET_CONTENT_TYPE } from "@heimdall/shared";
+import { INGEST_LIMITS, PARQUET_CONTENT_TYPE } from "@heimdall/shared";
+import { RUN_ID_PATTERN } from "./ids";
 export const MAX_PRESIGNED_PUT_BYTES = 512 * 1024 * 1024;
-export const MAX_OBJECT_READ_BYTES = 64 * 1024 * 1024;
+// Derived, not re-declared: the worker must always be able to read back an
+// object the API accepted, so the read cap IS the ingest cap.
+export const MAX_OBJECT_READ_BYTES: number = INGEST_LIMITS.maxParquetBytes;
 
 function assertSafeObjectKey(key: string): void {
   if (
@@ -55,7 +58,7 @@ function assertPositiveBoundedByteLength(value: number, label: string): void {
  * are app-generated.
  */
 export function framesObjectKey(runId: string): string {
-  if (!/^[A-Za-z0-9_-]+$/.test(runId)) {
+  if (!RUN_ID_PATTERN.test(runId)) {
     throw new Error(`invalid run id for object key: ${JSON.stringify(runId)}`);
   }
   return `runs/${runId}.parquet`;

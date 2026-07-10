@@ -10,7 +10,7 @@
     "pnpm": ">=11.2.2 <12"
   },
   "scripts": {
-    "dev": "pnpm --filter @heimdall/web dev",
+    "dev": "pnpm --filter @heimdall/ui build && pnpm --filter @heimdall/web dev",
     "build": "pnpm -r build",
     "migrate": "node infra/db/migrate.mjs",
     "lint": "pnpm -r lint",

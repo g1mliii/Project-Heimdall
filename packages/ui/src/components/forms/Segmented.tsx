@@ -14,10 +14,12 @@ export interface SegmentedProps extends Omit<React.HTMLAttributes<HTMLDivElement
   value: string;
   /** Called with the new value. */
   onChange?: (value: string) => void;
+  /** Disable every option (e.g. while the surrounding form is busy). */
+  disabled?: boolean;
 }
 
 /** Compact segmented toggle for view modes (chart type, time window). */
-export function Segmented({ options = [], value, onChange, className = "", ...rest }: SegmentedProps) {
+export function Segmented({ options = [], value, onChange, disabled = false, className = "", ...rest }: SegmentedProps) {
   return (
     <div className={cx("hd-segmented", className)} role="group" {...rest}>
       {options.map((o) => {
@@ -30,6 +32,7 @@ export function Segmented({ options = [], value, onChange, className = "", ...re
             type="button"
             className="hd-segmented__opt"
             aria-pressed={value === v}
+            disabled={disabled}
             onClick={() => onChange && onChange(v)}
           >
             {icon}

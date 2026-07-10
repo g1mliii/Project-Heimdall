@@ -8,20 +8,19 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { getIngestEnv } from "@/lib/env";
-import { cleanupStalePending, drainJobs } from "@/lib/jobs/drain";
-import { pruneRateLimits } from "@/lib/repo/rate-limit";
-import { jsonError } from "@/lib/api/http";
+import { runMaintenancePass } from "@/lib/jobs/drain";
+import { bearerToken, jsonError } from "@/lib/api/http";
 
 export const runtime = "nodejs";
 
 function bearerMatches(request: Request, expected: string): boolean {
-  const auth = request.headers.get("authorization");
-  if (!auth?.startsWith("Bearer ")) {
+  const presented = bearerToken(request);
+  if (presented === null) {
     return false;
   }
-  const presented = Buffer.from(auth.slice("Bearer ".length).trim());
+  const presentedBytes = Buffer.from(presented);
   const wanted = Buffer.from(expected);
-  return presented.length === wanted.length && timingSafeEqual(presented, wanted);
+  return presentedBytes.length === wanted.length && timingSafeEqual(presentedBytes, wanted);
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -31,10 +30,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       return jsonError(401, "unauthorized", "missing or invalid drain token");
     }
 
-    const drained = await drainJobs({ maxJobs: 10, budgetMs: 25_000 });
-    const cleanedStalePending = await cleanupStalePending();
-    const prunedRateLimitWindows = await pruneRateLimits();
-    return NextResponse.json({ ...drained, cleanedStalePending, prunedRateLimitWindows });
+    return NextResponse.json(await runMaintenancePass({ maxJobs: 10, budgetMs: 25_000 }));
   } catch (error) {
     console.error("POST /api/internal/jobs/drain failed", error);
     return jsonError(500, "internal", "drain failed");

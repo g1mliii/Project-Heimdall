@@ -8,11 +8,12 @@ import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { uploadCapture } from "../src/lib/upload/upload-run";
 
-const base = process.env.HEIMDALL_BASE_URL ?? "http://localhost:3000";
+// Load .env BEFORE reading any env var — a base URL set there must win.
 const envFile = path.resolve(import.meta.dirname, "..", "..", "..", ".env");
 if (existsSync(envFile)) {
   process.loadEnvFile(envFile);
 }
+const base = process.env.HEIMDALL_BASE_URL ?? "http://localhost:3000";
 
 const fixture = path.resolve(
   import.meta.dirname,

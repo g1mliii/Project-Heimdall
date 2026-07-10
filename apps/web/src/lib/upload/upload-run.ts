@@ -8,12 +8,13 @@
  * injectable so tests run it in Node.
  */
 
-import { parseCapture, computeRunSummary } from "@heimdall/parsers";
-import type { ParseError, ParseWarning, ParsedCapture } from "@heimdall/parsers";
+import { computeRunSummary, parseAnyCapture } from "@heimdall/parsers";
+import type { ParseWarning } from "@heimdall/parsers";
 import {
   CURRENT_SCHEMA_VERSION,
   INGEST_LIMITS,
   PARQUET_CONTENT_TYPE,
+  UNKNOWN_HARDWARE,
   createRunResponseSchema,
   generateManagementToken,
   hashManagementToken,
@@ -74,49 +75,6 @@ export interface UploadOptions {
   transport?: UploadTransport;
 }
 
-const DEFAULT_DETECTION_ORDER: CaptureSource[] = ["capframex", "presentmon", "mangohud"];
-
-/**
- * Source-distinctive markers. Necessary because the parsers' frame-time
- * columns overlap (MangoHud and PresentMon v2 both name it `frametime`;
- * CapFrameX CSV and PresentMon v1 both use `msbetweenpresents`) — blind
- * try-in-order would "succeed" with the wrong source label.
- */
-const SOURCE_MARKERS: Record<CaptureSource, readonly string[]> = {
-  capframex: ["msgpuactive", "gpumemusage", '"capturedata"', '"msbetweenpresents"'],
-  presentmon: ["swapchainaddress", "presentruntime", "allowstearing", "cpustarttime"],
-  mangohud: ["gpu_core_clock", "gpu_vram_used", "cpuscheduler", "cpu_load"],
-};
-
-/** Most marker hits in the file head goes first; ties keep the default order. */
-function detectionOrder(input: Uint8Array): CaptureSource[] {
-  const head = new TextDecoder().decode(input.subarray(0, 4096)).toLowerCase();
-  const score = (source: CaptureSource) =>
-    SOURCE_MARKERS[source].reduce((hits, marker) => hits + (head.includes(marker) ? 1 : 0), 0);
-  return [...DEFAULT_DETECTION_ORDER].sort((a, b) => score(b) - score(a));
-}
-
-function detectAndParse(
-  input: Uint8Array,
-): { ok: true; source: CaptureSource; capture: ParsedCapture; warnings: ParseWarning[] } | {
-  ok: false;
-  error: ParseError;
-} {
-  let bestError: ParseError | null = null;
-  for (const source of detectionOrder(input)) {
-    const result = parseCapture(source, input);
-    if (result.ok) {
-      return { ok: true, source, capture: result.value, warnings: result.warnings };
-    }
-    // Keep the most informative rejection: a source that recognized the shape
-    // but choked mid-file beats a blanket "unrecognized-format".
-    if (!bestError || (bestError.code === "unrecognized-format" && result.error.code !== "unrecognized-format")) {
-      bestError = result.error;
-    }
-  }
-  return { ok: false, error: bestError! };
-}
-
 function defaultTransport(): UploadTransport {
   return {
     fetch: globalThis.fetch.bind(globalThis),
@@ -158,7 +116,7 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
   try {
     emit({ stage: "parsing" });
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const parsed = detectAndParse(bytes);
+    const parsed = parseAnyCapture(bytes);
     if (!parsed.ok) {
       return { ok: false, code: parsed.error.code, message: parsed.error.message };
     }
@@ -192,11 +150,14 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
       };
     }
 
+    // Spreads first, required fields last: `??` skips an explicitly-undefined
+    // gpu/cpu key in the overrides, so the placeholder always survives (a
+    // trailing spread would clobber it back to undefined and fail zod).
     const hardware: HardwareSnapshot = {
-      gpu: options.hardware?.gpu ?? parsedHardware?.gpu ?? "Unknown GPU",
-      cpu: options.hardware?.cpu ?? parsedHardware?.cpu ?? "Unknown CPU",
       ...parsedHardware,
       ...options.hardware,
+      gpu: options.hardware?.gpu ?? parsedHardware?.gpu ?? UNKNOWN_HARDWARE.gpu,
+      cpu: options.hardware?.cpu ?? parsedHardware?.cpu ?? UNKNOWN_HARDWARE.cpu,
     };
 
     emit({ stage: "creating" });

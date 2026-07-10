@@ -53,6 +53,15 @@ export async function parseJsonBody<T>(
   return result.data;
 }
 
+/** The token from an `Authorization: Bearer <token>` header; null when absent/empty. */
+export function bearerToken(request: Request): string | null {
+  const auth = request.headers.get("authorization");
+  if (!auth?.startsWith("Bearer ")) {
+    return null;
+  }
+  return auth.slice("Bearer ".length).trim() || null;
+}
+
 /**
  * Best-effort client ip for rate limiting. `x-forwarded-for` is spoofable
  * when the app is not behind a trusted proxy — acceptable for Phase 4 abuse

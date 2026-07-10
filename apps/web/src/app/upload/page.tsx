@@ -11,7 +11,7 @@ export default function UploadPage() {
   return (
     <main
       style={{
-        maxWidth: 720,
+        maxWidth: "var(--container-prose)",
         margin: "0 auto",
         padding: "var(--space-12) var(--space-6) var(--space-16)",
       }}

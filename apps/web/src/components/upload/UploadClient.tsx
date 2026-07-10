@@ -9,7 +9,7 @@
  */
 
 import * as React from "react";
-import { Badge, Button, Card, Checkbox, Diagnostic, Input, Spinner, Stat } from "@heimdall/ui";
+import { Badge, Button, Card, Diagnostic, Input, Segmented, Spinner, Stat } from "@heimdall/ui";
 import { uploadCapture } from "@/lib/upload/upload-run";
 import type { UploadProgress, UploadResult, UploadSuccess } from "@/lib/upload/upload-run";
 import {
@@ -166,6 +166,7 @@ export function UploadClient() {
 
   const doneCount =
     mode.kind === "batch" ? mode.items.filter((item) => item.status === "done").length : 0;
+  const singleProgress = mode.kind === "single" ? progressLine(mode.progress) : null;
   const batchSettled =
     mode.kind === "batch" &&
     mode.items.every((item) => item.status === "done" || item.status === "error");
@@ -211,7 +212,7 @@ export function UploadClient() {
         }}
         style={{
           marginTop: "var(--space-6)",
-          borderWidth: 1.5,
+          borderWidth: "var(--border-thick)",
           borderStyle: "dashed",
           borderColor: dragOver ? "var(--brand-teal)" : "var(--line-3)",
           borderRadius: "var(--radius-lg)",
@@ -237,8 +238,8 @@ export function UploadClient() {
           <>
             <div
               style={{
-                width: 56,
-                height: 56,
+                width: "var(--space-14)",
+                height: "var(--space-14)",
                 margin: "0 auto var(--space-4)",
                 borderRadius: "var(--radius-md)",
                 background: "var(--brand-teal-dim)",
@@ -259,7 +260,7 @@ export function UploadClient() {
           </>
         )}
 
-        {mode.kind === "single" && (
+        {mode.kind === "single" && singleProgress && (
           <div
             style={{
               display: "flex",
@@ -270,10 +271,10 @@ export function UploadClient() {
           >
             <Spinner size={28} />
             <p style={{ font: "var(--type-subheading)", color: "var(--fg-1)" }}>
-              {progressLine(mode.progress).title} {mode.fileName}
+              {singleProgress.title} {mode.fileName}
             </p>
             <p data-mono style={{ font: "var(--type-data)", color: "var(--fg-3)" }}>
-              {progressLine(mode.progress).data}
+              {singleProgress.data}
             </p>
           </div>
         )}
@@ -289,9 +290,9 @@ export function UploadClient() {
           >
             <div
               style={{
-                width: 48,
-                height: 48,
-                borderRadius: 999,
+                width: "var(--space-12)",
+                height: "var(--space-12)",
+                borderRadius: "var(--radius-pill)",
                 background: "var(--good-dim)",
                 color: "var(--good)",
                 display: "grid",
@@ -444,9 +445,11 @@ export function UploadClient() {
             />
             <Card.Body>
               <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
-                {mode.items.map((item) => (
+                {/* Keyed by index on purpose: names can collide (same-named
+                    logs from different folders) and items never reorder. */}
+                {mode.items.map((item, index) => (
                   <div
-                    key={item.file.name}
+                    key={index}
                     style={{
                       display: "flex",
                       alignItems: "center",
@@ -457,7 +460,7 @@ export function UploadClient() {
                       borderBottomColor: "var(--line-1)",
                     }}
                   >
-                    <span style={{ flex: "none", width: 20, display: "grid", placeItems: "center" }}>
+                    <span style={{ flex: "none", width: "var(--space-5)", display: "grid", placeItems: "center" }}>
                       {item.status === "queued" && (
                         <ClockIcon size={15} style={{ color: "var(--fg-4)" }} />
                       )}
@@ -542,20 +545,20 @@ export function UploadClient() {
         >
           Visibility
         </span>
-        <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-          <Checkbox
-            checked={visibility === "unlisted"}
-            onChange={() => setVisibility("unlisted")}
-            label="Unlisted — link only, excluded from public averages"
-            disabled={busy}
-          />
-          <Checkbox
-            checked={visibility === "public"}
-            onChange={() => setVisibility("public")}
-            label="Public — eligible for game distributions once validated"
-            disabled={busy}
-          />
-        </div>
+        <Segmented
+          value={visibility}
+          onChange={(value) => setVisibility(value as Visibility)}
+          options={[
+            { value: "unlisted", label: "Unlisted" },
+            { value: "public", label: "Public" },
+          ]}
+          disabled={busy}
+        />
+        <p style={{ font: "var(--type-caption)", color: "var(--fg-3)", marginTop: "var(--space-2)" }}>
+          {visibility === "unlisted"
+            ? "Link only — excluded from public averages."
+            : "Eligible for game distributions once validated."}
+        </p>
       </div>
     </div>
   );
