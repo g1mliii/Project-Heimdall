@@ -14,7 +14,8 @@ import {
   MAX_PRESIGNED_PUT_BYTES,
   PARQUET_CONTENT_TYPE,
   deleteObject,
-  framesObjectKey,
+  finalizedFramesObjectKey,
+  framesUploadObjectKey,
   getObject,
   headObject,
   presignGet,
@@ -23,8 +24,12 @@ import {
 } from "./r2";
 
 describe("r2 object keys", () => {
-  it("frames key matches the shared fixture's framesObjectKey (no drift)", () => {
-    expect(framesObjectKey(validRun.id)).toBe(validRun.framesObjectKey);
+  it("keeps browser staging keys separate from unique finalized keys", () => {
+    const uploadKey = framesUploadObjectKey(validRun.id);
+    const finalizedKey = finalizedFramesObjectKey(validRun.id, "a".repeat(32));
+    expect(uploadKey).toBe(`staging/runs/${validRun.id}.parquet`);
+    expect(finalizedKey).toBe(validRun.framesObjectKey);
+    expect(finalizedKey).not.toBe(uploadKey);
   });
 
   it("reserves the exports/ prefix for Phase 11", () => {
@@ -37,7 +42,8 @@ describe("r2 object keys", () => {
 
   it("rejects run ids that could escape the runs/ prefix", () => {
     for (const bad of ["../exports/x", "a/b", "a b", "", "a\nb"]) {
-      expect(() => framesObjectKey(bad), bad).toThrow(/invalid run id/);
+      expect(() => framesUploadObjectKey(bad), bad).toThrow(/invalid run id/);
+      expect(() => finalizedFramesObjectKey(bad), bad).toThrow(/invalid run id/);
     }
   });
 
@@ -51,7 +57,7 @@ describe("r2 object keys", () => {
     try {
       const r2 = await import("./r2");
       const url = new URL(
-        await r2.presignPut(framesObjectKey(validRun.id), { contentLengthBytes: 123 }),
+        await r2.presignPut(framesUploadObjectKey(validRun.id), { contentLengthBytes: 123 }),
       );
       expect(url.searchParams.get("X-Amz-SignedHeaders")?.split(";")).toContain(
         "content-length",
@@ -76,7 +82,7 @@ describe("r2 object keys", () => {
         r2.presignPut("../secrets.parquet", { contentLengthBytes: 1 }),
       ).rejects.toThrow(/invalid R2 object key/);
       await expect(
-        r2.presignPut(framesObjectKey(validRun.id), {
+        r2.presignPut(framesUploadObjectKey(validRun.id), {
           contentLengthBytes: MAX_PRESIGNED_PUT_BYTES + 1,
         }),
       ).rejects.toThrow(/contentLengthBytes/);

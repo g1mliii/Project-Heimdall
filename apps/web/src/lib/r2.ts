@@ -12,6 +12,7 @@
  */
 
 import {
+  CopyObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -21,7 +22,7 @@ import {
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getR2Env } from "./env";
 
-/* ── Object keys (single source — must not drift from the DTO's framesObjectKey) ── */
+/* ── Object keys ────────────────────────────────────────────────────────── */
 
 // Single definition lives in @heimdall/shared (the browser PUT needs it too);
 // re-exported here so server code keeps importing it from the R2 module.
@@ -35,7 +36,7 @@ export const MAX_OBJECT_READ_BYTES: number = INGEST_LIMITS.maxParquetBytes;
 
 function assertSafeObjectKey(key: string): void {
   if (
-    !/^(runs|exports)\/[A-Za-z0-9._/-]+$/.test(key) ||
+    !/^(runs|staging\/runs|exports)\/[A-Za-z0-9._/-]+$/.test(key) ||
     key.includes("..") ||
     key.includes("//") ||
     key.includes("\\")
@@ -57,11 +58,31 @@ function assertPositiveBoundedByteLength(value: number, label: string): void {
  * runs/ prefix ("/", "..", whitespace) — defense in depth even though run ids
  * are app-generated.
  */
-export function framesObjectKey(runId: string): string {
+function assertRunId(runId: string): void {
   if (!RUN_ID_PATTERN.test(runId)) {
     throw new Error(`invalid run id for object key: ${JSON.stringify(runId)}`);
   }
-  return `runs/${runId}.parquet`;
+}
+
+/** Browser-writable staging key. It is never exposed as a finalized run object. */
+export function framesUploadObjectKey(runId: string): string {
+  assertRunId(runId);
+  return `staging/runs/${runId}.parquet`;
+}
+
+/**
+ * Server-only finalized key. The nonce prevents concurrent finalize attempts
+ * from ever overwriting each other's immutable copy.
+ */
+export function finalizedFramesObjectKey(
+  runId: string,
+  nonce = crypto.randomUUID().replaceAll("-", ""),
+): string {
+  assertRunId(runId);
+  if (!/^[0-9a-f]{32}$/.test(nonce)) {
+    throw new Error(`invalid finalized object nonce: ${JSON.stringify(nonce)}`);
+  }
+  return `runs/${runId}/${nonce}.parquet`;
 }
 
 /** R2 key prefix reserved for Phase 11 video exports (§5.2). */
@@ -103,8 +124,8 @@ interface PresignPutOptions {
  * Presigned browser PUT. Pass `contentLengthBytes` (Phase 4 §11.10 will make it
  * required) to bind the expected body size. The AWS S3 presigner intentionally
  * leaves Content-Type unsigned, so finalize (§11.4/§11.10) must HEAD-validate
- * metadata and treat post-finalize re-PUTs as a TOCTOU risk (short TTL +
- * recompute-from-storage is the mitigation).
+ * metadata. The signed key is staging-only; finalize copies the exact HEADed
+ * version to a server-only key before exposing it.
  */
 export async function presignPut(
   key: string,
@@ -170,16 +191,59 @@ export async function getObject(
 }
 
 /** Object metadata, or null when the key does not exist (§11.10 pre-finalize check). */
-export async function headObject(key: string): Promise<{ sizeBytes: number } | null> {
+export async function headObject(
+  key: string,
+): Promise<{ sizeBytes: number; etag: string } | null> {
   assertSafeObjectKey(key);
   try {
     const result = await getR2Client().send(
       new HeadObjectCommand({ Bucket: bucket(), Key: key }),
     );
-    return { sizeBytes: result.ContentLength ?? 0 };
+    if (!result.ETag) {
+      throw new Error(`R2 object ${key} has no ETag`);
+    }
+    return { sizeBytes: result.ContentLength ?? 0, etag: result.ETag };
   } catch (error) {
     if (error instanceof Error && error.name === "NotFound") {
       return null;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Promote the exact staging version validated by HEAD into an immutable,
+ * server-only key. CopySourceIfMatch closes the HEAD/copy race: if the browser
+ * overwrites staging in between, R2 rejects the copy.
+ */
+export async function copyObject(
+  sourceKey: string,
+  destinationKey: string,
+  { sourceEtag }: { sourceEtag: string },
+): Promise<boolean> {
+  assertSafeObjectKey(sourceKey);
+  assertSafeObjectKey(destinationKey);
+  try {
+    await getR2Client().send(
+      new CopyObjectCommand({
+        Bucket: bucket(),
+        Key: destinationKey,
+        CopySource: `${bucket()}/${sourceKey}`,
+        CopySourceIfMatch: sourceEtag,
+        ContentType: PARQUET_CONTENT_TYPE,
+        MetadataDirective: "REPLACE",
+      }),
+    );
+    return true;
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.name === "PreconditionFailed" ||
+        ("$metadata" in error &&
+          (error as Error & { $metadata?: { httpStatusCode?: number } }).$metadata
+            ?.httpStatusCode === 412))
+    ) {
+      return false;
     }
     throw error;
   }

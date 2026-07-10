@@ -1,7 +1,8 @@
 # R2 bucket setup
 
 One-time configuration for the `heimdall-runs` bucket (name from `R2_BUCKET` in `.env`).
-Layout: `runs/{id}.parquet` (per-frame data), `exports/` (Phase 11 video exports).
+Layout: browser PUTs land in `staging/runs/{id}.parquet`; finalize promotes the HEADed version to
+`runs/{id}/{nonce}.parquet`, which has no client PUT URL. `exports/` remains reserved for Phase 11.
 
 ## CORS — required for browser direct uploads (§5.2)
 
@@ -27,3 +28,17 @@ Notes:
 - Presigned URLs already expire (PUT 15 min, GET 60 min — see `apps/web/src/lib/r2.ts`);
   CORS is origin gating on top, not the auth layer.
 - Re-running the command replaces the whole CORS ruleset (idempotent).
+
+## Lifecycle — expire browser-writable staging objects
+
+A finalized run never reads from `staging/runs/`, but the 15-minute PUT URL can recreate that
+object after finalize's best-effort delete. Apply a one-day prefix lifecycle so late/replayed PUTs
+cannot become permanent storage orphans:
+
+```bash
+pnpm wrangler r2 bucket lifecycle add heimdall-runs expire-staging-uploads staging/runs/ --expire-days 1
+pnpm wrangler r2 bucket lifecycle list heimdall-runs
+```
+
+Use `lifecycle add` rather than replacing the bucket's full lifecycle configuration; existing
+rules must remain intact.

@@ -82,7 +82,7 @@ describe("DTO round-trip stability (§3.2)", () => {
 
   it("round-trips the finalize and run-response DTOs", () => {
     const finalize = finalizeRunRequestSchema.parse({
-      framesObjectKey: "runs/run_valid_0001.parquet",
+      uploadObjectKey: "staging/runs/run_valid_0001.parquet",
       visibility: RUN_VISIBILITY.public,
       managementTokenHash: "a".repeat(64),
     });
@@ -92,6 +92,21 @@ describe("DTO round-trip stability (§3.2)", () => {
 
     const run = runResponseSchema.parse(fixtures.validRun);
     expect(runResponseSchema.parse(JSON.parse(JSON.stringify(run)))).toEqual(run);
+  });
+
+  it("rejects owner-only private visibility on the pre-auth ingest DTOs", () => {
+    expect(
+      createRunRequestSchema.safeParse({
+        ...validCreateRunRequest,
+        visibility: RUN_VISIBILITY.private,
+      }).success,
+    ).toBe(false);
+    expect(
+      finalizeRunRequestSchema.safeParse({
+        uploadObjectKey: "staging/runs/run_valid_0001.parquet",
+        visibility: RUN_VISIBILITY.private,
+      }).success,
+    ).toBe(false);
   });
 
   it("round-trips a generated spread of summaries (property-style)", () => {

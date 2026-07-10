@@ -14,7 +14,7 @@ import { CURRENT_SCHEMA_VERSION, INGEST_LIMITS } from "./constants";
 /* ── Primitive enums (kept in lockstep with the domain unions in types.ts) ── */
 
 export const captureSourceSchema = z.enum(["presentmon", "mangohud", "capframex"]);
-export const generatedFrameTechSchema = z.enum(["none", "dlss3", "fsr3", "xess"]);
+export const generatedFrameTechSchema = z.enum(["none", "unknown", "dlss3", "fsr3", "xess"]);
 export const gpuVendorSchema = z.enum(["nvidia", "amd", "intel", "unknown"]);
 export const confidenceLevelSchema = z.enum(["high", "medium", "low"]);
 export const diagnosticSeveritySchema = z.enum(["good", "warn", "bad", "info"]);
@@ -23,6 +23,11 @@ export const runVisibilitySchema = z.enum([
   RUN_VISIBILITY.private,
   RUN_VISIBILITY.unlisted,
   RUN_VISIBILITY.public,
+]);
+
+/** Pre-auth ingest cannot create owner-only private runs (accounts land in Phase 8). */
+export const preAuthRunVisibilitySchema = runVisibilitySchema.exclude([
+  RUN_VISIBILITY.private,
 ]);
 
 export const runStatusSchema = z.enum([
@@ -94,7 +99,7 @@ export const createRunRequestSchema = z
   .object({
     game: z.string().trim().min(1),
     captureSource: captureSourceSchema,
-    visibility: runVisibilitySchema.default(RUN_VISIBILITY.unlisted),
+    visibility: preAuthRunVisibilitySchema.default(RUN_VISIBILITY.unlisted),
     hardware: hardwareSnapshotSchema,
     summary: runSummarySchema,
     generatedFrameTech: generatedFrameTechSchema.default("none"),
@@ -121,7 +126,7 @@ export type CreateRunRequest = z.infer<typeof createRunRequestSchema>;
 export const createRunResponseSchema = z.object({
   id: z.string().min(1),
   uploadUrl: z.string().url(),
-  framesObjectKey: z.string().min(1),
+  uploadObjectKey: z.string().min(1),
 });
 export type CreateRunResponse = z.infer<typeof createRunResponseSchema>;
 
@@ -130,8 +135,8 @@ export type CreateRunResponse = z.infer<typeof createRunResponseSchema>;
  * visibility choice, and (for anonymous runs) a hashed management/delete token.
  */
 export const finalizeRunRequestSchema = z.object({
-  framesObjectKey: z.string().min(1),
-  visibility: runVisibilitySchema,
+  uploadObjectKey: z.string().min(1),
+  visibility: preAuthRunVisibilitySchema,
   managementTokenHash: z
     .string()
     .regex(/^[0-9a-f]{64}$/, "must be a lowercase sha-256 hex digest")

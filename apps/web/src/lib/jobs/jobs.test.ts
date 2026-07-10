@@ -12,6 +12,7 @@ import { computeRunSummary } from "@heimdall/parsers";
 import {
   RUN_STATUS,
   RUN_VISIBILITY,
+  GENERATED_FRAME_TECH,
   aggregateEligibilitySql,
   framesToColumnData,
   validFrames,
@@ -125,6 +126,27 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     expect(run?.status).toBe(RUN_STATUS.flagged);
     // Stored numbers are now the server's, not the client's lie.
     expect(run?.summary.avgFps).toBe(honestSummary.avgFps);
+  });
+
+  it("canonical recompute corrects ambiguous generated-frame metadata", async () => {
+    const generatedFrames = frames.map((frame, index) => ({
+      ...frame,
+      generated: index % 2 === 0,
+    }));
+    const generatedSummary = computeRunSummary(generatedFrames);
+    await setupFinalizedRun(
+      "run_wk_generated",
+      runFixture("run_wk_generated", {
+        summary: generatedSummary,
+        generatedFrameTech: GENERATED_FRAME_TECH.none,
+      }),
+    );
+
+    const result = await drainJobs({}, realDeps(async () => makeParquet(generatedFrames)));
+    expect(result).toMatchObject({ claimed: 1, validated: 1 });
+    expect((await readRun("run_wk_generated", db.pool))?.generatedFrameTech).toBe(
+      GENERATED_FRAME_TECH.unknown,
+    );
   });
 
   it("transient storage error retries; the attempts cap terminalizes (12.5)", async () => {
@@ -243,7 +265,26 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
       },
     });
     expect(cleaned).toBeGreaterThanOrEqual(1);
-    expect(deleted).toContain("runs/run_wk_stale.parquet");
+    expect(deleted).toContain("staging/runs/run_wk_stale.parquet");
     expect(await readRun("run_wk_stale", db.pool)).toBeNull();
+  });
+
+  it("keeps a stale row when staging-object deletion fails so cleanup can retry", async () => {
+    const id = "run_wk_stale_retry";
+    await insertRun(runFixture(id), db.pool);
+    await db.pool.query("update runs set created_at = now() - interval '30 hours' where id = $1", [
+      id,
+    ]);
+
+    await cleanupStalePending({
+      db: db.pool,
+      deleteObject: async (key) => {
+        if (key === `staging/runs/${id}.parquet`) {
+          throw new Error("simulated R2 outage");
+        }
+      },
+    });
+
+    expect(await readRun(id, db.pool)).not.toBeNull();
   });
 });

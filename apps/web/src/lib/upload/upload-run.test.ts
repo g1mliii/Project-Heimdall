@@ -28,6 +28,18 @@ function fixtureFile(relative: string): File {
   return new File([new Uint8Array(bytes)], path.basename(relative));
 }
 
+function generatedPresentMonFile(): File {
+  const lines = [
+    "Application,ProcessID,SwapChainAddress,FrameType,CPUStartTime,FrameTime",
+  ];
+  for (let i = 0; i < 10; i += 1) {
+    lines.push(
+      `game.exe,1234,0xAAAA,${i % 2 === 0 ? "Application" : "AMD AFMF"},${3.5 + i * 0.01},10`,
+    );
+  }
+  return new File([lines.join("\n")], "presentmon-generated.csv");
+}
+
 interface TransportLog {
   createBody?: unknown;
   finalizeBody?: unknown;
@@ -54,7 +66,11 @@ function mockTransport(
           );
         }
         return Response.json(
-          { id: "run_test01", uploadUrl: "https://r2.example.test/put", framesObjectKey: "runs/run_test01.parquet" },
+          {
+            id: "run_test01",
+            uploadUrl: "https://r2.example.test/put",
+            uploadObjectKey: "staging/runs/run_test01.parquet",
+          },
           { status: 201 },
         );
       }
@@ -116,10 +132,10 @@ describe("uploadCapture engine", () => {
     expect(log.putBytes!.byteLength).toBeGreaterThan(0);
     expect(new TextDecoder().decode(log.putBytes!.slice(0, 4))).toBe("PAR1");
 
-    // Finalize carries the run's own key + the HASH of the shown-once token.
+    // Finalize carries the run's staging key + the HASH of the shown-once token.
     const finalizeBody = finalizeRunRequestSchema.parse(log.finalizeBody);
     expect(log.finalizeUrl).toBe("/api/runs/run_test01/finalize");
-    expect(finalizeBody.framesObjectKey).toBe("runs/run_test01.parquet");
+    expect(finalizeBody.uploadObjectKey).toBe("staging/runs/run_test01.parquet");
     expect(finalizeBody.managementTokenHash).toBe(
       await hashManagementToken(result.managementToken),
     );
@@ -161,6 +177,20 @@ describe("uploadCapture engine", () => {
         expect(result.captureSource).toBe(source);
       }
     }
+  });
+
+  it("preserves generated frames when the capture cannot identify the technology", async () => {
+    const log: TransportLog = {};
+    const result = await uploadCapture(generatedPresentMonFile(), {
+      game: "Test Game",
+      visibility: "unlisted",
+      transport: mockTransport(log),
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    const createBody = createRunRequestSchema.parse(log.createBody);
+    expect(createBody.summary.generatedFramePct).toBeGreaterThan(0);
+    expect(createBody.generatedFrameTech).toBe("unknown");
   });
 
   it("malformed input fails typed, before any network call (12.1)", async () => {

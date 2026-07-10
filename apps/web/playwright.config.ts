@@ -21,7 +21,7 @@ export default defineConfig({
   webServer: {
     // The dev server consumes @heimdall/ui's built dist/styles.css, so build the
     // package before running snapshots (CI: `pnpm --filter @heimdall/ui build`).
-    command: "pnpm dev",
+    command: "pnpm --dir ../.. dev",
     url: "http://localhost:3000",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

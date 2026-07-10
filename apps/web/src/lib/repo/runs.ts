@@ -10,13 +10,18 @@ import { query, getPool, readRun, type Queryable } from "../db";
 
 /**
  * Pre-auth read gate shared by GET /api/runs/:id and GET /api/runs/:id/frames:
- * missing, private, and hidden are indistinguishable (all null → 404) so a
+ * missing, private, flagged, and hidden are indistinguishable (all null → 404) so a
  * probe can't confirm a private run exists. Ownership arrives in Phase 8 —
  * keep the gate HERE so both routes change together.
  */
 export async function readVisibleRun(id: string, db: Queryable = getPool()): Promise<Run | null> {
   const run = await readRun(id, db);
-  if (!run || run.visibility === RUN_VISIBILITY.private || run.status === RUN_STATUS.hidden) {
+  if (
+    !run ||
+    run.visibility === RUN_VISIBILITY.private ||
+    run.status === RUN_STATUS.flagged ||
+    run.status === RUN_STATUS.hidden
+  ) {
     return null;
   }
   return run;
@@ -25,7 +30,7 @@ export async function readVisibleRun(id: string, db: Queryable = getPool()): Pro
 export interface FinalizeRunParams {
   id: string;
   framesObjectKey: string;
-  visibility: string;
+  visibility: Run["visibility"];
   managementTokenHash: string | null;
   signature: string | null;
   gameId: string | null;
@@ -136,8 +141,8 @@ export async function deleteRun(id: string, db: Queryable = getPool()): Promise<
 /**
  * Stale unfinalized runs for the §11.11 TTL reaper. `frames_object_key is
  * null` scopes this to never-finalized rows — the uploaded-but-unfinalized R2
- * object is still covered because the object key is deterministic
- * (`runs/{id}.parquet`), so the reaper deletes it blind.
+ * staging object is still covered because its key is deterministic
+ * (`staging/runs/{id}.parquet`), so the reaper deletes it blind.
  */
 export async function readStalePendingRuns(
   ttlHours: number,

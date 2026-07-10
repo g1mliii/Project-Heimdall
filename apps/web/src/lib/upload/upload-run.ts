@@ -12,6 +12,7 @@ import { computeRunSummary, parseAnyCapture } from "@heimdall/parsers";
 import type { ParseWarning } from "@heimdall/parsers";
 import {
   CURRENT_SCHEMA_VERSION,
+  GENERATED_FRAME_TECH,
   INGEST_LIMITS,
   PARQUET_CONTENT_TYPE,
   UNKNOWN_HARDWARE,
@@ -167,7 +168,12 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
       visibility: options.visibility,
       hardware,
       summary,
-      generatedFrameTech: "none",
+      // Capture formats expose whether a frame was generated, but not which
+      // vendor technology produced it. Preserve that distinction explicitly.
+      generatedFrameTech:
+        summary.generatedFramePct > 0
+          ? GENERATED_FRAME_TECH.unknown
+          : GENERATED_FRAME_TECH.none,
       parquetByteLength: parquet.byteLength,
       schemaVersion: CURRENT_SCHEMA_VERSION,
       parserVersion,
@@ -190,7 +196,7 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
     emit({ stage: "finalizing" });
     const managementToken = generateManagementToken();
     const finalizeRequest: FinalizeRunRequest = {
-      framesObjectKey: created.framesObjectKey,
+      uploadObjectKey: created.uploadObjectKey,
       visibility: options.visibility,
       managementTokenHash: await hashManagementToken(managementToken),
     };

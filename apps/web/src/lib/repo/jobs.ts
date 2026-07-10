@@ -7,7 +7,7 @@
  * (enforced by the caller via `failVerificationJob(..., terminal)`).
  */
 
-import type { RunSummary } from "@heimdall/shared";
+import { GENERATED_FRAME_TECH, type RunSummary } from "@heimdall/shared";
 import { query, getPool, type Queryable } from "../db";
 
 export interface ClaimedJob {
@@ -114,7 +114,12 @@ export async function applyVerificationResult(
   await db.query(
     `with run_update as (
        update runs
-          set status = $13, signature_valid = $14
+          set status = $13, signature_valid = $14,
+              generated_frame_tech = case
+                when generated_frame_tech in ($15, $16)
+                  then case when $9 > 0 then $15 else $16 end
+                else generated_frame_tech
+              end
         where id = $1
           and status <> 'hidden'
         returning id
@@ -141,6 +146,8 @@ export async function applyVerificationResult(
       summary.durationSeconds,
       runStatus,
       signatureValid,
+      GENERATED_FRAME_TECH.unknown,
+      GENERATED_FRAME_TECH.none,
     ],
   );
 }

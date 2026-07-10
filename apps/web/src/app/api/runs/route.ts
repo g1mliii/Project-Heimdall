@@ -5,11 +5,11 @@
  */
 
 import { NextResponse } from "next/server";
-import { RUN_STATUS, createRunRequestSchema } from "@heimdall/shared";
+import { GENERATED_FRAME_TECH, RUN_STATUS, createRunRequestSchema } from "@heimdall/shared";
 import type { CreateRunResponse, Run } from "@heimdall/shared";
 import { insertRun } from "@/lib/db";
 import { newRunId } from "@/lib/ids";
-import { framesObjectKey, presignPut } from "@/lib/r2";
+import { framesUploadObjectKey, presignPut } from "@/lib/r2";
 import { jsonError, parseJsonBody, rateLimits, requireRateLimit } from "@/lib/api/http";
 
 export const runtime = "nodejs";
@@ -27,7 +27,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
 
     const id = newRunId();
-    const key = framesObjectKey(id);
+    const uploadObjectKey = framesUploadObjectKey(id);
     const run: Run = {
       id,
       game: body.game,
@@ -39,7 +39,11 @@ export async function POST(request: Request): Promise<NextResponse> {
       // bucket, so strip them regardless of what the payload carried.
       hardware: { ...body.hardware, canonicalGpuId: undefined, canonicalCpuId: undefined },
       summary: body.summary,
-      generatedFrameTech: body.generatedFrameTech,
+      generatedFrameTech:
+        body.summary.generatedFramePct > 0 &&
+        body.generatedFrameTech === GENERATED_FRAME_TECH.none
+          ? GENERATED_FRAME_TECH.unknown
+          : body.generatedFrameTech,
       schemaVersion: body.schemaVersion,
       parserVersion: body.parserVersion,
       createdAt: new Date().toISOString(),
@@ -47,8 +51,10 @@ export async function POST(request: Request): Promise<NextResponse> {
     };
     await insertRun(run);
 
-    const uploadUrl = await presignPut(key, { contentLengthBytes: body.parquetByteLength });
-    const response: CreateRunResponse = { id, uploadUrl, framesObjectKey: key };
+    const uploadUrl = await presignPut(uploadObjectKey, {
+      contentLengthBytes: body.parquetByteLength,
+    });
+    const response: CreateRunResponse = { id, uploadUrl, uploadObjectKey };
     return NextResponse.json(response, { status: 201 });
   } catch (error) {
     console.error("POST /api/runs failed", error);

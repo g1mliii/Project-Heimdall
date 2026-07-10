@@ -376,9 +376,9 @@ export function UploadClient() {
                   flexWrap: "wrap",
                 }}
               >
-                <a href={`/runs/${mode.result.runId}`} style={{ textDecoration: "none" }}>
+                <a href="/" style={{ textDecoration: "none" }}>
                   <Button variant="primary" iconRight={<ArrowRightIcon size={16} />}>
-                    View run report
+                    Back to benchmarks
                   </Button>
                 </a>
                 <Button variant="ghost" onClick={() => setMode({ kind: "idle" })}>

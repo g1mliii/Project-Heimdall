@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Route } from "@playwright/test";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -7,12 +7,24 @@ const FIXTURES = path.resolve(
   "../../../packages/parsers/fixtures",
 );
 
+function fulfillR2Cors(route: Route) {
+  return route.fulfill({
+    status: route.request().method() === "OPTIONS" ? 204 : 200,
+    headers: {
+      "access-control-allow-origin": "http://localhost:3000",
+      "access-control-allow-methods": "PUT, OPTIONS",
+      "access-control-allow-headers": "content-type",
+    },
+  });
+}
+
 test("upload page renders the ingest flow (idle state)", async ({ page }) => {
   await page.goto("/upload");
 
   await expect(page.getByRole("heading", { name: "Upload a benchmark log" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Upload benchmark logs" })).toBeVisible();
-  await expect(page.getByText("Unlisted — link only, excluded from public averages")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Unlisted" })).toBeVisible();
+  await expect(page.getByText("Link only — excluded from public averages.")).toBeVisible();
 
   // Visual baseline for design-fidelity diffs (matches ui_kits/web/extras.jsx).
   await expect(page).toHaveScreenshot("upload-idle.png", { fullPage: true });
@@ -46,11 +58,11 @@ test("single-file upload flow reaches done with mocked ingest APIs", async ({ pa
       body: JSON.stringify({
         id: "run_e2e_0001",
         uploadUrl: "https://r2.invalid/put",
-        framesObjectKey: "runs/run_e2e_0001.parquet",
+        uploadObjectKey: "staging/runs/run_e2e_0001.parquet",
       }),
     }),
   );
-  await page.route("https://r2.invalid/put", (route) => route.fulfill({ status: 200 }));
+  await page.route("https://r2.invalid/put", fulfillR2Cors);
   await page.route("**/api/runs/run_e2e_0001/finalize", (route) =>
     route.fulfill({
       status: 200,
@@ -67,7 +79,7 @@ test("single-file upload flow reaches done with mocked ingest APIs", async ({ pa
 
   await expect(page.getByText(/Uploaded — /)).toBeVisible();
   await expect(page.getByText("Save your delete token — it's shown once")).toBeVisible();
-  await expect(page.getByRole("button", { name: "View run report" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Back to benchmarks" })).toHaveAttribute("href", "/");
   await expect(page).toHaveScreenshot("upload-done.png", { fullPage: true });
 });
 
@@ -83,11 +95,11 @@ test("batch upload: per-file status, one bad file never blocks the rest (§11.8)
       body: JSON.stringify({
         id: `run_e2e_b${created}`,
         uploadUrl: `https://r2.invalid/put/${created}`,
-        framesObjectKey: `runs/run_e2e_b${created}.parquet`,
+        uploadObjectKey: `staging/runs/run_e2e_b${created}.parquet`,
       }),
     });
   });
-  await page.route("https://r2.invalid/put/**", (route) => route.fulfill({ status: 200 }));
+  await page.route("https://r2.invalid/put/**", fulfillR2Cors);
   await page.route("**/api/runs/*/finalize", (route) =>
     route.fulfill({
       status: 200,

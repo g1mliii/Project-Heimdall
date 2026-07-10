@@ -19,12 +19,24 @@ import { isRunId } from "@/lib/ids";
 import { finalizeRun, readRunFinalizeState } from "@/lib/repo/runs";
 import { resolveGameId, resolveHardwareId } from "@/lib/repo/catalog";
 import { drainJobs } from "@/lib/jobs/drain";
-import { deleteObject, framesObjectKey, headObject } from "@/lib/r2";
+import {
+  copyObject,
+  deleteObject,
+  finalizedFramesObjectKey,
+  framesUploadObjectKey,
+  headObject,
+} from "@/lib/r2";
 import { jsonError, parseJsonBody, rateLimits, requireRateLimit } from "@/lib/api/http";
 
 export const runtime = "nodejs";
 
 type Context = { params: Promise<{ id: string }> };
+
+async function cleanupFinalizedCopy(id: string, key: string, context: string): Promise<void> {
+  await deleteObject(key).catch((error) => {
+    console.error(`finalize ${id}: ${context} cleanup failed`, error);
+  });
+}
 
 export async function POST(request: Request, context: Context): Promise<NextResponse> {
   try {
@@ -44,25 +56,28 @@ export async function POST(request: Request, context: Context): Promise<NextResp
 
     // The object key is derived from the id — a client naming any other key
     // could hijack someone else's upload slot.
-    const expectedKey = framesObjectKey(id);
-    if (body.framesObjectKey !== expectedKey) {
-      return jsonError(403, "key-mismatch", "framesObjectKey does not belong to this run");
+    const expectedUploadKey = framesUploadObjectKey(id);
+    if (body.uploadObjectKey !== expectedUploadKey) {
+      return jsonError(403, "key-mismatch", "uploadObjectKey does not belong to this run");
     }
 
     const run = await readRun(id);
     if (!run) {
       return jsonError(404, "not-found", "run not found");
     }
+    if (run.status !== RUN_STATUS.pending || run.framesObjectKey) {
+      return jsonError(409, "already-finalized", "run was already finalized");
+    }
 
     // §11.10: the object must exist and fit before we commit to it. The
     // presigner can't sign Content-Type, so size + recompute-from-storage are
     // the real guards.
-    const head = await headObject(expectedKey);
+    const head = await headObject(expectedUploadKey);
     if (!head) {
       return jsonError(409, "object-missing", "upload the parquet before finalizing");
     }
     if (head.sizeBytes > INGEST_LIMITS.maxParquetBytes) {
-      await deleteObject(expectedKey);
+      await deleteObject(expectedUploadKey);
       return jsonError(413, "object-too-large", "uploaded parquet exceeds the size limit");
     }
 
@@ -89,11 +104,26 @@ export async function POST(request: Request, context: Context): Promise<NextResp
         : resolveHardwareId("cpu", run.captureSource, run.hardware.cpu, null),
     ]);
 
+    // The browser only ever receives a PUT for the staging key. Promote the
+    // exact version HEAD validated into a unique server-only key; a later PUT
+    // to staging therefore cannot change verified or downloadable frames.
+    const finalizedObjectKey = finalizedFramesObjectKey(id);
+    const copied = await copyObject(expectedUploadKey, finalizedObjectKey, {
+      sourceEtag: head.etag,
+    });
+    if (!copied) {
+      return jsonError(
+        409,
+        "upload-changed",
+        "uploaded parquet changed during finalize — retry finalize",
+      );
+    }
+
     let finalized: boolean;
     try {
       finalized = await finalizeRun({
         id,
-        framesObjectKey: expectedKey,
+        framesObjectKey: finalizedObjectKey,
         visibility: body.visibility,
         managementTokenHash: body.managementTokenHash ?? null,
         signature: body.signature ?? null,
@@ -106,21 +136,31 @@ export async function POST(request: Request, context: Context): Promise<NextResp
       // delete token is an expected conflict, not an internal error. The
       // update rolled back, so retrying with a FRESH token succeeds.
       if (isUniqueViolation(error, "runs_anonymous_management_token_hash_idx")) {
+        await cleanupFinalizedCopy(id, finalizedObjectKey, "copied-object");
         return jsonError(
           409,
           "management-token-in-use",
           "management token already protects another run — generate a fresh token and retry",
         );
       }
+      await cleanupFinalizedCopy(id, finalizedObjectKey, "copied-object");
       throw error;
     }
     if (!finalized) {
+      await cleanupFinalizedCopy(id, finalizedObjectKey, "losing-copy");
       const state = await readRunFinalizeState(id);
       if (!state) {
         return jsonError(404, "not-found", "run not found");
       }
       return jsonError(409, "already-finalized", "run was already finalized");
     }
+
+    // Best effort only: a still-valid PUT may recreate staging after this
+    // delete, but it can no longer affect the finalized object. The stale
+    // staging prefix is independently safe to reap.
+    await deleteObject(expectedUploadKey).catch((error) => {
+      console.error(`finalize ${id}: staging cleanup failed`, error);
+    });
 
     // Best-effort immediate drain — the enqueued row is the durable truth; if
     // this process dies right here, cron picks the job up (§11.5).

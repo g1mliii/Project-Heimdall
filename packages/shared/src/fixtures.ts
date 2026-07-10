@@ -73,7 +73,7 @@ export const validRun: Run = {
   schemaVersion: CURRENT_SCHEMA_VERSION,
   parserVersion: PARSER_VERSION,
   createdAt: "2026-06-01T12:00:00.000Z",
-  framesObjectKey: "runs/run_valid_0001.parquet",
+  framesObjectKey: `runs/run_valid_0001/${"a".repeat(32)}.parquet`,
   signatureValid: true,
 };
 

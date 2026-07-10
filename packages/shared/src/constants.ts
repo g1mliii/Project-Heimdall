@@ -19,6 +19,7 @@ export const DEFAULT_CAPTURE_SECONDS = 60;
  */
 export const GENERATED_FRAME_TECH = {
   none: "none",
+  unknown: "unknown",
   dlss3: "dlss3",
   fsr3: "fsr3",
   xess: "xess",

@@ -17,7 +17,7 @@ export type { RunVisibility, RunStatus } from "./visibility";
 export type CaptureSource = "presentmon" | "mangohud" | "capframex";
 
 /** Frame-generation technology a run used, if any (§2.3). */
-export type GeneratedFrameTech = "none" | "dlss3" | "fsr3" | "xess";
+export type GeneratedFrameTech = "none" | "unknown" | "dlss3" | "fsr3" | "xess";
 
 /** GPU silicon vendor, inferred from the captured hardware string. */
 export type GpuVendor = "nvidia" | "amd" | "intel" | "unknown";

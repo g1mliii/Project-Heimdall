@@ -6,7 +6,7 @@
  */
 
 import { INGEST_LIMITS } from "@heimdall/shared";
-import { MAX_OBJECT_READ_BYTES, deleteObject, framesObjectKey, getObject } from "../r2";
+import { MAX_OBJECT_READ_BYTES, deleteObject, framesUploadObjectKey, getObject } from "../r2";
 import { getIngestEnv } from "../env";
 import { getPool, type Queryable } from "../db";
 import {
@@ -112,11 +112,12 @@ export async function cleanupStalePending(
   let cleaned = 0;
   for (const id of staleIds) {
     try {
-      await deps.deleteObject(framesObjectKey(id));
+      await deps.deleteObject(framesUploadObjectKey(id));
     } catch (error) {
-      // Object deletion is best-effort here; the row delete is what stops
-      // the run from ever finalizing, and a later pass can retry the object.
+      // Keep the row: it is the durable pointer that lets a later pass retry
+      // the staging-object deletion instead of orphaning storage forever.
       console.error(`stale-pending cleanup: object delete failed for ${id}`, error);
+      continue;
     }
     if (await deleteRun(id, db)) {
       cleaned += 1;

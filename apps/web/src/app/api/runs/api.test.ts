@@ -8,6 +8,7 @@
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  GENERATED_FRAME_TECH,
   INGEST_LIMITS,
   RUN_STATUS,
   RUN_VISIBILITY,
@@ -19,10 +20,12 @@ import {
 import { createTestDb, testDbAvailable, type TestDb } from "@/lib/testing/test-db";
 
 vi.mock("@/lib/r2", () => ({
-  framesObjectKey: (runId: string) => `runs/${runId}.parquet`,
+  framesUploadObjectKey: (runId: string) => `staging/runs/${runId}.parquet`,
+  finalizedFramesObjectKey: (runId: string) => `runs/${runId}/finalized.parquet`,
   presignPut: vi.fn(async () => "https://r2.example.test/put"),
   presignGet: vi.fn(async () => "https://r2.example.test/get"),
-  headObject: vi.fn(async () => ({ sizeBytes: 1024 })),
+  headObject: vi.fn(async () => ({ sizeBytes: 1024, etag: '"staging-etag"' })),
+  copyObject: vi.fn(async () => true),
   deleteObject: vi.fn(async () => {}),
   getObject: vi.fn(async () => new Uint8Array()),
   GET_TTL_SECONDS: 3600,
@@ -57,12 +60,12 @@ function ctx(id: string) {
   return { params: Promise.resolve({ id }) };
 }
 
-async function createValidRun(): Promise<{ id: string; framesObjectKey: string }> {
+async function createValidRun(): Promise<{ id: string; uploadObjectKey: string }> {
   const response = await createRun(
     jsonRequest("http://test/api/runs", "POST", validCreateRunRequest),
   );
   expect(response.status).toBe(201);
-  const body = (await response.json()) as { id: string; framesObjectKey: string };
+  const body = (await response.json()) as { id: string; uploadObjectKey: string };
   return body;
 }
 
@@ -72,7 +75,7 @@ async function finalize(
 ): Promise<Response> {
   return finalizeRun(
     jsonRequest(`http://test/api/runs/${id}/finalize`, "POST", {
-      framesObjectKey: `runs/${id}.parquet`,
+      uploadObjectKey: `staging/runs/${id}.parquet`,
       visibility: RUN_VISIBILITY.unlisted,
       ...overrides,
     }),
@@ -104,9 +107,9 @@ describe.skipIf(!canRun)("ingest API routes (§11)", () => {
   });
 
   it("POST /api/runs: creates a pending row and returns a presigned PUT (12.2)", async () => {
-    const { id, framesObjectKey } = await createValidRun();
-    expect(framesObjectKey).toBe(`runs/${id}.parquet`);
-    expect(r2.presignPut).toHaveBeenCalledWith(framesObjectKey, {
+    const { id, uploadObjectKey } = await createValidRun();
+    expect(uploadObjectKey).toBe(`staging/runs/${id}.parquet`);
+    expect(r2.presignPut).toHaveBeenCalledWith(uploadObjectKey, {
       contentLengthBytes: validCreateRunRequest.parquetByteLength,
     });
 
@@ -139,6 +142,20 @@ describe.skipIf(!canRun)("ingest API routes (§11)", () => {
       [id],
     );
     expect(rows.rows[0]).toEqual({ gpu_hardware_id: null, cpu_hardware_id: null });
+  });
+
+  it("POST /api/runs: never persists generated frames as native metadata", async () => {
+    const response = await createRun(
+      jsonRequest("http://test/api/runs", "POST", {
+        ...validCreateRunRequest,
+        summary: { ...validCreateRunRequest.summary, generatedFramePct: 0.5 },
+        generatedFrameTech: GENERATED_FRAME_TECH.none,
+      }),
+    );
+    expect(response.status).toBe(201);
+    const { id } = (await response.json()) as { id: string };
+    const rows = await db.pool.query("select generated_frame_tech from runs where id = $1", [id]);
+    expect(rows.rows[0]?.generated_frame_tech).toBe(GENERATED_FRAME_TECH.unknown);
   });
 
   it("POST /api/runs: rejects malformed payloads with 400 BEFORE presigning (12.1, §11.10)", async () => {
@@ -174,7 +191,12 @@ describe.skipIf(!canRun)("ingest API routes (§11)", () => {
          from runs where id = $1`,
       [id],
     );
-    expect(run.rows[0]?.frames_object_key).toBe(`runs/${id}.parquet`);
+    expect(r2.copyObject).toHaveBeenCalledWith(
+      `staging/runs/${id}.parquet`,
+      `runs/${id}/finalized.parquet`,
+      { sourceEtag: '"staging-etag"' },
+    );
+    expect(run.rows[0]?.frames_object_key).toBe(`runs/${id}/finalized.parquet`);
     expect(run.rows[0]?.anonymous_management_token_hash).toBe(tokenHash);
     // §11.9: canonical ids resolved server-side (match-or-create really ran).
     expect(run.rows[0]?.game_id).not.toBeNull();
@@ -196,7 +218,7 @@ describe.skipIf(!canRun)("ingest API routes (§11)", () => {
 
   it("finalize: 403 on a foreign object key, 404 on unknown run", async () => {
     const { id } = await createValidRun();
-    const hijack = await finalize(id, { framesObjectKey: "runs/other.parquet" });
+    const hijack = await finalize(id, { uploadObjectKey: "staging/runs/other.parquet" });
     expect(hijack.status).toBe(403);
 
     const missing = await finalize("does_not_exist");
@@ -210,11 +232,25 @@ describe.skipIf(!canRun)("ingest API routes (§11)", () => {
 
     vi.mocked(r2.headObject).mockResolvedValueOnce({
       sizeBytes: INGEST_LIMITS.maxParquetBytes + 1,
+      etag: '"oversized"',
     });
     vi.mocked(r2.deleteObject).mockClear();
     const oversized = await finalize(id);
     expect(oversized.status).toBe(413);
-    expect(r2.deleteObject).toHaveBeenCalledWith(`runs/${id}.parquet`);
+    expect(r2.deleteObject).toHaveBeenCalledWith(`staging/runs/${id}.parquet`);
+  });
+
+  it("finalize: rejects a staging overwrite between HEAD and the immutable copy", async () => {
+    const { id } = await createValidRun();
+    vi.mocked(r2.copyObject).mockResolvedValueOnce(false);
+
+    const response = await finalize(id);
+    expect(response.status).toBe(409);
+    expect((await response.json()).error.code).toBe("upload-changed");
+    const run = await db.pool.query("select frames_object_key from runs where id = $1", [id]);
+    expect(run.rows[0]?.frames_object_key).toBeNull();
+    const jobs = await db.pool.query("select 1 from verification_jobs where run_id = $1", [id]);
+    expect(jobs.rows).toHaveLength(0);
   });
 
   it("GET run + frames: unlisted is link-scoped; pending-upload frames 409", async () => {
@@ -240,9 +276,14 @@ describe.skipIf(!canRun)("ingest API routes (§11)", () => {
     expect((await getRun(new Request("http://test"), ctx("nope"))).status).toBe(404);
   });
 
-  it("GET run: private and hidden runs 404 pre-auth (§11 note)", async () => {
+  it("GET run: private, flagged, and hidden runs 404 pre-auth (§11 note)", async () => {
     const { id } = await createValidRun();
     await db.pool.query("update runs set visibility = 'private' where id = $1", [id]);
+    expect((await getRun(new Request("http://test"), ctx(id))).status).toBe(404);
+    await db.pool.query(
+      "update runs set visibility = 'unlisted', status = 'flagged' where id = $1",
+      [id],
+    );
     expect((await getRun(new Request("http://test"), ctx(id))).status).toBe(404);
     await db.pool.query(
       "update runs set visibility = 'unlisted', status = 'hidden' where id = $1",
@@ -280,7 +321,7 @@ describe.skipIf(!canRun)("ingest API routes (§11)", () => {
       ctx(id),
     );
     expect(success.status).toBe(204);
-    expect(r2.deleteObject).toHaveBeenCalledWith(`runs/${id}.parquet`);
+    expect(r2.deleteObject).toHaveBeenCalledWith(`runs/${id}/finalized.parquet`);
     expect((await db.pool.query("select 1 from runs where id = $1", [id])).rows).toHaveLength(0);
 
     // Idempotent from the caller's view: the run is simply gone now.
