@@ -1,3 +1,18 @@
 packages:
   - "apps/*"
   - "packages/*"
+allowBuilds:
+  # cpu-features / protobufjs / ssh2 are transitive optional native addons under
+  # @testcontainers (ssh2 port-forwarding perf path). Not needed for the migration
+  # test harness — explicitly denied so installs stay script-free and deterministic.
+  cpu-features: false
+  esbuild: true
+  protobufjs: false
+  sharp: true
+  ssh2: false
+
+# Force-patch a transitive advisory so `pnpm audit:deps` stays green.
+# next 16.2.6 pulls postcss <8.5.10 (GHSA-qx2v-qp2m-jg93, XSS in stringify);
+# 8.5.15 is the patched, 30-day-soaked pin.
+overrides:
+  postcss: 8.5.15

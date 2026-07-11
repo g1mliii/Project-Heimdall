@@ -1,0 +1,45 @@
+{
+  "name": "@heimdall/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "pnpm --dir ../.. --filter @heimdall/ui build && next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "test:e2e": "playwright test",
+    "test:e2e:functional": "playwright test --grep-invert \"@visual\"",
+    "jobs:drain": "tsx scripts/drain-jobs.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "3.1058.0",
+    "@aws-sdk/s3-request-presigner": "3.1058.0",
+    "@heimdall/parsers": "workspace:*",
+    "@heimdall/shared": "workspace:*",
+    "@heimdall/ui": "workspace:*",
+    "hyparquet": "1.26.0",
+    "hyparquet-writer": "0.15.6",
+    "next": "16.2.6",
+    "pg": "8.21.0",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.60.0",
+    "@testcontainers/postgresql": "12.0.1",
+    "@types/node": "24.12.4",
+    "@types/pg": "8.20.0",
+    "@types/react": "19.2.15",
+    "@types/react-dom": "19.2.3",
+    "eslint": "10.4.0",
+    "tsx": "4.22.4",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.59.4",
+    "vitest": "4.1.7"
+  }
+}

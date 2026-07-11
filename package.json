@@ -10,13 +10,17 @@
     "pnpm": ">=11.2.2 <12"
   },
   "scripts": {
-    "dev": "pnpm --filter @heimdall/web dev",
-    "build": "pnpm -r build",
+    "dev": "pnpm --filter @heimdall/ui build && pnpm --filter @heimdall/web dev",
+    "build": "pnpm --filter @heimdall/web build",
+    "migrate": "node infra/db/migrate.mjs",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "verify": "pnpm lint && pnpm typecheck && pnpm test",
     "audit:deps": "pnpm audit --audit-level moderate",
     "check:deps": "node scripts/check-dependency-policy.mjs"
+  },
+  "devDependencies": {
+    "pg": "8.21.0"
   }
 }

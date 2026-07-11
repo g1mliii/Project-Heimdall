@@ -9,9 +9,14 @@
 
 :root {
   /* ── Families ────────────────────────────────────────────────── */
-  --font-display: 'Space Grotesk', 'Hanken Grotesk', system-ui, sans-serif;
-  --font-sans: 'Hanken Grotesk', system-ui, -apple-system, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  /* Prefer the self-hosted next/font faces (exposed by the web app as
+     --font-*), falling back to the named family then the system stack.
+     The named family MUST live inside the var() fallback slot: an
+     unresolvable var() with no fallback makes the whole declaration
+     invalid at computed-value time, discarding the literal list too. */
+  --font-display: var(--font-space-grotesk, 'Space Grotesk'), 'Hanken Grotesk', system-ui, sans-serif;
+  --font-sans: var(--font-hanken-grotesk, 'Hanken Grotesk'), system-ui, -apple-system, sans-serif;
+  --font-mono: var(--font-jetbrains-mono, 'JetBrains Mono'), ui-monospace, 'SF Mono', Menlo, monospace;
 
   /* ── Type scale (1.25 major-third-ish, tuned) ────────────────── */
   --text-2xs: 0.6875rem;   /* 11px — axis ticks, dense table meta   */
