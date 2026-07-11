@@ -34,7 +34,7 @@ export async function claimNextVerificationJob(
         set status = 'running', locked_at = now(), attempts = vj.attempts + 1
       where vj.id = (
         select id from verification_jobs
-         where (status = 'pending'
+         where ((status = 'pending' and not_before <= now())
             or (status = 'running' and locked_at < now() - make_interval(mins => $1)))
            and id <> all($2::bigint[])
          order by created_at, id
@@ -100,7 +100,15 @@ export async function failVerificationJob(
   const rows = await query<{ updated: boolean }>(
     `with job_update as (
        update verification_jobs
-          set status = $2, locked_at = null, last_error = $3
+          set status = $2,
+              locked_at = null,
+              last_error = $3,
+              not_before = case
+                when $6::boolean then now()
+                else now() + make_interval(
+                  secs => least(300, 30 * (1 << least(attempts - 1, 4)))
+                )
+              end
         where id = $1
           and status = 'running'
           and attempts = $4

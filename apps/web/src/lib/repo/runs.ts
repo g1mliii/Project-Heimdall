@@ -149,6 +149,19 @@ export async function deleteRun(id: string, db: Queryable = getPool()): Promise<
 }
 
 /**
+ * Hide a run before its immutable frames object is deleted. If storage is
+ * temporarily unavailable, the delete-token holder can retry while public
+ * readers can no longer be sent to an object that may already be gone.
+ */
+export async function hideRunForDeletion(id: string, db: Queryable = getPool()): Promise<boolean> {
+  const result = await db.query(
+    "update runs set status = $2 where id = $1 and status <> $2",
+    [id, RUN_STATUS.hidden],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
  * Reaper-only conditional delete. The stale-id read and staging-object delete
  * are intentionally not one database transaction, so finalize may win between
  * them; in that case its row and verification job must survive.

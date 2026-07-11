@@ -10,7 +10,12 @@
 import { NextResponse } from "next/server";
 import { verifyManagementToken } from "@heimdall/shared";
 import type { RunResponse } from "@heimdall/shared";
-import { deleteRun, readRunManagementTokenHash, readVisibleRun } from "@/lib/repo/runs";
+import {
+  deleteRun,
+  hideRunForDeletion,
+  readRunManagementTokenHash,
+  readVisibleRun,
+} from "@/lib/repo/runs";
 import { deleteObject } from "@/lib/r2";
 import { bearerToken, jsonError, rateLimits, requireRateLimit } from "@/lib/api/http";
 
@@ -53,8 +58,10 @@ export async function DELETE(request: Request, context: Context): Promise<NextRe
       return jsonError(404, "not-found", "run not found");
     }
 
-    // Object first: if storage deletion fails the row survives, so the caller
-    // can simply retry — the reverse order would orphan the R2 object forever.
+    // Tombstone before deleting from R2. A failed R2 delete stays retryable by
+    // the token holder, but readers can never receive a run pointing at an
+    // object that was deleted just before a later database failure.
+    await hideRunForDeletion(id);
     if (state.framesObjectKey) {
       try {
         await deleteObject(state.framesObjectKey);

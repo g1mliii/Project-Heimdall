@@ -191,6 +191,9 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     expect(byName.get("verification_jobs_status_locked_at_idx")?.definition).toContain(
       "created_at",
     );
+    expect(byName.get("verification_jobs_status_locked_at_idx")?.definition).toContain(
+      "not_before",
+    );
     const queuePredicate = byName.get("verification_jobs_status_locked_at_idx")?.predicate ?? "";
     expect(queuePredicate).toContain("'pending'");
     expect(queuePredicate).toContain("'running'");

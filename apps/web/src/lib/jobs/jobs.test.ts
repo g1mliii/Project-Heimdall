@@ -202,14 +202,21 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
 
     const first = await drainJobs({}, realDeps(flaky));
     expect(first).toMatchObject({ claimed: 1, retried: 1, failed: 0 });
-    let jobs = await db.pool.query("select status, attempts from verification_jobs");
-    expect(jobs.rows[0]).toMatchObject({ status: "pending", attempts: 1 });
+    let jobs = await db.pool.query(
+      "select status, attempts, not_before > now() as delayed from verification_jobs",
+    );
+    expect(jobs.rows[0]).toMatchObject({ status: "pending", attempts: 1, delayed: true });
     expect((await readRun("run_wk_retry", db.pool))?.status).toBe(RUN_STATUS.pending);
 
+    // The same drain cycle (or a newly triggered worker) cannot burn every
+    // remaining attempt while the backing store is still unavailable.
+    expect(await drainJobs({}, realDeps(flaky))).toMatchObject({ claimed: 0 });
+
     // Fast-forward to the last allowed attempt.
-    await db.pool.query("update verification_jobs set attempts = $1", [
-      MAX_VERIFICATION_ATTEMPTS - 1,
-    ]);
+    await db.pool.query(
+      "update verification_jobs set attempts = $1, not_before = now() - interval '1 minute'",
+      [MAX_VERIFICATION_ATTEMPTS - 1],
+    );
     const last = await drainJobs({}, realDeps(flaky));
     expect(last).toMatchObject({ claimed: 1, failed: 1 });
     jobs = await db.pool.query("select status, last_error from verification_jobs");

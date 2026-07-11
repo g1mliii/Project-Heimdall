@@ -238,12 +238,17 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       expect(await claimNextVerificationJob({}, db.pool)).toBeNull();
     });
 
-    it("non-terminal failure returns the job to pending for a retry", async () => {
+    it("non-terminal failure returns the job to pending with durable backoff", async () => {
       await finalizeFixture(db.pool, "run_job_0003");
       const first = await claimNextVerificationJob({}, db.pool);
       expect(first?.runId).toBe("run_job_0003");
       await failVerificationJob(first!.id, first!.attempts, "transient: R2 timeout", false, db.pool);
 
+      expect(await claimNextVerificationJob({}, db.pool)).toBeNull();
+      await db.pool.query(
+        "update verification_jobs set not_before = now() - interval '1 minute' where id = $1",
+        [first!.id],
+      );
       const second = await claimNextVerificationJob({}, db.pool);
       expect(second?.id).toBe(first!.id);
       expect(second?.attempts).toBe(2);

@@ -401,7 +401,7 @@ describe.skipIf(!canRun)("ingest API routes (§11)", () => {
     expect(repeat.status).toBe(404);
   });
 
-  it("DELETE: storage failure keeps the row so the delete can be retried", async () => {
+  it("DELETE: storage failure tombstones the run so the delete can be retried", async () => {
     const { id } = await createValidRun();
     const token = generateManagementToken();
     await finalize(id, { managementTokenHash: await hashManagementToken(token) });
@@ -415,7 +415,20 @@ describe.skipIf(!canRun)("ingest API routes (§11)", () => {
       ctx(id),
     );
     expect(failed.status).toBe(502);
-    expect((await db.pool.query("select 1 from runs where id = $1", [id])).rows).toHaveLength(1);
+    expect(
+      (await db.pool.query("select status from runs where id = $1", [id])).rows,
+    ).toEqual([{ status: RUN_STATUS.hidden }]);
+    expect((await getRun(new Request("http://test"), ctx(id))).status).toBe(404);
+
+    const retry = await deleteRunRoute(
+      new Request("http://test", {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${token}` },
+      }),
+      ctx(id),
+    );
+    expect(retry.status).toBe(204);
+    expect((await db.pool.query("select 1 from runs where id = $1", [id])).rows).toEqual([]);
   });
 
   it("pins the shared byte limit to the R2 read cap (worker must read what the API accepts)", () => {
