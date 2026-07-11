@@ -8,6 +8,7 @@
 import { cache } from "react";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
+import { RUN_VISIBILITY } from "@heimdall/shared";
 import { readVisibleRun } from "@/lib/repo/runs";
 import { RunPageClient } from "@/components/run/RunPageClient";
 
@@ -28,6 +29,9 @@ export async function generateMetadata({ params }: RunPageProps): Promise<Metada
     description: run
       ? `${run.summary.avgFps.toFixed(1)} avg FPS · ${run.summary.onePercentLowFps.toFixed(1)} 1% low on ${run.hardware.gpu}`
       : undefined,
+    ...(run?.visibility === RUN_VISIBILITY.unlisted
+      ? { robots: { index: false, follow: false } }
+      : {}),
   };
 }
 

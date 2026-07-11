@@ -16,6 +16,7 @@ import {
   runResponseSchema,
 } from "@heimdall/shared";
 import type { FrameSample, FramesUrlResponse, RunResponse } from "@heimdall/shared";
+import { FRAME_PARQUET_COLUMN_NAMES, validateFrameParquetMetadata } from "../parquet/frame-metadata";
 
 export type ApiResult<T> =
   | { ok: true; data: T }
@@ -118,8 +119,18 @@ export async function fetchFrames(
     if (buffer.byteLength > INGEST_LIMITS.maxParquetBytes) {
       return failure("parquet-too-large", `frames object is ${buffer.byteLength} bytes`);
     }
-    const { parquetReadObjects } = await import("hyparquet");
-    const rows = await parquetReadObjects({ file: buffer });
+    const { parquetMetadata, parquetReadObjects } = await import("hyparquet");
+    const metadata = parquetMetadata(buffer);
+    const frameCount = validateFrameParquetMetadata(metadata);
+    const rows = await parquetReadObjects({
+      file: buffer,
+      metadata,
+      columns: FRAME_PARQUET_COLUMN_NAMES,
+      rowEnd: frameCount,
+    });
+    if (rows.length !== frameCount) {
+      return failure("invalid-response", `decoded ${rows.length} frames but metadata declared ${frameCount}`);
+    }
     return { ok: true, data: rowsToFrameSamples(rows) };
   } catch (error) {
     return failure("invalid-response", error instanceof Error ? error.message : String(error));

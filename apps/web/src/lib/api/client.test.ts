@@ -5,8 +5,19 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("hyparquet", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("hyparquet")>();
+  return {
+    ...actual,
+    parquetMetadata: vi.fn(actual.parquetMetadata),
+    parquetReadObjects: vi.fn(actual.parquetReadObjects),
+  };
+});
+
+import { parquetMetadata, parquetReadObjects } from "hyparquet";
 import { parquetWriteBuffer } from "hyparquet-writer";
-import { framesToColumnData, makeSyntheticFrames, validRun } from "@heimdall/shared";
+import { framesToColumnData, INGEST_LIMITS, makeSyntheticFrames, validRun } from "@heimdall/shared";
 import { fetchFrames, getFramesUrl, getRun, loadRunFrames, type ApiTransport } from "./client";
 
 function transportReturning(handler: (url: string) => Response | Promise<Response>): ApiTransport {
@@ -108,6 +119,24 @@ describe("fetchFrames", () => {
     const transport = transportReturning(() => new Response(new Uint8Array([1, 2, 3, 4])));
     const result = await fetchFrames("https://r2.example.test/get", transport);
     expect(result).toMatchObject({ ok: false, code: "invalid-response" });
+  });
+
+  it("rejects metadata with too many frames before decoding rows", async () => {
+    const metadata = vi.mocked(parquetMetadata).mockReturnValue({
+      num_rows: BigInt(INGEST_LIMITS.maxFramesPerRun + 1),
+      row_groups: [],
+    } as never);
+    const readObjects = vi.mocked(parquetReadObjects);
+    readObjects.mockClear();
+
+    const result = await fetchFrames(
+      "https://r2.example.test/get",
+      transportReturning(() => new Response(parquetBytes())),
+    );
+
+    expect(result).toMatchObject({ ok: false, code: "invalid-response" });
+    expect(readObjects).not.toHaveBeenCalled();
+    metadata.mockRestore();
   });
 });
 

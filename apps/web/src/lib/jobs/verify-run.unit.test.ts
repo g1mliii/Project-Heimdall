@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FRAME_PARQUET_COLUMNS, INGEST_LIMITS } from "@heimdall/shared";
-import { validateFrameParquetMetadata } from "./verify-run";
+import { validateFrameParquetMetadata } from "../parquet/frame-metadata";
 
 function metadata(
   rowCount: bigint,
