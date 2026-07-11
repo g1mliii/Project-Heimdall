@@ -15,6 +15,7 @@ import { loadRunFrames, type ApiResult } from "@/lib/api/client";
 import { buildFrameSeries, type FrameSeries } from "@/lib/run/frame-series";
 import { findStutterIndices } from "@/lib/run/stutters";
 import { CHART_UNITS, type ChartUnit } from "@/lib/run/units";
+import { FrameTimeChart } from "./chart/FrameTimeChart";
 import { RunHeader } from "./RunHeader";
 import { RunStatTiles } from "./RunStatTiles";
 import { SmoothnessBars } from "./SmoothnessBars";
@@ -121,7 +122,7 @@ export function RunPageClient({
                 style={{
                   minHeight: CHART_WELL_MIN_HEIGHT,
                   display: "grid",
-                  placeItems: "center",
+                  placeItems: frames.kind === "ready" ? "stretch" : "center",
                   padding: "var(--space-3)",
                 }}
               >
@@ -158,12 +159,12 @@ export function RunPageClient({
                   </div>
                 )}
                 {frames.kind === "ready" && (
-                  <p
-                    data-chart-placeholder
-                    style={{ font: "var(--type-caption)", color: "var(--fg-3)" }}
-                  >
-                    {frames.series.count.toLocaleString()} frames loaded
-                  </p>
+                  <FrameTimeChart
+                    series={frames.series}
+                    stutterIndices={frames.stutterIndices}
+                    unit={unit}
+                    avgFps={run.summary.avgFps}
+                  />
                 )}
               </div>
             </Card>

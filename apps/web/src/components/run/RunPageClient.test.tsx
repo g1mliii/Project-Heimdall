@@ -41,7 +41,9 @@ describe("RunPageClient states", () => {
 
   it("renders the populated state: frames, GPU meter, peak VRAM", async () => {
     render(<RunPageClient run={run} loadFrames={okLoader} />);
-    expect(await screen.findByText("1,000 frames loaded")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("img", { name: "Frame-time progression chart" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Avg GPU load")).toBeInTheDocument();
     expect(screen.getByText("Peak VRAM")).toBeInTheDocument();
     // Summary metrics render regardless of frame state (tile + tier bar).
@@ -68,7 +70,9 @@ describe("RunPageClient states", () => {
     expect(screen.getByText("offline")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(await screen.findByText("1,000 frames loaded")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("img", { name: "Frame-time progression chart" }),
+    ).toBeInTheDocument();
     expect(calls).toBe(2);
   });
 
