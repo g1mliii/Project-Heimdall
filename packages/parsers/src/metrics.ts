@@ -32,6 +32,16 @@ function slowestMeanMs(sortedAsc: readonly number[], count: number): number {
   return sum / count;
 }
 
+/**
+ * The frame-time threshold above which a frame counts as a stutter, given the
+ * run's median frame time (§9.1). Single source of truth for the STUTTER rule:
+ * `computeRunSummary` counts with it, and the run-page chart highlights the
+ * exact same frames with it — the two can never disagree.
+ */
+export function stutterThresholdMs(medianFrameTimeMs: number): number {
+  return Math.max(STUTTER.medianMultiplier * medianFrameTimeMs, STUTTER.minFrameTimeMs);
+}
+
 function confidence(n: number): ConfidenceLevel {
   if (n >= POINT_ONE_PERCENT_LOW_CONFIDENCE_FRAMES.high) return "high";
   if (n >= POINT_ONE_PERCENT_LOW_CONFIDENCE_FRAMES.medium) return "medium";
@@ -62,11 +72,10 @@ export function computeRunSummary(frames: readonly FrameSample[]): RunSummary {
   sorted.sort((a, b) => a - b);
 
   const medianMs = nearestRank(sorted, 50);
+  const thresholdMs = stutterThresholdMs(medianMs);
   let stutterCount = 0;
   for (const value of sorted) {
-    if (value > STUTTER.medianMultiplier * medianMs && value > STUTTER.minFrameTimeMs) {
-      stutterCount++;
-    }
+    if (value > thresholdMs) stutterCount++;
   }
 
   return {
