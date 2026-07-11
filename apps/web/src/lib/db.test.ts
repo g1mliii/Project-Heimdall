@@ -95,6 +95,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0007_rate_limits.sql",
       "0008_generated_frame_unknown.sql",
       "0009_staging_cleanup_jobs.sql",
+      "0010_verification_job_backoff.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
