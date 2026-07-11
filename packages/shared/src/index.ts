@@ -10,6 +10,7 @@ export * from "./types";
 export * from "./schemas";
 export * from "./constants";
 export * from "./fixtures";
+export * from "./fixtures-frames";
 export * from "./tokens";
 export * from "./parquet";
 export * from "./naming";
