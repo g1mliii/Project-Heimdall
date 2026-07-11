@@ -168,7 +168,7 @@ test("frames failure shows the error state and Retry recovers (§13.5)", async (
 test("missing/hidden runs 404 with the generic not-found page (§13.5)", async ({ page }) => {
   await page.goto("/runs/run_does_not_exist");
   await expect(page.getByRole("heading", { name: "Run not found" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Upload a benchmark log" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Upload a benchmark log" })).toBeVisible();
 });
 
 test("@visual run page matches the design reference layout", async ({ page }) => {
