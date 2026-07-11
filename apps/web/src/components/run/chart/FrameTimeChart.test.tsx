@@ -14,7 +14,7 @@ import "@testing-library/jest-dom/vitest";
 import { makeSyntheticFrames } from "@heimdall/shared";
 import { buildFrameSeries } from "@/lib/run/frame-series";
 import { findStutterIndices } from "@/lib/run/stutters";
-import { FrameTimeChart } from "./FrameTimeChart";
+import { bucketStutterIndices, FrameTimeChart } from "./FrameTimeChart";
 
 afterEach(cleanup);
 
@@ -46,5 +46,21 @@ describe("FrameTimeChart (jsdom smoke)", () => {
     rerender(
       <FrameTimeChart series={empty} stutterIndices={new Uint32Array(0)} unit="ms" avgFps={60} />,
     );
+  });
+});
+
+describe("bucketStutterIndices", () => {
+  it("draws no more than one marker per horizontal bucket", () => {
+    const markers = bucketStutterIndices(
+      new Uint32Array([0, 1, 2, 3]),
+      new Float64Array([0, 1, 2, 10]),
+      0,
+      4,
+      0,
+      10,
+      2,
+    );
+
+    expect([...markers]).toEqual([0, 3]);
   });
 });

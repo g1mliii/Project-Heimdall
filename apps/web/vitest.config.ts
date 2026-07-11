@@ -11,7 +11,10 @@ export default defineConfig({
   resolve: {
     // Mirror the tsconfig "@/*" path so route-handler tests import the same
     // module ids the app does (vi.mock("@/lib/r2") must hit the app's import).
-    alias: { "@": path.resolve(import.meta.dirname, "src") },
+    alias: {
+      "@": path.resolve(import.meta.dirname, "src"),
+      "@heimdall/ui": path.resolve(import.meta.dirname, "../../packages/ui/src/index.ts"),
+    },
   },
   test: {
     include: ["src/**/*.{test,spec}.{ts,tsx}"],

@@ -6,19 +6,59 @@ import { cx } from "../../utils/cx";
  *
  * @startingPoint section="Core" subtitle="Buttons in every variant & size" viewport="700x200"
  */
-export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+interface ButtonVisualProps {
   /** Visual style. @default "primary" */
   variant?: "primary" | "secondary" | "ghost" | "subtle" | "danger";
   /** Control height. @default "md" */
   size?: "sm" | "md" | "lg";
   /** Stretch to fill the container width. */
   block?: boolean;
-  /** Show a spinner and disable interaction. */
-  loading?: boolean;
   /** Leading icon node (e.g. a Lucide <i> or inline SVG). */
   iconLeft?: React.ReactNode;
   /** Trailing icon node. */
   iconRight?: React.ReactNode;
+}
+
+export interface ButtonProps extends ButtonVisualProps, React.ButtonHTMLAttributes<HTMLButtonElement> {
+  /** Show a spinner and disable interaction. */
+  loading?: boolean;
+}
+
+/** Link-shaped navigation using the same visual button primitive. */
+export type ButtonLinkProps = ButtonVisualProps &
+  Omit<React.AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & {
+    href: string;
+    as?: React.ElementType;
+  };
+
+function buttonClassName(
+  variant: NonNullable<ButtonProps["variant"]>,
+  size: NonNullable<ButtonProps["size"]>,
+  block: boolean,
+  className: string,
+) {
+  return cx(
+    "hd-btn",
+    `hd-btn--${variant}`,
+    size !== "md" && `hd-btn--${size}`,
+    block && "hd-btn--block",
+    className,
+  );
+}
+
+function ButtonContents({
+  loading = false,
+  iconLeft = null,
+  iconRight = null,
+  children,
+}: Pick<ButtonProps, "loading" | "iconLeft" | "iconRight" | "children">) {
+  return (
+    <>
+      {loading ? <span className="hd-spinner" aria-hidden="true" /> : iconLeft}
+      {children != null && <span>{children}</span>}
+      {!loading && iconRight}
+    </>
+  );
 }
 
 /**
@@ -37,19 +77,32 @@ export function Button({
   children,
   ...rest
 }: ButtonProps) {
-  const cls = cx(
-    "hd-btn",
-    `hd-btn--${variant}`,
-    size !== "md" && `hd-btn--${size}`,
-    block && "hd-btn--block",
-    className,
-  );
+  const cls = buttonClassName(variant, size, block, className);
 
   return (
     <button type={type} className={cls} disabled={disabled || loading} {...rest}>
-      {loading ? <span className="hd-spinner" aria-hidden="true" /> : iconLeft}
-      {children != null && <span>{children}</span>}
-      {!loading && iconRight}
+      <ButtonContents loading={loading} iconLeft={iconLeft} iconRight={iconRight}>
+        {children}
+      </ButtonContents>
     </button>
+  );
+}
+
+export function ButtonLink({
+  variant = "primary",
+  size = "md",
+  block = false,
+  iconLeft = null,
+  iconRight = null,
+  className = "",
+  style,
+  children,
+  as: Component = "a",
+  ...rest
+}: ButtonLinkProps) {
+  return (
+    <Component className={buttonClassName(variant, size, block, className)} style={{ textDecoration: "none", ...style }} {...rest}>
+      <ButtonContents iconLeft={iconLeft} iconRight={iconRight}>{children}</ButtonContents>
+    </Component>
   );
 }

@@ -8,7 +8,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Button, Tabs } from "@heimdall/ui";
+import { ButtonLink, Tabs } from "@heimdall/ui";
 
 function UploadIcon({ size = 16 }: { size?: number }) {
   return (
@@ -85,11 +85,9 @@ export function TopBar() {
         aria-label="Primary navigation"
       />
       <div style={{ flex: 1 }} />
-      <Link href="/upload" style={{ textDecoration: "none" }}>
-        <Button variant="primary" iconLeft={<UploadIcon />}>
-          Upload log
-        </Button>
-      </Link>
+      <ButtonLink as={Link} href="/upload" variant="primary" iconLeft={<UploadIcon />}>
+        Upload log
+      </ButtonLink>
     </header>
   );
 }

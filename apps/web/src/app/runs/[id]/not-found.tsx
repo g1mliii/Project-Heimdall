@@ -4,7 +4,7 @@
  */
 
 import Link from "next/link";
-import { Button, Card } from "@heimdall/ui";
+import { ButtonLink, Card } from "@heimdall/ui";
 
 export default function RunNotFound() {
   return (
@@ -29,9 +29,7 @@ export default function RunNotFound() {
             Check the URL you were given.
           </p>
           <div style={{ marginTop: "var(--space-5)" }}>
-            <Link href="/upload" style={{ textDecoration: "none" }}>
-              <Button variant="primary">Upload a benchmark log</Button>
-            </Link>
+            <ButtonLink as={Link} href="/upload" variant="primary">Upload a benchmark log</ButtonLink>
           </div>
         </Card.Body>
       </Card>

@@ -22,6 +22,7 @@
  */
 
 import * as React from "react";
+import { bisectLeft } from "d3-array";
 import { scaleLinear } from "d3-scale";
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type ZoomTransform } from "d3-zoom";
@@ -36,6 +37,41 @@ const DOT_RADIUS = 3;
 /** Zooming stops once ~this many frames fill the plot (raw, exact view). */
 const MIN_VISIBLE_FRAMES = 50;
 const HEADROOM = 1.05;
+
+/**
+ * Sample visible stutters into horizontal screen buckets. This bounds marker
+ * selection and drawing to chart width even for hostile captures.
+ */
+export function bucketStutterIndices(
+  stutterIndices: Uint32Array,
+  times: Float64Array,
+  start: number,
+  end: number,
+  domainStart: number,
+  domainEnd: number,
+  bucketCount: number,
+): Int32Array {
+  const markers = new Int32Array(Math.max(1, bucketCount)).fill(-1);
+  const span = domainEnd - domainStart;
+  if (span <= 0) return markers;
+
+  const first = bisectLeft(stutterIndices, start);
+  const last = bisectLeft(stutterIndices, end);
+  const sampleCount = Math.min(markers.length, last - first);
+  for (let sample = 0; sample < sampleCount; sample++) {
+    const cursor =
+      sampleCount === 1
+        ? first
+        : first + Math.floor((sample * (last - first - 1)) / (sampleCount - 1));
+    const index = stutterIndices[cursor]!;
+    const bucket = Math.min(
+      markers.length - 1,
+      Math.max(0, Math.floor(((times[index]! - domainStart) / span) * markers.length)),
+    );
+    if (markers[bucket]! < 0) markers[bucket] = index;
+  }
+  return markers;
+}
 
 interface ChartColors {
   trace: string;
@@ -192,18 +228,28 @@ export function FrameTimeChart({
     }
     context.stroke();
 
-    // Stutter markers from the precomputed indices — never resampled away.
-    for (const index of stutterIndices) {
+    // Keep representative stutters to one per horizontal pixel. The trace
+    // retains the actual spikes without letting dense markers monopolize paint.
+    const markers = bucketStutterIndices(
+      stutterIndices,
+      series.times,
+      range.start,
+      range.end,
+      domain[0]!,
+      domain[1]!,
+      buckets,
+    );
+    context.fillStyle = colors.stutter;
+    context.strokeStyle = colors.halo;
+    context.lineWidth = 2;
+    for (const index of markers) {
+      if (index < 0) continue;
       const t = series.times[index]!;
-      if (t < domain[0]! || t > domain[1]!) continue;
       const px = xScale(t);
       const py = yScale(toDisplay(series.frameTimes[index]!, unit));
       context.beginPath();
       context.arc(px, py, DOT_RADIUS, 0, Math.PI * 2);
-      context.fillStyle = colors.stutter;
       context.fill();
-      context.strokeStyle = colors.halo;
-      context.lineWidth = 2;
       context.stroke();
     }
 
