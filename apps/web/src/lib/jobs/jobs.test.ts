@@ -151,9 +151,13 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     expect((await readRun(id, db.pool))?.status).toBe(RUN_STATUS.flagged);
 
     // Model a worker dying after it stored the canonical flagged summary but
-    // before it marked its job succeeded; the stale lock is then reclaimed.
+    // before it marked its job succeeded; the expired lease is then reclaimed.
     await db.pool.query(
-      "update verification_jobs set status = 'running', locked_at = now() - interval '11 minutes' where run_id = $1",
+      `update verification_jobs
+          set status = 'running',
+              locked_at = now() - interval '11 minutes',
+              not_before = now() - interval '1 minute'
+        where run_id = $1`,
       [id],
     );
     expect(await drainJobs({}, realDeps(async () => parquetBytes))).toMatchObject({ flagged: 1, validated: 0 });

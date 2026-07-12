@@ -8,17 +8,12 @@
  */
 
 import { createPublicKey, verify as cryptoVerify } from "node:crypto";
-import { computeRunSummary } from "@heimdall/parsers";
 import { RUN_STATUS } from "@heimdall/shared";
 import type { RunSummary } from "@heimdall/shared";
 import { readRun, type Queryable } from "../db";
 import { readRunSignature } from "../repo/runs";
 import { applyVerificationResult, type ClaimedJob } from "../repo/jobs";
-import {
-  decodeFrameParquet,
-  FRAME_VERIFICATION_PARQUET_COLUMN_NAMES,
-  validateFrameParquetSensorValues,
-} from "../parquet/frame-metadata";
+import { computeFrameParquetSummary } from "../parquet/frame-metadata";
 
 export interface VerifyDeps {
   db: Queryable;
@@ -104,35 +99,34 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
     return { kind: "failed", error: "run has no frames object key" };
   }
 
-  let bytes: Uint8Array;
-  try {
-    bytes = await deps.getObject(stored.framesObjectKey);
-  } catch (error) {
-    // Storage errors are presumed transient; the attempts cap terminalizes
-    // a genuinely missing object.
-    return { kind: "retry", error: `object read failed: ${String(error)}` };
-  }
-
   let recomputed: RunSummary;
-  try {
-    const buffer = bytes.buffer.slice(
-      bytes.byteOffset,
-      bytes.byteOffset + bytes.byteLength,
-    ) as ArrayBuffer;
-    // Validate every nullable sensor in column chunks, then retain only the
-    // canonical-summary projection so max-size captures stay memory-bounded.
-    await validateFrameParquetSensorValues(buffer);
-    recomputed = computeRunSummary(
-      await decodeFrameParquet(buffer, FRAME_VERIFICATION_PARQUET_COLUMN_NAMES),
-    );
-  } catch (error) {
-    return { kind: "failed", error: `unreadable parquet: ${String(error)}` };
-  }
+  let signatureValid: boolean | null;
+  {
+    let bytes: Uint8Array;
+    try {
+      bytes = await deps.getObject(stored.framesObjectKey);
+    } catch (error) {
+      // Storage errors are presumed transient; the attempts cap terminalizes
+      // a genuinely missing object.
+      return { kind: "retry", error: `object read failed: ${String(error)}` };
+    }
 
-  const signatureValid =
-    deps.publicKeyBase64 && stored.signature
-      ? verifyEd25519(deps.publicKeyBase64, bytes, stored.signature)
-      : null;
+    try {
+      // Validate the full report schema in column chunks, retaining only the
+      // scalar buffers needed by the canonical summary. This avoids a large
+      // FrameSample object graph for 500k-frame captures.
+      recomputed = await computeFrameParquetSummary(bytes);
+    } catch (error) {
+      return { kind: "failed", error: `unreadable parquet: ${String(error)}` };
+    }
+
+    signatureValid =
+      deps.publicKeyBase64 && stored.signature
+        ? verifyEd25519(deps.publicKeyBase64, bytes, stored.signature)
+        : null;
+  }
+  // The bounded R2 payload goes out of scope before the database write on a
+  // large run; only the recomputed scalar summary and signature verdict remain.
 
   const mismatch = summaryMismatch(run.summary, recomputed);
   const status = mismatch === null && run.status !== RUN_STATUS.flagged ? "validated" : "flagged";

@@ -199,6 +199,8 @@ export async function runMaintenancePass(
   const drained = await drainJobs({ maxJobs, budgetMs }, deps);
   const cleanedStalePending = await cleanupStalePending(deps, { deadlineAt });
   const cleanedFinalizedStaging = await cleanupFinalizedStaging(deps, { deadlineAt });
-  const prunedRateLimitWindows = await pruneRateLimits(deps.db);
+  const prunedRateLimitWindows = hasTimeRemaining(deadlineAt)
+    ? await pruneRateLimits(deps.db)
+    : 0;
   return { ...drained, cleanedStalePending, cleanedFinalizedStaging, prunedRateLimitWindows };
 }

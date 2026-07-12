@@ -7,10 +7,14 @@ import type { FileMetaData } from "hyparquet";
 import {
   FRAME_PARQUET_COLUMNS,
   INGEST_LIMITS,
+  assertFrameParquetTimeOrder,
+  parseFrameParquetFrameTimeMs,
+  parseFrameParquetTimeMs,
+  parseOptionalFrameParquetGenerated,
   parseOptionalFrameParquetNumber,
   rowsToFrameSamples,
 } from "@heimdall/shared";
-import type { FrameSample } from "@heimdall/shared";
+import type { FrameSample, RunSummary } from "@heimdall/shared";
 
 export const FRAME_PARQUET_COLUMN_NAMES = FRAME_PARQUET_COLUMNS.map((column) => column.name);
 /** Columns needed to render the Phase 5 chart and hardware summary. */
@@ -20,12 +24,29 @@ export const FRAME_CHART_PARQUET_COLUMN_NAMES = [
   "gpu_load_pct",
   "vram_used_mb",
 ];
-/** Columns retained for canonical summary recomputation. */
-export const FRAME_VERIFICATION_PARQUET_COLUMN_NAMES = ["time_ms", "frame_time_ms", "generated"];
-const FRAME_SENSOR_PARQUET_COLUMN_NAMES = FRAME_PARQUET_COLUMN_NAMES.filter(
-  (column) => !FRAME_VERIFICATION_PARQUET_COLUMN_NAMES.includes(column),
-);
 const MAX_DECODED_FRAME_PARQUET_BYTES = BigInt(INGEST_LIMITS.maxParquetBytes);
+
+interface FrameParquetChunk {
+  columnName: string;
+  columnData: ArrayLike<unknown>;
+  rowStart: number;
+  rowEnd: number;
+}
+
+function asArrayBuffer(input: ArrayBuffer | Uint8Array): ArrayBuffer {
+  if (input instanceof ArrayBuffer) return input;
+  if (
+    input.byteOffset === 0 &&
+    input.byteLength === input.buffer.byteLength &&
+    input.buffer instanceof ArrayBuffer
+  ) {
+    return input.buffer;
+  }
+  if (input.buffer instanceof ArrayBuffer) {
+    return input.buffer.slice(input.byteOffset, input.byteOffset + input.byteLength);
+  }
+  return Uint8Array.from(input).buffer;
+}
 
 /** Reject oversized or internally inconsistent captures before decoding rows. */
 export function frameCountFromMetadata(
@@ -74,54 +95,119 @@ export function validateFrameParquetMetadata(
 }
 
 /**
- * Validate nullable sensor columns through hyparquet's column chunks rather
- * than materializing a full object per frame. Core timing columns are decoded
- * separately for the canonical summary.
+ * Validate every persisted frame column while retaining only the scalar data
+ * needed for the canonical summary. Columns decode one at a time because
+ * hyparquet starts all requested columns concurrently; this keeps verification
+ * bounded by the Parquet bytes, two Float64Arrays, and one temporary presence
+ * bitmap instead of a full object graph (or every decoded column) for up to
+ * 500,000 FrameSample rows.
  */
-export async function validateFrameParquetSensorValues(buffer: ArrayBuffer): Promise<void> {
+export async function computeFrameParquetSummary(
+  input: ArrayBuffer | Uint8Array,
+): Promise<RunSummary> {
   const { parquetMetadata, parquetRead } = await import("hyparquet");
+  const buffer = asArrayBuffer(input);
   const metadata = parquetMetadata(buffer);
   const frameCount = validateFrameParquetMetadata(metadata);
-  const expectedRowStart = new Map(FRAME_SENSOR_PARQUET_COLUMN_NAMES.map((column) => [column, 0]));
-  let validationError: Error | undefined;
+  let times: Float64Array | undefined = new Float64Array(frameCount);
+  const frameTimes = new Float64Array(frameCount);
+  let generatedFrameCount = 0;
 
-  await parquetRead({
-    file: buffer,
-    metadata,
-    columns: FRAME_SENSOR_PARQUET_COLUMN_NAMES,
-    onChunk: ({ columnName, columnData, rowStart, rowEnd }) => {
+  for (const expectedColumnName of FRAME_PARQUET_COLUMN_NAMES) {
+    // A single-column pass lets each decoded column become collectible before
+    // the next starts. Keep one compact presence map because row groups may
+    // complete out of order; count + no duplicates proves full coverage.
+    const seenRows = new Uint8Array(frameCount);
+    let observedRows = 0;
+    let validationError: Error | undefined;
+
+    const recordError = (message: string): void => {
+      validationError ??= new Error(message);
+    };
+
+    const validateChunk = ({ columnName, columnData, rowStart, rowEnd }: FrameParquetChunk): void => {
       if (validationError) return;
       try {
-        const expected = expectedRowStart.get(columnName);
-        if (expected === undefined || rowStart !== expected || rowEnd - rowStart !== columnData.length) {
-          throw new Error(`parquet column ${columnName} has out-of-order chunk rows`);
+        const expectedRows = rowEnd - rowStart;
+        if (
+          columnName !== expectedColumnName ||
+          !Number.isInteger(rowStart) ||
+          !Number.isInteger(rowEnd) ||
+          rowStart < 0 ||
+          rowEnd > frameCount ||
+          expectedRows < 0 ||
+          columnData.length !== expectedRows
+        ) {
+          recordError(`parquet column ${columnName} emitted an invalid row range`);
+          return;
         }
-        for (let offset = 0; offset < columnData.length; offset++) {
-          parseOptionalFrameParquetNumber(columnName, columnData[offset], rowStart + offset);
-        }
-        expectedRowStart.set(columnName, rowEnd);
-      } catch (error) {
-        validationError = error instanceof Error ? error : new Error(String(error));
-      }
-    },
-  });
+        observedRows += expectedRows;
 
-  if (validationError) throw validationError;
-  for (const [column, rowEnd] of expectedRowStart) {
-    if (rowEnd !== frameCount) {
-      throw new Error(`parquet column ${column} decoded ${rowEnd} rows, expected ${frameCount}`);
+        for (let offset = 0; offset < expectedRows; offset++) {
+          const row = rowStart + offset;
+          const value = columnData[offset];
+          if (seenRows[row] !== 0) {
+            recordError(`parquet column ${columnName} repeats row ${row}`);
+            return;
+          }
+          seenRows[row] = 1;
+          if (columnName === "time_ms") {
+            times![row] = parseFrameParquetTimeMs(value, row);
+            continue;
+          }
+          if (columnName === "frame_time_ms") {
+            frameTimes[row] = parseFrameParquetFrameTimeMs(value, row);
+            continue;
+          }
+          if (columnName === "generated") {
+            if (parseOptionalFrameParquetGenerated(value, row) === true) generatedFrameCount++;
+            continue;
+          }
+          parseOptionalFrameParquetNumber(columnName, value, row);
+        }
+      } catch (error) {
+        recordError(error instanceof Error ? error.message : String(error));
+      }
+    };
+
+    await parquetRead({
+      file: buffer,
+      metadata,
+      columns: [expectedColumnName],
+      rowEnd: frameCount,
+      onChunk: validateChunk,
+    });
+
+    if (validationError) throw validationError;
+    if (observedRows !== frameCount) {
+      throw new Error(`parquet column ${expectedColumnName} decoded an incomplete row range`);
+    }
+    if (expectedColumnName === "time_ms") {
+      let previousTimeMs: number | undefined;
+      for (let row = 0; row < frameCount; row++) {
+        const timeMs = times![row]!;
+        assertFrameParquetTimeOrder(previousTimeMs, timeMs, row);
+        previousTimeMs = timeMs;
+      }
+      // Timestamps are no longer needed after their monotonicity check. Drop
+      // the 4 MiB maximum-size buffer before decoding the remaining sensors.
+      times = undefined;
     }
   }
+  // `frame-metadata` also ships to the run-page client. Keep the parser
+  // dependency behind the worker-only path so downloading chart frames does
+  // not pull the parser bundle into the browser.
+  const { computeRunSummaryFromFrameTimes } = await import("@heimdall/parsers");
+  return computeRunSummaryFromFrameTimes(frameTimes, generatedFrameCount);
 }
 
 /**
  * The single frame-Parquet decode path, shared by the run-page reader (client)
- * and verification worker (server): both fully validate the stored layout.
- * The verification worker scans sensor values in bounded chunks before using
- * its timing projection; the browser explicitly requests the chart projection.
- * `hyparquet` is
- * dynamic-imported so it stays off non-run client bundles. Throws on any layout,
- * size, or row-count violation — callers decide how to surface it.
+ * and verification worker (server): both fully validate the stored layout. The
+ * browser explicitly requests the chart projection; the worker uses
+ * `computeFrameParquetSummary()` to avoid object materialization. `hyparquet`
+ * is dynamic-imported so it stays off non-run client bundles. Throws on any
+ * layout, size, or row-count violation — callers decide how to surface it.
  */
 export async function decodeFrameParquet(
   buffer: ArrayBuffer,

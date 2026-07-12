@@ -181,9 +181,10 @@ export interface ClaimedStagingCleanupJob {
 }
 
 /**
- * Atomically claim the next due staging cleanup. A stale lock is reclaimable
- * after the same bounded window as verification work; the claim generation
- * prevents an older worker from completing or retrying a newer claim.
+ * Atomically claim the next due staging cleanup. A claim turns `not_before`
+ * into its lease deadline, so due and stale jobs share the existing ordered
+ * `(not_before, run_id)` index. The claim generation prevents an older worker
+ * from completing or retrying a newer claim.
  */
 export async function claimNextStagingCleanupJob(
   { staleLockMinutes = 10 }: { staleLockMinutes?: number } = {},
@@ -191,12 +192,14 @@ export async function claimNextStagingCleanupJob(
 ): Promise<ClaimedStagingCleanupJob | null> {
   const rows = await query<{ run_id: string; object_key: string; attempts: number }>(
     `update staging_cleanup_jobs scj
-        set locked_at = now(), attempts = scj.attempts + 1, last_attempt_at = now()
+        set locked_at = now(),
+            not_before = now() + make_interval(mins => $1),
+            attempts = scj.attempts + 1,
+            last_attempt_at = now()
       where scj.run_id = (
         select run_id
           from staging_cleanup_jobs
          where not_before <= now()
-           and (locked_at is null or locked_at < now() - make_interval(mins => $1))
          order by not_before, run_id
          for update skip locked
          limit 1

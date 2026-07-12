@@ -109,6 +109,29 @@ export function FrameTimeChart({
   React.useEffect(() => {
     const overlay = overlayRef.current;
     if (!overlay || !hasPlot) return;
+    let active = true;
+    let zoomFrame: number | null = null;
+    let pendingTransform: ZoomTransform | null = null;
+
+    const scheduleTransform = (nextTransform: ZoomTransform): void => {
+      // Wheel/pointer events can outpace paint. The chart's min/max binning is
+      // proportional to the visible frame count, so keep it to one expensive
+      // redraw per display frame rather than one per input event.
+      if (!active) return;
+      if (typeof requestAnimationFrame !== "function") {
+        setTransform(nextTransform);
+        return;
+      }
+      pendingTransform = nextTransform;
+      if (zoomFrame !== null) return;
+      zoomFrame = requestAnimationFrame(() => {
+        zoomFrame = null;
+        const transform = pendingTransform;
+        pendingTransform = null;
+        if (active && transform) setTransform(transform);
+      });
+    };
+
     const behavior = zoom<HTMLDivElement, unknown>()
       .scaleExtent([1, Math.max(1, series.count / MIN_VISIBLE_FRAMES)])
       .extent([
@@ -119,11 +142,17 @@ export function FrameTimeChart({
         [PAD.left, 0],
         [plotRight, height],
       ])
-      .on("zoom", (event: { transform: ZoomTransform }) => setTransform(event.transform));
+      .on("zoom", (event: { transform: ZoomTransform }) => scheduleTransform(event.transform));
     const selection = select(overlay);
     zoomBehaviorRef.current = behavior;
     selection.call(behavior);
     return () => {
+      active = false;
+      if (zoomFrame !== null && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(zoomFrame);
+      }
+      zoomFrame = null;
+      pendingTransform = null;
       if (zoomBehaviorRef.current === behavior) zoomBehaviorRef.current = null;
       selection.on(".zoom", null);
     };
