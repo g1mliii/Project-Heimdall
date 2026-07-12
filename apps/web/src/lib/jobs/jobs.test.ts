@@ -241,6 +241,19 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     expect(await readVisibleRun("run_wk_corrupt", db.pool)).toBeNull();
   });
 
+  it("rejects invalid report-only columns before a run can validate", async () => {
+    const id = "run_wk_invalid_report_column";
+    await setupFinalizedRun(id);
+    const invalidReportFrames = frames.map((frame, index) =>
+      index === 0 ? { ...frame, gpuLoadPct: 101 } : frame,
+    );
+
+    const result = await drainJobs({}, realDeps(async () => makeParquet(invalidReportFrames)));
+
+    expect(result).toMatchObject({ claimed: 1, failed: 1, validated: 0 });
+    expect((await readRun(id, db.pool))?.status).toBe(RUN_STATUS.flagged);
+  });
+
   it("pending/flagged runs never match the aggregate-eligibility guard (12.5)", async () => {
     // public visibility but never-validated / flagged — must stay invisible.
     await setupFinalizedRun(

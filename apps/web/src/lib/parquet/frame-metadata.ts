@@ -4,7 +4,12 @@
  */
 
 import type { FileMetaData } from "hyparquet";
-import { FRAME_PARQUET_COLUMNS, INGEST_LIMITS, rowsToFrameSamples } from "@heimdall/shared";
+import {
+  FRAME_PARQUET_COLUMNS,
+  INGEST_LIMITS,
+  parseOptionalFrameParquetNumber,
+  rowsToFrameSamples,
+} from "@heimdall/shared";
 import type { FrameSample } from "@heimdall/shared";
 
 export const FRAME_PARQUET_COLUMN_NAMES = FRAME_PARQUET_COLUMNS.map((column) => column.name);
@@ -15,8 +20,11 @@ export const FRAME_CHART_PARQUET_COLUMN_NAMES = [
   "gpu_load_pct",
   "vram_used_mb",
 ];
-/** Columns needed by the canonical summary recompute. */
+/** Columns retained for canonical summary recomputation. */
 export const FRAME_VERIFICATION_PARQUET_COLUMN_NAMES = ["time_ms", "frame_time_ms", "generated"];
+const FRAME_SENSOR_PARQUET_COLUMN_NAMES = FRAME_PARQUET_COLUMN_NAMES.filter(
+  (column) => !FRAME_VERIFICATION_PARQUET_COLUMN_NAMES.includes(column),
+);
 const MAX_DECODED_FRAME_PARQUET_BYTES = BigInt(INGEST_LIMITS.maxParquetBytes);
 
 /** Reject oversized or internally inconsistent captures before decoding rows. */
@@ -66,11 +74,54 @@ export function validateFrameParquetMetadata(
 }
 
 /**
+ * Validate nullable sensor columns through hyparquet's column chunks rather
+ * than materializing a full object per frame. Core timing columns are decoded
+ * separately for the canonical summary.
+ */
+export async function validateFrameParquetSensorValues(buffer: ArrayBuffer): Promise<void> {
+  const { parquetMetadata, parquetRead } = await import("hyparquet");
+  const metadata = parquetMetadata(buffer);
+  const frameCount = validateFrameParquetMetadata(metadata);
+  const expectedRowStart = new Map(FRAME_SENSOR_PARQUET_COLUMN_NAMES.map((column) => [column, 0]));
+  let validationError: Error | undefined;
+
+  await parquetRead({
+    file: buffer,
+    metadata,
+    columns: FRAME_SENSOR_PARQUET_COLUMN_NAMES,
+    onChunk: ({ columnName, columnData, rowStart, rowEnd }) => {
+      if (validationError) return;
+      try {
+        const expected = expectedRowStart.get(columnName);
+        if (expected === undefined || rowStart !== expected || rowEnd - rowStart !== columnData.length) {
+          throw new Error(`parquet column ${columnName} has out-of-order chunk rows`);
+        }
+        for (let offset = 0; offset < columnData.length; offset++) {
+          parseOptionalFrameParquetNumber(columnName, columnData[offset], rowStart + offset);
+        }
+        expectedRowStart.set(columnName, rowEnd);
+      } catch (error) {
+        validationError = error instanceof Error ? error : new Error(String(error));
+      }
+    },
+  });
+
+  if (validationError) throw validationError;
+  for (const [column, rowEnd] of expectedRowStart) {
+    if (rowEnd !== frameCount) {
+      throw new Error(`parquet column ${column} decoded ${rowEnd} rows, expected ${frameCount}`);
+    }
+  }
+}
+
+/**
  * The single frame-Parquet decode path, shared by the run-page reader (client)
- * and verification worker (server): both fully validate the stored layout,
- * then materialize only the columns their consumer needs. `hyparquet` is
- * dynamic-imported so it stays off non-run client bundles. Throws on any
- * layout, size, or row-count violation — callers decide how to surface it.
+ * and verification worker (server): both fully validate the stored layout.
+ * The verification worker scans sensor values in bounded chunks before using
+ * its timing projection; the browser explicitly requests the chart projection.
+ * `hyparquet` is
+ * dynamic-imported so it stays off non-run client bundles. Throws on any layout,
+ * size, or row-count violation — callers decide how to surface it.
  */
 export async function decodeFrameParquet(
   buffer: ArrayBuffer,

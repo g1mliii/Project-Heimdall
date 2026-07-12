@@ -43,14 +43,16 @@ describe("buildFrameSeries", () => {
     expect(series.totalDurationMs).toBe(30);
   });
 
-  it("preserves an advancing source timestamp even when a prior frame overlaps it", () => {
+  it("clamps overlapping source timestamps so chart times stay strictly increasing", () => {
     const series = buildFrameSeries([
-      { timeMs: 0, frameTimeMs: 100 },
-      { timeMs: 10, frameTimeMs: 10 },
+      { timeMs: 0, frameTimeMs: 5 },
+      { timeMs: 5, frameTimeMs: 20 },
+      { timeMs: 5, frameTimeMs: 3 },
+      { timeMs: 6, frameTimeMs: 4 },
     ]);
 
-    expect(Array.from(series.times)).toEqual([0, 10]);
-    expect(series.totalDurationMs).toBe(100);
+    expect(Array.from(series.times)).toEqual([0, 5, 25, 28]);
+    expect(series.totalDurationMs).toBe(32);
   });
 
   it("handles an empty frame list", () => {

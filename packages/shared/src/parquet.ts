@@ -103,11 +103,11 @@ export function rowsToFrameSamples(rows: readonly Record<string, unknown>[]): Fr
       }
       frame.generated = generated;
     }
-    setOptional(frame, "gpuLoadPct", row, "gpu_load_pct", index, 100);
+    setOptional(frame, "gpuLoadPct", row, "gpu_load_pct", index);
     setOptional(frame, "gpuClockMhz", row, "gpu_clock_mhz", index);
     setOptional(frame, "gpuPowerW", row, "gpu_power_w", index);
     setOptional(frame, "vramUsedMb", row, "vram_used_mb", index);
-    setOptional(frame, "cpuLoadPct", row, "cpu_load_pct", index, 100);
+    setOptional(frame, "cpuLoadPct", row, "cpu_load_pct", index);
     setOptional(frame, "cpuBusyMs", row, "cpu_busy_ms", index);
     setOptional(frame, "gpuBusyMs", row, "gpu_busy_ms", index);
     return frame;
@@ -122,23 +122,31 @@ function requiredNumber(row: Record<string, unknown>, name: string, index: numbe
   return value;
 }
 
+/** Validate one nullable numeric sensor value from a frame-Parquet column. */
+export function parseOptionalFrameParquetNumber(
+  name: string,
+  value: unknown,
+  index: number,
+): number | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new Error(`parquet row ${index}: ${name} must be a finite number >= 0`);
+  }
+  if ((name === "gpu_load_pct" || name === "cpu_load_pct") && value > 100) {
+    throw new Error(`parquet row ${index}: ${name} must be <= 100, got ${value}`);
+  }
+  return value;
+}
+
 function setOptional(
   frame: FrameSample,
   field: Exclude<keyof FrameSample, "timeMs" | "frameTimeMs" | "generated">,
   row: Record<string, unknown>,
   name: string,
   index: number,
-  max?: number,
 ): void {
-  const value = row[name];
-  if (value === null || value === undefined) {
-    return;
-  }
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    throw new Error(`parquet row ${index}: ${name} must be a finite number >= 0`);
-  }
-  if (max !== undefined && value > max) {
-    throw new Error(`parquet row ${index}: ${name} must be <= ${max}, got ${value}`);
-  }
-  frame[field] = value;
+  const value = parseOptionalFrameParquetNumber(name, row[name], index);
+  if (value !== undefined) frame[field] = value;
 }

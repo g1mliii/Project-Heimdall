@@ -427,8 +427,13 @@ export function UploadClient() {
                   flexWrap: "wrap",
                 }}
               >
-                <ButtonLink as={Link} href="/" variant="primary" iconRight={<ArrowRightIcon size={16} />}>
-                  Back to benchmarks
+                <ButtonLink
+                  as={Link}
+                  href={`/runs/${mode.result.runId}`}
+                  variant="primary"
+                  iconRight={<ArrowRightIcon size={16} />}
+                >
+                  View run
                 </ButtonLink>
                 <Button variant="ghost" onClick={() => setMode({ kind: "idle" })}>
                   Upload another

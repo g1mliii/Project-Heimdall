@@ -38,20 +38,18 @@ export function buildFrameSeries(frames: readonly FrameSample[]): FrameSeries {
   let gpuLoadCount = 0;
   let peakVram: number | undefined;
   let previousFrameEndMs = 0;
-  let previousSourceTimeMs: number | undefined;
   let minFrameTimeMs = Infinity;
   let maxFrameTimeMs = 0;
 
   for (let i = 0; i < count; i++) {
     const frame = frames[i]!;
-    // Equal timestamps are legal in the stored capture. Give only that repeated
-    // group cumulative positions; a later (but overlapping) source timestamp
-    // remains authoritative rather than being rewritten by a long prior frame.
-    const frameStartMs = frame.timeMs === previousSourceTimeMs ? previousFrameEndMs : frame.timeMs;
+    // Stored timestamps never decrease, but can repeat or overlap a long prior
+    // frame. Normalize every overlapping start to the prior frame end so chart
+    // times remain strictly increasing for binary-search windowing.
+    const frameStartMs = Math.max(frame.timeMs, previousFrameEndMs);
     times[i] = frameStartMs;
     frameTimes[i] = frame.frameTimeMs;
-    previousFrameEndMs = Math.max(previousFrameEndMs, frameStartMs + frame.frameTimeMs);
-    previousSourceTimeMs = frame.timeMs;
+    previousFrameEndMs = frameStartMs + frame.frameTimeMs;
     if (frame.frameTimeMs < minFrameTimeMs) minFrameTimeMs = frame.frameTimeMs;
     if (frame.frameTimeMs > maxFrameTimeMs) maxFrameTimeMs = frame.frameTimeMs;
     if (frame.generated === true) generated[i] = 1;

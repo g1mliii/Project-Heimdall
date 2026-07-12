@@ -14,7 +14,11 @@ import type { RunSummary } from "@heimdall/shared";
 import { readRun, type Queryable } from "../db";
 import { readRunSignature } from "../repo/runs";
 import { applyVerificationResult, type ClaimedJob } from "../repo/jobs";
-import { decodeFrameParquet, FRAME_VERIFICATION_PARQUET_COLUMN_NAMES } from "../parquet/frame-metadata";
+import {
+  decodeFrameParquet,
+  FRAME_VERIFICATION_PARQUET_COLUMN_NAMES,
+  validateFrameParquetSensorValues,
+} from "../parquet/frame-metadata";
 
 export interface VerifyDeps {
   db: Queryable;
@@ -115,6 +119,9 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
       bytes.byteOffset,
       bytes.byteOffset + bytes.byteLength,
     ) as ArrayBuffer;
+    // Validate every nullable sensor in column chunks, then retain only the
+    // canonical-summary projection so max-size captures stay memory-bounded.
+    await validateFrameParquetSensorValues(buffer);
     recomputed = computeRunSummary(
       await decodeFrameParquet(buffer, FRAME_VERIFICATION_PARQUET_COLUMN_NAMES),
     );
