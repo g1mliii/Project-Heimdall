@@ -6,17 +6,11 @@
 
 import { Stat } from "@heimdall/ui";
 import type { RunSummary } from "@heimdall/shared";
+import styles from "./RunPageClient.module.css";
 
 export function RunStatTiles({ summary }: { summary: RunSummary }) {
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(4, 1fr)",
-        gap: "var(--space-4)",
-        marginTop: "var(--space-6)",
-      }}
-    >
+    <div className={styles.statTiles}>
       <Stat label="Avg FPS" value={summary.avgFps.toFixed(1)} accent="var(--tier-avg)" />
       <Stat label="1% low" value={summary.onePercentLowFps.toFixed(1)} accent="var(--tier-p1)" />
       <Stat

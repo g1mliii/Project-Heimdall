@@ -9,9 +9,10 @@
  * with `hyparquet` via dynamic import so the reader stays off non-run pages.
  */
 
-import { INGEST_LIMITS, framesUrlResponseSchema, rowsToFrameSamples } from "@heimdall/shared";
+import { INGEST_LIMITS, framesUrlResponseSchema } from "@heimdall/shared";
 import type { FrameSample, FramesUrlResponse } from "@heimdall/shared";
-import { FRAME_PARQUET_COLUMN_NAMES, validateFrameParquetMetadata } from "../parquet/frame-metadata";
+import { readApiFailure } from "./errors";
+import { decodeFrameParquet, FRAME_CHART_PARQUET_COLUMN_NAMES } from "../parquet/frame-metadata";
 
 export type ApiResult<T> =
   | { ok: true; data: T }
@@ -35,17 +36,8 @@ function failure<T>(code: string, message: string): ApiResult<T> {
   return { ok: false, code, message };
 }
 
-/** Server error envelope → typed failure (falls back to transport-level codes). */
-async function failureFromResponse<T>(response: Response, fallback: string): Promise<ApiResult<T>> {
-  try {
-    const body = (await response.json()) as { error?: { code?: string; message?: string } };
-    if (body?.error?.code) {
-      return failure(body.error.code, body.error.message ?? fallback);
-    }
-  } catch {
-    // Non-JSON error body — fall through.
-  }
-  return failure(`http-${response.status}`, fallback);
+function transportFetch(transport: ApiTransport, input: RequestInfo | URL, signal?: AbortSignal) {
+  return signal === undefined ? transport.fetch(input) : transport.fetch(input, { signal });
 }
 
 async function getJson<T>(
@@ -53,14 +45,18 @@ async function getJson<T>(
   parse: (body: unknown) => T,
   fallback: string,
   transport: ApiTransport,
+  signal?: AbortSignal,
 ): Promise<ApiResult<T>> {
   let response: Response;
   try {
-    response = await transport.fetch(path);
+    response = await transportFetch(transport, path, signal);
   } catch (error) {
-    return failure("network", error instanceof Error ? error.message : String(error));
+    return failure(signal?.aborted ? "aborted" : "network", error instanceof Error ? error.message : String(error));
   }
-  if (!response.ok) return failureFromResponse(response, fallback);
+  if (!response.ok) {
+    const apiFailure = await readApiFailure(response, fallback);
+    return failure(apiFailure.code, apiFailure.message);
+  }
   try {
     return { ok: true, data: parse(await response.json()) };
   } catch (error) {
@@ -75,12 +71,14 @@ async function getJson<T>(
 export function getFramesUrl(
   id: string,
   transport: ApiTransport = defaultTransport(),
+  signal?: AbortSignal,
 ): Promise<ApiResult<FramesUrlResponse>> {
   return getJson(
     `/api/runs/${encodeURIComponent(id)}/frames`,
     (body) => framesUrlResponseSchema.parse(body),
     "frames url fetch failed",
     transport,
+    signal,
   );
 }
 
@@ -88,32 +86,22 @@ export function getFramesUrl(
 export async function fetchFrames(
   url: string,
   transport: ApiTransport = defaultTransport(),
+  signal?: AbortSignal,
 ): Promise<ApiResult<FrameSample[]>> {
   let response: Response;
   try {
-    response = await transport.fetch(url);
+    response = await transportFetch(transport, url, signal);
   } catch (error) {
-    return failure("network", error instanceof Error ? error.message : String(error));
+    return failure(signal?.aborted ? "aborted" : "network", error instanceof Error ? error.message : String(error));
   }
   if (!response.ok) return failure(`http-${response.status}`, "frames download failed");
   try {
     const buffer = await response.arrayBuffer();
+    if (signal?.aborted) return failure("aborted", "frames download was cancelled");
     if (buffer.byteLength > INGEST_LIMITS.maxParquetBytes) {
       return failure("parquet-too-large", `frames object is ${buffer.byteLength} bytes`);
     }
-    const { parquetMetadata, parquetReadObjects } = await import("hyparquet");
-    const metadata = parquetMetadata(buffer);
-    const frameCount = validateFrameParquetMetadata(metadata);
-    const rows = await parquetReadObjects({
-      file: buffer,
-      metadata,
-      columns: FRAME_PARQUET_COLUMN_NAMES,
-      rowEnd: frameCount,
-    });
-    if (rows.length !== frameCount) {
-      return failure("invalid-response", `decoded ${rows.length} frames but metadata declared ${frameCount}`);
-    }
-    return { ok: true, data: rowsToFrameSamples(rows) };
+    return { ok: true, data: await decodeFrameParquet(buffer, FRAME_CHART_PARQUET_COLUMN_NAMES) };
   } catch (error) {
     return failure("invalid-response", error instanceof Error ? error.message : String(error));
   }
@@ -123,8 +111,9 @@ export async function fetchFrames(
 export async function loadRunFrames(
   id: string,
   transport: ApiTransport = defaultTransport(),
+  signal?: AbortSignal,
 ): Promise<ApiResult<FrameSample[]>> {
-  const urlResult = await getFramesUrl(id, transport);
+  const urlResult = await getFramesUrl(id, transport, signal);
   if (!urlResult.ok) return urlResult;
-  return fetchFrames(urlResult.data.url, transport);
+  return fetchFrames(urlResult.data.url, transport, signal);
 }

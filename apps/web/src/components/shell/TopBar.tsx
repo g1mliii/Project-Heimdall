@@ -7,9 +7,10 @@
  */
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { ButtonLink, Tabs } from "@heimdall/ui";
+import { usePathname } from "next/navigation";
+import { ButtonLink, NavTabs } from "@heimdall/ui";
 import { icon } from "@/components/icons";
+import styles from "./TopBar.module.css";
 
 const UploadIcon = icon(
   <g>
@@ -20,63 +21,43 @@ const UploadIcon = icon(
 );
 
 const NAV = [
-  { value: "/", label: "Benchmarks" },
-  { value: "/upload", label: "Upload" },
+  { href: "/", label: "Benchmarks" },
+  { href: "/upload", label: "Upload" },
 ];
 
 export function TopBar() {
   const pathname = usePathname();
-  const router = useRouter();
+
+  function focusMainAfterSkip() {
+    requestAnimationFrame(() => document.getElementById("main-content")?.focus());
+  }
 
   return (
-    <header
-      style={{
-        height: "var(--topbar-h)",
-        display: "flex",
-        alignItems: "center",
-        gap: "var(--space-6)",
-        paddingLeft: "var(--space-6)",
-        paddingRight: "var(--space-6)",
-        borderBottomWidth: "var(--border-thin)",
-        borderBottomStyle: "solid",
-        borderBottomColor: "var(--line-1)",
-        background: "color-mix(in srgb, var(--bg-base) 82%, transparent)",
-        backdropFilter: "var(--blur-md)",
-        position: "sticky",
-        top: 0,
-        zIndex: 20,
-      }}
-    >
+    <>
+      <a className={styles.skipLink} href="#main-content" onClick={focusMainAfterSkip}>
+        Skip to main content
+      </a>
+      <header className={styles.topbar}>
       <Link
         href="/"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "var(--space-2)",
-          textDecoration: "none",
-        }}
+        className={styles.brand}
+        aria-label="Heimdall home"
       >
         <img src="/logo-mark.svg" width={28} height={28} alt="" />
-        <span
-          style={{
-            font: "var(--type-subheading)",
-            letterSpacing: "var(--tracking-tight)",
-            color: "var(--fg-1)",
-          }}
-        >
-          Heimdall
-        </span>
+        <span className={styles.wordmark}>Heimdall</span>
       </Link>
-      <Tabs
+      <NavTabs
+        className={styles.nav}
         tabs={NAV}
-        value={pathname}
-        onChange={(href) => router.push(href)}
+        currentHref={pathname}
+        as={Link}
         aria-label="Primary navigation"
       />
-      <div style={{ flex: 1 }} />
+      <div className={styles.spacer} />
       <ButtonLink as={Link} href="/upload" variant="primary" iconLeft={<UploadIcon size={16} />}>
         Upload log
       </ButtonLink>
-    </header>
+      </header>
+    </>
   );
 }

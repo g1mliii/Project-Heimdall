@@ -8,8 +8,9 @@
  */
 
 import { computeRunSummary } from "@heimdall/parsers";
-import { framesToColumnData, makeSyntheticFrames, syntheticRunBase } from "@heimdall/shared";
+import { makeSyntheticFrames, syntheticRunBase } from "@heimdall/shared";
 import type { Run } from "@heimdall/shared";
+import { buildFramesParquet } from "../src/lib/upload/build-parquet";
 
 export const E2E_RUN_ID = "run_e2e_fixture1";
 
@@ -23,6 +24,5 @@ export const e2eFixtureRun: Run = {
 };
 
 export async function e2eParquetBytes(): Promise<Buffer> {
-  const { parquetWriteBuffer } = await import("hyparquet-writer");
-  return Buffer.from(parquetWriteBuffer({ columnData: framesToColumnData(e2eFrames) }));
+  return Buffer.from(await buildFramesParquet(e2eFrames));
 }

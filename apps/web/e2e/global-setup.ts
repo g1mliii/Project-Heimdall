@@ -18,11 +18,14 @@ export default async function globalSetup() {
     .start();
 
   const pool = new pg.Pool({ connectionString: container.getConnectionUri(), max: 2 });
+  let setupComplete = false;
   try {
     await migrate(pool);
     await insertRun(e2eFixtureRun, pool);
+    setupComplete = true;
   } finally {
     await pool.end();
+    if (!setupComplete) await container.stop();
   }
 
   return async () => {

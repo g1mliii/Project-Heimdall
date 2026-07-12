@@ -8,7 +8,9 @@ import { ButtonLink, Card } from "@heimdall/ui";
 
 export default function RunNotFound() {
   return (
-    <div
+    <main
+      id="main-content"
+      tabIndex={-1}
       style={{
         maxWidth: "var(--container-prose)",
         margin: "0 auto",
@@ -33,6 +35,6 @@ export default function RunNotFound() {
           </div>
         </Card.Body>
       </Card>
-    </div>
+    </main>
   );
 }

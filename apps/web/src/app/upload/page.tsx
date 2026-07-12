@@ -10,6 +10,8 @@ export const metadata: Metadata = {
 export default function UploadPage() {
   return (
     <main
+      id="main-content"
+      tabIndex={-1}
       style={{
         maxWidth: "var(--container-prose)",
         margin: "0 auto",

@@ -22,12 +22,12 @@
  */
 
 import * as React from "react";
-import { bisectLeft } from "d3-array";
 import { scaleLinear } from "d3-scale";
 import { select } from "d3-selection";
-import { zoom, zoomIdentity, type ZoomTransform } from "d3-zoom";
+import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
 import type { FrameSeries } from "@/lib/run/frame-series";
 import { downsampleMinMax, sliceVisible } from "@/lib/run/downsample";
+import { bucketStutterIndices } from "@/lib/run/stutters";
 import { bandThresholdMs, formatTimeTick, formatValueTick, toDisplay, type ChartUnit } from "@/lib/run/units";
 import { useChartSize } from "./useChartSize";
 
@@ -37,41 +37,6 @@ const DOT_RADIUS = 3;
 /** Zooming stops once ~this many frames fill the plot (raw, exact view). */
 const MIN_VISIBLE_FRAMES = 50;
 const HEADROOM = 1.05;
-
-/**
- * Sample visible stutters into horizontal screen buckets. This bounds marker
- * selection and drawing to chart width even for hostile captures.
- */
-export function bucketStutterIndices(
-  stutterIndices: Uint32Array,
-  times: Float64Array,
-  start: number,
-  end: number,
-  domainStart: number,
-  domainEnd: number,
-  bucketCount: number,
-): Int32Array {
-  const markers = new Int32Array(Math.max(1, bucketCount)).fill(-1);
-  const span = domainEnd - domainStart;
-  if (span <= 0) return markers;
-
-  const first = bisectLeft(stutterIndices, start);
-  const last = bisectLeft(stutterIndices, end);
-  const sampleCount = Math.min(markers.length, last - first);
-  for (let sample = 0; sample < sampleCount; sample++) {
-    const cursor =
-      sampleCount === 1
-        ? first
-        : first + Math.floor((sample * (last - first - 1)) / (sampleCount - 1));
-    const index = stutterIndices[cursor]!;
-    const bucket = Math.min(
-      markers.length - 1,
-      Math.max(0, Math.floor(((times[index]! - domainStart) / span) * markers.length)),
-    );
-    if (markers[bucket]! < 0) markers[bucket] = index;
-  }
-  return markers;
-}
 
 interface ChartColors {
   trace: string;
@@ -114,22 +79,16 @@ export function FrameTimeChart({
   const [containerRef, width] = useChartSize<HTMLDivElement>();
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
   const overlayRef = React.useRef<HTMLDivElement>(null);
+  const zoomBehaviorRef = React.useRef<ZoomBehavior<HTMLDivElement, unknown> | null>(null);
   const [transform, setTransform] = React.useState<ZoomTransform>(zoomIdentity);
   const [colors, setColors] = React.useState<ChartColors | null>(null);
   const [ready, setReady] = React.useState(false);
 
-  const { minFrameTimeMs, maxFrameTimeMs } = React.useMemo(() => {
-    let min = Infinity;
-    let max = 0;
-    for (const value of series.frameTimes) {
-      if (value < min) min = value;
-      if (value > max) max = value;
-    }
-    return { minFrameTimeMs: min, maxFrameTimeMs: max };
-  }, [series]);
-
+  // Min/max frame time come from the single buildFrameSeries pass — no second scan.
   const yMax =
-    unit === "ms" ? maxFrameTimeMs * HEADROOM : (1000 / Math.max(minFrameTimeMs, 0.01)) * HEADROOM;
+    unit === "ms"
+      ? series.maxFrameTimeMs * HEADROOM
+      : (1000 / Math.max(series.minFrameTimeMs, 0.01)) * HEADROOM;
 
   // Scales are pure functions of state — computed in render so tick labels
   // and the canvas paint from the exact same math.
@@ -162,11 +121,44 @@ export function FrameTimeChart({
       ])
       .on("zoom", (event: { transform: ZoomTransform }) => setTransform(event.transform));
     const selection = select(overlay);
+    zoomBehaviorRef.current = behavior;
     selection.call(behavior);
     return () => {
+      if (zoomBehaviorRef.current === behavior) zoomBehaviorRef.current = null;
       selection.on(".zoom", null);
     };
   }, [hasPlot, series.count, plotRight, plotBottom, height]);
+
+  function handleChartKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    const overlay = overlayRef.current;
+    const behavior = zoomBehaviorRef.current;
+    if (!overlay || !behavior) return;
+
+    const selection = select(overlay);
+    const panDistance = Math.max(1, (plotRight - PAD.left) * 0.1);
+    switch (event.key) {
+      case "ArrowLeft":
+        behavior.translateBy(selection, panDistance, 0);
+        break;
+      case "ArrowRight":
+        behavior.translateBy(selection, -panDistance, 0);
+        break;
+      case "+":
+      case "=":
+        behavior.scaleBy(selection, 1.25);
+        break;
+      case "-":
+      case "_":
+        behavior.scaleBy(selection, 0.8);
+        break;
+      case "Home":
+        behavior.transform(selection, zoomIdentity);
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+  }
 
   // Canvas paint. Deliberately no dependency array: it must repaint after
   // every committed render (transform/unit/size/series all feed the scales,
@@ -179,8 +171,10 @@ export function FrameTimeChart({
     if (!context) return; // jsdom
 
     const dpr = typeof devicePixelRatio === "number" ? devicePixelRatio : 1;
-    canvas.width = Math.round(width * dpr);
-    canvas.height = Math.round(height * dpr);
+    const backingWidth = Math.round(width * dpr);
+    const backingHeight = Math.round(height * dpr);
+    if (canvas.width !== backingWidth) canvas.width = backingWidth;
+    if (canvas.height !== backingHeight) canvas.height = backingHeight;
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
     context.clearRect(0, 0, width, height);
 
@@ -315,7 +309,10 @@ export function FrameTimeChart({
       <div
         ref={overlayRef}
         data-chart-overlay
-        aria-hidden="true"
+        role="region"
+        aria-label="Frame-time chart controls. Use the mouse wheel or plus and minus keys to zoom, left and right arrow keys to pan, or Home to reset."
+        tabIndex={0}
+        onKeyDown={handleChartKeyDown}
         style={{
           position: "absolute",
           left: PAD.left,

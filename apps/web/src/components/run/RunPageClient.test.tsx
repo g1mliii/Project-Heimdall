@@ -13,13 +13,23 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom/vitest";
 import { computeRunSummary } from "@heimdall/parsers";
-import { makeSyntheticFrames, syntheticRunBase } from "@heimdall/shared";
+import { makeSyntheticFrames, RUN_STATUS, syntheticRunBase } from "@heimdall/shared";
 import type { Run } from "@heimdall/shared";
 import type { ApiResult } from "@/lib/api/client";
 import type { FrameSample } from "@heimdall/shared";
 import { RunPageClient, type FramesLoader } from "./RunPageClient";
 import { RunHeader } from "./RunHeader";
 import { RunStatTiles } from "./RunStatTiles";
+
+vi.mock("./chart/FrameTimeChart", () => ({
+  FrameTimeChart: ({ stutterIndices }: { stutterIndices: Uint32Array }) => (
+    <div
+      aria-label="Frame-time progression chart"
+      data-stutter-count={stutterIndices.length}
+      role="img"
+    />
+  ),
+}));
 
 const frames = makeSyntheticFrames({ seed: 7, count: 1000 });
 const run: Run = { ...syntheticRunBase, summary: computeRunSummary(frames) };
@@ -39,6 +49,19 @@ describe("RunPageClient states", () => {
     expect(screen.getByRole("status", { name: "Loading frame data" })).toBeInTheDocument();
   });
 
+  it("aborts an in-flight frames request when the page unmounts", () => {
+    let signal: AbortSignal | undefined;
+    const pendingLoader: FramesLoader = (_id, nextSignal) => {
+      signal = nextSignal;
+      return new Promise<ApiResult<FrameSample[]>>(() => {});
+    };
+    const { unmount } = render(<RunPageClient run={run} loadFrames={pendingLoader} />);
+
+    expect(signal?.aborted).toBe(false);
+    unmount();
+    expect(signal?.aborted).toBe(true);
+  });
+
   it("renders the populated state: frames, GPU meter, peak VRAM", async () => {
     render(<RunPageClient run={run} loadFrames={okLoader} />);
     expect(
@@ -48,6 +71,26 @@ describe("RunPageClient states", () => {
     expect(screen.getByText("Peak VRAM")).toBeInTheDocument();
     // Summary metrics render regardless of frame state (tile + tier bar).
     expect(screen.getAllByText("Avg FPS").length).toBeGreaterThan(0);
+  });
+
+  it("derives pending-run stutter markers from decoded frames, not uploader metadata", async () => {
+    const pending: Run = {
+      ...run,
+      status: RUN_STATUS.pending,
+      summary: { ...run.summary, frameTimeP50Ms: 1_000 },
+    };
+    const pendingFrames: FrameSample[] = [
+      { timeMs: 0, frameTimeMs: 8 },
+      { timeMs: 8, frameTimeMs: 8 },
+      { timeMs: 16, frameTimeMs: 8 },
+      { timeMs: 24, frameTimeMs: 80 },
+    ];
+
+    render(<RunPageClient run={pending} loadFrames={() => Promise.resolve({ ok: true, data: pendingFrames })} />);
+
+    expect(
+      await screen.findByRole("img", { name: "Frame-time progression chart" }),
+    ).toHaveAttribute("data-stutter-count", "1");
   });
 
   it("shows the still-processing state on not-finalized, tiles intact", async () => {

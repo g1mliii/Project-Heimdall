@@ -11,13 +11,17 @@ import type { FrameSample } from "@heimdall/shared";
 
 export interface FrameSeries {
   count: number;
-  /** Frame start timestamps (ms from capture start), monotonic. */
+  /** Monotonic frame start positions on the chart x axis (ms). */
   times: Float64Array;
   frameTimes: Float64Array;
   /** 1 = generated (DLSS3/FSR3/XeSS), 0 = app-rendered or unknown. */
   generated: Uint8Array;
-  /** End of the capture on the x axis: last start + last frame time. */
+  /** Furthest frame end on the x axis, including every frame duration. */
   totalDurationMs: number;
+  /** Fastest/slowest frame time across the capture (0 when empty) — the chart
+   * y-domain reads these instead of re-scanning frameTimes. */
+  minFrameTimeMs: number;
+  maxFrameTimeMs: number;
   /** Mean GPU load over frames that reported it; undefined when none did. */
   avgGpuLoadPct?: number;
   /** Peak VRAM over frames that reported it; undefined when none did. */
@@ -33,11 +37,23 @@ export function buildFrameSeries(frames: readonly FrameSample[]): FrameSeries {
   let gpuLoadSum = 0;
   let gpuLoadCount = 0;
   let peakVram: number | undefined;
+  let previousFrameEndMs = 0;
+  let previousSourceTimeMs: number | undefined;
+  let minFrameTimeMs = Infinity;
+  let maxFrameTimeMs = 0;
 
   for (let i = 0; i < count; i++) {
     const frame = frames[i]!;
-    times[i] = frame.timeMs;
+    // Equal timestamps are legal in the stored capture. Give only that repeated
+    // group cumulative positions; a later (but overlapping) source timestamp
+    // remains authoritative rather than being rewritten by a long prior frame.
+    const frameStartMs = frame.timeMs === previousSourceTimeMs ? previousFrameEndMs : frame.timeMs;
+    times[i] = frameStartMs;
     frameTimes[i] = frame.frameTimeMs;
+    previousFrameEndMs = Math.max(previousFrameEndMs, frameStartMs + frame.frameTimeMs);
+    previousSourceTimeMs = frame.timeMs;
+    if (frame.frameTimeMs < minFrameTimeMs) minFrameTimeMs = frame.frameTimeMs;
+    if (frame.frameTimeMs > maxFrameTimeMs) maxFrameTimeMs = frame.frameTimeMs;
     if (frame.generated === true) generated[i] = 1;
     if (frame.gpuLoadPct !== undefined) {
       gpuLoadSum += frame.gpuLoadPct;
@@ -48,13 +64,14 @@ export function buildFrameSeries(frames: readonly FrameSample[]): FrameSeries {
     }
   }
 
-  const last = frames[count - 1];
   return {
     count,
     times,
     frameTimes,
     generated,
-    totalDurationMs: last === undefined ? 0 : last.timeMs + last.frameTimeMs,
+    totalDurationMs: previousFrameEndMs,
+    minFrameTimeMs: count === 0 ? 0 : minFrameTimeMs,
+    maxFrameTimeMs,
     ...(gpuLoadCount > 0 ? { avgGpuLoadPct: gpuLoadSum / gpuLoadCount } : {}),
     ...(peakVram !== undefined ? { peakVramUsedMb: peakVram } : {}),
   };

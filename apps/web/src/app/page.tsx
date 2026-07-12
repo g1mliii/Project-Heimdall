@@ -7,6 +7,8 @@ import { Badge, Button, Card, Stat } from "@heimdall/ui";
 export default function Home() {
   return (
     <main
+      id="main-content"
+      tabIndex={-1}
       style={{
         maxWidth: "var(--container-prose)",
         margin: "0 auto",

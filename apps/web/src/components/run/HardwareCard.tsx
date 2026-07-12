@@ -32,8 +32,11 @@ function SnapshotRow({ k, v, warn }: { k: string; v: string; warn?: boolean }) {
           font: "var(--type-data)",
           color: warn ? "var(--warn)" : "var(--fg-1)",
           display: "inline-flex",
+          minWidth: 0,
           alignItems: "center",
           gap: "var(--space-1)",
+          overflowWrap: "anywhere",
+          textAlign: "right",
         }}
       >
         {warn && <TriangleAlertIcon size={13} style={{ color: "var(--warn)" }} />}

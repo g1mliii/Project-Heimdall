@@ -27,6 +27,7 @@ import type {
   HardwareSnapshot,
   RunSummary,
 } from "@heimdall/shared";
+import { readApiFailure } from "../api/errors";
 import { buildFramesParquet } from "./build-parquet";
 
 export type UploadProgress =
@@ -108,15 +109,7 @@ function defaultTransport(): UploadTransport {
 
 /** Server error envelope → typed failure (falls back to transport-level codes). */
 async function failureFromResponse(response: Response, fallback: string): Promise<UploadFailure> {
-  try {
-    const body = (await response.json()) as { error?: { code?: string; message?: string } };
-    if (body?.error?.code) {
-      return { ok: false, code: body.error.code, message: body.error.message ?? fallback };
-    }
-  } catch {
-    // Non-JSON error body — fall through.
-  }
-  return { ok: false, code: `http-${response.status}`, message: fallback };
+  return { ok: false, ...(await readApiFailure(response, fallback)) };
 }
 
 export async function uploadCapture(file: File, options: UploadOptions): Promise<UploadResult> {

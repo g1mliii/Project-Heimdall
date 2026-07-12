@@ -8,17 +8,13 @@
  */
 
 import { createPublicKey, verify as cryptoVerify } from "node:crypto";
-import { parquetMetadata, parquetReadObjects } from "hyparquet";
 import { computeRunSummary } from "@heimdall/parsers";
-import { RUN_STATUS, rowsToFrameSamples } from "@heimdall/shared";
+import { RUN_STATUS } from "@heimdall/shared";
 import type { RunSummary } from "@heimdall/shared";
 import { readRun, type Queryable } from "../db";
 import { readRunSignature } from "../repo/runs";
 import { applyVerificationResult, type ClaimedJob } from "../repo/jobs";
-import {
-  FRAME_PARQUET_COLUMN_NAMES,
-  validateFrameParquetMetadata,
-} from "../parquet/frame-metadata";
+import { decodeFrameParquet, FRAME_VERIFICATION_PARQUET_COLUMN_NAMES } from "../parquet/frame-metadata";
 
 export interface VerifyDeps {
   db: Queryable;
@@ -119,19 +115,9 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
       bytes.byteOffset,
       bytes.byteOffset + bytes.byteLength,
     ) as ArrayBuffer;
-    const metadata = parquetMetadata(buffer);
-    const frameCount = validateFrameParquetMetadata(metadata);
-    const rows = await parquetReadObjects({
-      file: buffer,
-      metadata,
-      columns: FRAME_PARQUET_COLUMN_NAMES,
-      rowEnd: frameCount,
-    });
-    const frames = rowsToFrameSamples(rows);
-    if (frames.length !== frameCount) {
-      return { kind: "failed", error: `decoded ${frames.length} frames but metadata declared ${frameCount}` };
-    }
-    recomputed = computeRunSummary(frames);
+    recomputed = computeRunSummary(
+      await decodeFrameParquet(buffer, FRAME_VERIFICATION_PARQUET_COLUMN_NAMES),
+    );
   } catch (error) {
     return { kind: "failed", error: `unreadable parquet: ${String(error)}` };
   }

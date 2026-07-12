@@ -9,7 +9,8 @@
  */
 
 import * as React from "react";
-import { Badge, Button, Card, Diagnostic, Input, Segmented, Spinner, Stat } from "@heimdall/ui";
+import Link from "next/link";
+import { Badge, Button, ButtonLink, Card, Diagnostic, Input, Segmented, Spinner, Stat } from "@heimdall/ui";
 import { uploadCapture } from "@/lib/upload/upload-run";
 import type { UploadFailure, UploadProgress, UploadResult, UploadSuccess } from "@/lib/upload/upload-run";
 import {
@@ -426,11 +427,9 @@ export function UploadClient() {
                   flexWrap: "wrap",
                 }}
               >
-                <a href="/" style={{ textDecoration: "none" }}>
-                  <Button variant="primary" iconRight={<ArrowRightIcon size={16} />}>
-                    Back to benchmarks
-                  </Button>
-                </a>
+                <ButtonLink as={Link} href="/" variant="primary" iconRight={<ArrowRightIcon size={16} />}>
+                  Back to benchmarks
+                </ButtonLink>
                 <Button variant="ghost" onClick={() => setMode({ kind: "idle" })}>
                   Upload another
                 </Button>

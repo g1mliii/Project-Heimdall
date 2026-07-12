@@ -95,8 +95,13 @@ describe("downsampleMinMax", () => {
   it("handles empty and degenerate windows without throwing", () => {
     const { times, values } = syntheticSeries(100);
     expect(downsampleMinMax(times, values, 50, 50, 100).x.length).toBe(0);
-    const flat = new Float64Array(1000); // all timestamps 0
-    const out = downsampleMinMax(flat, flat, 0, 1000, 10);
-    expect(out.x.length).toBeGreaterThan(0);
+    const timesWithNoSpan = new Float64Array(1000); // all timestamps 0
+    const valuesWithSpike = new Float64Array(1000).fill(10);
+    valuesWithSpike[120] = 2;
+    valuesWithSpike[800] = 60;
+
+    const out = downsampleMinMax(timesWithNoSpan, valuesWithSpike, 0, 1000, 10);
+    expect(out.raw).toBe(false);
+    expect(Array.from(out.y)).toEqual([2, 60]);
   });
 });

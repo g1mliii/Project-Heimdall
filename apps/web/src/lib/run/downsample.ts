@@ -60,8 +60,25 @@ export function downsampleMinMax(
   const t1 = times[end - 1]!;
   const span = t1 - t0;
   if (span <= 0) {
-    // Degenerate window (all identical timestamps): emit global min + max.
-    return { x: times.slice(start, start + 1), y: values.slice(start, start + 1), raw: true };
+    // Degenerate window (all identical timestamps): retain its extrema just as
+    // normal min/max bins do, rather than silently dropping a spike.
+    let minIndex = start;
+    let maxIndex = start;
+    for (let i = start + 1; i < end; i++) {
+      if (values[i]! < values[minIndex]!) minIndex = i;
+      if (values[i]! > values[maxIndex]!) maxIndex = i;
+    }
+    const first = Math.min(minIndex, maxIndex);
+    const second = Math.max(minIndex, maxIndex);
+    return {
+      x: second === first
+        ? times.slice(first, first + 1)
+        : Float64Array.from([times[first]!, times[second]!]),
+      y: second === first
+        ? values.slice(first, first + 1)
+        : Float64Array.from([values[first]!, values[second]!]),
+      raw: false,
+    };
   }
 
   // Per-bucket extrema, tracked by index so output stays in time order.

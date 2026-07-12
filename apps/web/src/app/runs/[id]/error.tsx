@@ -9,7 +9,9 @@ import { Button, Card, Diagnostic } from "@heimdall/ui";
 
 export default function RunError({ reset }: { error: Error; reset: () => void }) {
   return (
-    <div
+    <main
+      id="main-content"
+      tabIndex={-1}
       style={{
         maxWidth: "var(--container-prose)",
         margin: "0 auto",
@@ -28,6 +30,6 @@ export default function RunError({ reset }: { error: Error; reset: () => void })
           </Diagnostic>
         </Card.Body>
       </Card>
-    </div>
+    </main>
   );
 }

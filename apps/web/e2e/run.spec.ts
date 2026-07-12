@@ -171,6 +171,20 @@ test("missing/hidden runs 404 with the generic not-found page (§13.5)", async (
   await expect(page.getByRole("link", { name: "Upload a benchmark log" })).toBeVisible();
 });
 
+test("small screens reflow without horizontal overflow (§13)", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 900 });
+  await mockFramesFlow(page);
+  await page.goto(RUN_URL);
+  await readyChart(page);
+
+  await expect(page.locator("nav[aria-label='Primary navigation']")).toBeHidden();
+  await expect(page.getByRole("link", { name: "Heimdall home" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Upload log" })).toBeVisible();
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+  ).toBe(true);
+});
+
 test("@visual run page matches the design reference layout", async ({ page }) => {
   await mockFramesFlow(page);
   await page.goto(RUN_URL);

@@ -14,7 +14,7 @@ import "@testing-library/jest-dom/vitest";
 import { makeSyntheticFrames } from "@heimdall/shared";
 import { buildFrameSeries } from "@/lib/run/frame-series";
 import { findStutterIndices } from "@/lib/run/stutters";
-import { bucketStutterIndices, FrameTimeChart } from "./FrameTimeChart";
+import { FrameTimeChart } from "./FrameTimeChart";
 
 afterEach(cleanup);
 
@@ -30,6 +30,7 @@ describe("FrameTimeChart (jsdom smoke)", () => {
       screen.getByRole("img", { name: "Frame-time progression chart" }),
     ).toBeInTheDocument();
     expect(container.querySelector("[data-chart-overlay]")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: /Frame-time chart controls/ })).toHaveAttribute("tabindex", "0");
     // Zero-width container → no plot, so the ready flag must stay pending.
     expect(container.querySelector('[data-chart-state="pending"]')).toBeInTheDocument();
     expect(container.querySelectorAll("[data-axis]").length).toBe(0);
@@ -46,21 +47,5 @@ describe("FrameTimeChart (jsdom smoke)", () => {
     rerender(
       <FrameTimeChart series={empty} stutterIndices={new Uint32Array(0)} unit="ms" avgFps={60} />,
     );
-  });
-});
-
-describe("bucketStutterIndices", () => {
-  it("draws no more than one marker per horizontal bucket", () => {
-    const markers = bucketStutterIndices(
-      new Uint32Array([0, 1, 2, 3]),
-      new Float64Array([0, 1, 2, 10]),
-      0,
-      4,
-      0,
-      10,
-      2,
-    );
-
-    expect([...markers]).toEqual([0, 3]);
   });
 });

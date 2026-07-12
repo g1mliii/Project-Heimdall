@@ -32,6 +32,27 @@ describe("buildFrameSeries", () => {
     expect(series.totalDurationMs).toBe(22);
   });
 
+  it("reconstructs strictly increasing chart times from repeated timestamps", () => {
+    const series = buildFrameSeries([
+      { timeMs: 0, frameTimeMs: 10 },
+      { timeMs: 0, frameTimeMs: 12 },
+      { timeMs: 0, frameTimeMs: 8 },
+    ]);
+
+    expect(Array.from(series.times)).toEqual([0, 10, 22]);
+    expect(series.totalDurationMs).toBe(30);
+  });
+
+  it("preserves an advancing source timestamp even when a prior frame overlaps it", () => {
+    const series = buildFrameSeries([
+      { timeMs: 0, frameTimeMs: 100 },
+      { timeMs: 10, frameTimeMs: 10 },
+    ]);
+
+    expect(Array.from(series.times)).toEqual([0, 10]);
+    expect(series.totalDurationMs).toBe(100);
+  });
+
   it("handles an empty frame list", () => {
     const series = buildFrameSeries([]);
     expect(series.count).toBe(0);

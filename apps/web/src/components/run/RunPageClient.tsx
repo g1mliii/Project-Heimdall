@@ -10,10 +10,10 @@
 
 import * as React from "react";
 import { Card, Diagnostic, Button, Segmented, Spinner } from "@heimdall/ui";
-import type { FrameSample, Run } from "@heimdall/shared";
+import { RUN_STATUS, type FrameSample, type Run } from "@heimdall/shared";
 import { loadRunFrames, type ApiResult } from "@/lib/api/client";
 import { buildFrameSeries, type FrameSeries } from "@/lib/run/frame-series";
-import { findStutterIndices } from "@/lib/run/stutters";
+import { findStutterIndices, medianFrameTimeMs } from "@/lib/run/stutters";
 import { CHART_UNITS, type ChartUnit } from "@/lib/run/units";
 import { FrameTimeChart } from "./chart/FrameTimeChart";
 import { RunHeader } from "./RunHeader";
@@ -21,8 +21,9 @@ import { RunStatTiles } from "./RunStatTiles";
 import { SmoothnessBars } from "./SmoothnessBars";
 import { DiagnosticsCard } from "./DiagnosticsCard";
 import { HardwareCard } from "./HardwareCard";
+import styles from "./RunPageClient.module.css";
 
-export type FramesLoader = (id: string) => Promise<ApiResult<FrameSample[]>>;
+export type FramesLoader = (id: string, signal?: AbortSignal) => Promise<ApiResult<FrameSample[]>>;
 
 type FramesState =
   | { kind: "loading" }
@@ -31,10 +32,11 @@ type FramesState =
   | { kind: "ready"; series: FrameSeries; stutterIndices: Uint32Array };
 
 const CHART_WELL_MIN_HEIGHT = 260;
+const defaultFramesLoader: FramesLoader = (id, signal) => loadRunFrames(id, undefined, signal);
 
 export function RunPageClient({
   run,
-  loadFrames = loadRunFrames,
+  loadFrames = defaultFramesLoader,
 }: {
   run: Run;
   loadFrames?: FramesLoader;
@@ -45,51 +47,54 @@ export function RunPageClient({
 
   React.useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     setFrames({ kind: "loading" });
-    void loadFrames(run.id).then((result) => {
-      if (cancelled) return;
-      if (result.ok) {
-        const series = buildFrameSeries(result.data);
-        // Reuse the canonical median already on the summary — no re-sort.
-        const stutterIndices = findStutterIndices(series.frameTimes, run.summary.frameTimeP50Ms);
-        setFrames({ kind: "ready", series, stutterIndices });
-      } else if (result.code === "not-finalized") {
-        setFrames({ kind: "not-finalized" });
-      } else {
-        setFrames({ kind: "error", message: result.message });
-      }
-    });
+    void loadFrames(run.id, controller.signal)
+      .then((result) => {
+        if (cancelled) return;
+        if (result.ok) {
+          const series = buildFrameSeries(result.data);
+          // Pending summaries originate with the uploader. Only a validated run
+          // may reuse its server-recomputed median; every other status derives
+          // the threshold from the decoded frames.
+          const medianMs =
+            run.status === RUN_STATUS.validated
+              ? run.summary.frameTimeP50Ms
+              : medianFrameTimeMs(series.frameTimes);
+          const stutterIndices = findStutterIndices(series.frameTimes, medianMs);
+          setFrames({ kind: "ready", series, stutterIndices });
+        } else if (result.code === "not-finalized") {
+          setFrames({ kind: "not-finalized" });
+        } else {
+          setFrames({ kind: "error", message: result.message });
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setFrames({
+            kind: "error",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [run.id, loadFrames, attempt]);
+  }, [run.id, run.status, run.summary.frameTimeP50Ms, loadFrames, attempt]);
 
   return (
-    <div
-      style={{
-        maxWidth: "var(--container-max)",
-        margin: "0 auto",
-        padding: "var(--space-8) var(--space-6) var(--space-16)",
-      }}
-    >
+    <main id="main-content" tabIndex={-1} className={styles.page}>
       <RunHeader run={run} />
       <RunStatTiles summary={run.summary} />
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "minmax(0, 1fr) 21.25rem",
-          gap: "var(--space-5)",
-          marginTop: "var(--space-5)",
-          alignItems: "start",
-        }}
-      >
+      <div className={styles.mainGrid}>
         {/* Frame-time chart card */}
-        <Card>
+        <Card className={styles.chartColumn}>
           <Card.Header
             title="Frame-time progression"
             actions={
-              <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
+              <div className={styles.chartActions}>
                 <span
                   style={{
                     display: "inline-flex",
@@ -183,7 +188,7 @@ export function RunPageClient({
         </Card>
 
         {/* Right column: diagnostics + hardware */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-5)" }}>
+        <div className={styles.sideColumn}>
           <DiagnosticsCard />
           <HardwareCard
             hardware={run.hardware}
@@ -191,6 +196,6 @@ export function RunPageClient({
           />
         </div>
       </div>
-    </div>
+    </main>
   );
 }

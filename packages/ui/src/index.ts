@@ -26,3 +26,4 @@ export { Tooltip, type TooltipProps } from "./components/feedback/Tooltip";
 export { Spinner, type SpinnerProps } from "./components/feedback/Spinner";
 
 export { Tabs, type TabsProps, type TabItem } from "./components/navigation/Tabs";
+export { NavTabs, type NavTabsProps, type NavTabItem } from "./components/navigation/NavTabs";

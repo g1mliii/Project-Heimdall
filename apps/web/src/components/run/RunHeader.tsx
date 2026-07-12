@@ -75,7 +75,7 @@ export function RunHeader({ run }: { run: Run }) {
         flexWrap: "wrap",
       }}
     >
-      <div style={{ flex: 1, minWidth: 280 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
         <div
           style={{
             display: "flex",
@@ -96,12 +96,21 @@ export function RunHeader({ run }: { run: Run }) {
           {techLabel && <Badge tone="brand">{techLabel}</Badge>}
           <Badge tone="neutral">{VISIBILITY_LABELS[run.visibility]}</Badge>
         </div>
-        <h1 style={{ font: "var(--type-title)", color: "var(--fg-1)" }}>{run.game}</h1>
-        <p style={{ font: "var(--type-body)", color: "var(--fg-2)", marginTop: "var(--space-1)" }}>
+        <h1 style={{ font: "var(--type-title)", color: "var(--fg-1)", overflowWrap: "anywhere" }}>
+          {run.game}
+        </h1>
+        <p
+          style={{
+            font: "var(--type-body)",
+            color: "var(--fg-2)",
+            marginTop: "var(--space-1)",
+            overflowWrap: "anywhere",
+          }}
+        >
           {subtitle(run)}
         </p>
       </div>
-      <div style={{ display: "flex", gap: "var(--space-2)" }}>
+      <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: "var(--space-2)" }}>
         <Button
           variant="secondary"
           disabled
@@ -121,6 +130,8 @@ export function RunHeader({ run }: { run: Run }) {
         <Button
           variant="primary"
           onClick={() => void share()}
+          aria-live="polite"
+          aria-atomic="true"
           iconLeft={shareState === "copied" ? <CheckIcon size={16} /> : <ShareIcon size={16} />}
         >
           {shareState === "copied"

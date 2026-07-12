@@ -3,7 +3,7 @@ import { computeRunSummary } from "@heimdall/parsers";
 import { makeSyntheticFrames, SYNTHETIC_SPIKE_COUNT } from "@heimdall/shared";
 
 import { buildFrameSeries } from "./frame-series";
-import { findStutterIndices, medianFrameTimeMs } from "./stutters";
+import { bucketStutterIndices, findStutterIndices, medianFrameTimeMs } from "./stutters";
 
 describe("findStutterIndices", () => {
   it("agrees exactly with computeRunSummary on the synthetic fixture", () => {
@@ -53,5 +53,35 @@ describe("medianFrameTimeMs", () => {
     const input = Float64Array.from([30, 10, 20]);
     medianFrameTimeMs(input);
     expect(Array.from(input)).toEqual([30, 10, 20]);
+  });
+});
+
+describe("bucketStutterIndices", () => {
+  it("draws no more than one marker per horizontal bucket", () => {
+    const markers = bucketStutterIndices(
+      new Uint32Array([0, 1, 2, 3]),
+      new Float64Array([0, 1, 2, 10]),
+      0,
+      4,
+      0,
+      10,
+      2,
+    );
+
+    expect([...markers]).toEqual([0, 3]);
+  });
+
+  it("keeps one stutter from every occupied bucket when spikes are clustered", () => {
+    const markers = bucketStutterIndices(
+      new Uint32Array([0, 1, 2, 3, 4, 5, 6, 7]),
+      new Float64Array([0, 1, 2, 3, 4, 5, 6, 9]),
+      0,
+      8,
+      0,
+      10,
+      4,
+    );
+
+    expect([...markers]).toEqual([0, 3, 5, 7]);
   });
 });
