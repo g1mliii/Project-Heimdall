@@ -7,22 +7,35 @@
  */
 
 import { expect, test, type Page, type Route } from "@playwright/test";
-import { E2E_RUN_ID, e2eFixtureRun, e2eParquetBytes } from "./run-fixture";
+import {
+  E2E_RUN_ID,
+  E2E_VRAM_RUN_ID,
+  e2eDiagnostics,
+  e2eFixtureRun,
+  e2eParquetBytes,
+  e2eVramDiagnostics,
+  e2eVramFrames,
+} from "./run-fixture";
 
 const RUN_URL = `/runs/${E2E_RUN_ID}`;
+const VRAM_RUN_URL = `/runs/${E2E_VRAM_RUN_ID}`;
 const FRAMES_OBJECT_URL = "https://r2.invalid/frames.parquet";
 
 const R2_CORS = { "access-control-allow-origin": "http://localhost:3000" };
 
-async function mockFramesFlow(page: Page) {
-  await page.route(`**/api/runs/${E2E_RUN_ID}/frames`, (route) =>
+async function mockFramesFlow(
+  page: Page,
+  runId = E2E_RUN_ID,
+  getParquet = e2eParquetBytes,
+) {
+  await page.route(`**/api/runs/${runId}/frames`, (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({ url: FRAMES_OBJECT_URL, expiresInSeconds: 300 }),
     }),
   );
-  const parquet = await e2eParquetBytes();
+  const parquet = await getParquet();
   await page.route(FRAMES_OBJECT_URL, (route: Route) =>
     route.fulfill({
       status: 200,
@@ -71,8 +84,24 @@ test("fixture run renders: badges, tiles, confidence, chart, stubs (§13)", asyn
   await expect(page.getByText("Avg GPU load")).toBeVisible();
   await expect(page.getByText("Peak VRAM")).toBeVisible();
 
-  // Diagnostics card ships as an honest stub until the rules engine exists.
-  await expect(page.getByText("Coming soon")).toBeVisible();
+  // Diagnostics card renders the real rules-engine findings for this run
+  // (RAM below rated + outdated driver), with a count badge.
+  await expect(page.getByText(`${e2eDiagnostics.length} issues`)).toBeVisible();
+  await expect(page.getByText("RAM is running below its rated speed")).toBeVisible();
+  await expect(page.getByText("GPU driver is older than recommended")).toBeVisible();
+  await expect(page.getByText("Coming soon")).toHaveCount(0);
+});
+
+test("VRAM-stutter fixture surfaces its warning on the run page (§15.1, §16)", async ({ page }) => {
+  await mockFramesFlow(page, E2E_VRAM_RUN_ID, () => e2eParquetBytes(e2eVramFrames));
+  await page.goto(VRAM_RUN_URL);
+  await readyChart(page);
+
+  await expect(page.getByText("VRAM saturation is causing stutters")).toBeVisible();
+  await expect(
+    page.getByText("Lower texture quality or resolution to free up VRAM headroom."),
+  ).toBeVisible();
+  await expect(page.getByText(`${e2eVramDiagnostics.length} issue`)).toBeVisible();
 });
 
 test("ms/FPS toggle re-labels the y axis through the same scale (§13.1)", async ({ page }) => {
@@ -191,8 +220,9 @@ test("@visual run page matches the design reference layout", async ({ page }) =>
   await readyChart(page);
   await page.evaluate(() => document.fonts.ready);
 
-  // Baseline is eyeballed against design/ui_kits/web/RunPage.jsx; the
-  // diagnostics card intentionally shows the coming-soon stub until the
-  // rules engine ships (regenerate the baseline in that phase).
+  // Baseline is eyeballed against design/ui_kits/web/RunPage.jsx. The
+  // diagnostics card now renders the real Phase 6 findings; regenerate this
+  // baseline with `playwright test --update-snapshots` (needs Docker for the
+  // e2e Postgres) whenever the fixture's findings change.
   await expect(page).toHaveScreenshot("run-page.png", { fullPage: true });
 });

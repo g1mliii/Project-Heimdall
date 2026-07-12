@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { RUN_STATUS, RUN_VISIBILITY, validRun, validSummary } from "@heimdall/shared";
 import type { Run } from "@heimdall/shared";
-import { insertRun, readRun } from "../db";
+import { insertRun, readRun, readRunForVerification, readRunRequiredDriver } from "../db";
 import { framesUploadObjectKey, stagingCleanupNotBefore } from "../r2";
 import { createTestDb, testDbAvailable, type TestDb } from "../testing/test-db";
 import { consumeRateLimit, pruneRateLimits } from "./rate-limit";
@@ -292,7 +292,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       const corrected = { ...validSummary, avgFps: 100.5, stutterCount: 7 };
       const claimed = await claimNextVerificationJob({}, db.pool);
       expect(claimed?.runId).toBe("run_job_0005");
-      await applyVerificationResult("run_job_0005", corrected, "flagged", false, claimed!, db.pool);
+      await applyVerificationResult("run_job_0005", corrected, "flagged", false, [], claimed!, db.pool);
       await completeVerificationJob(claimed!.id, claimed!.attempts, db.pool);
       const run = await readRun("run_job_0005", db.pool);
       expect(run?.status).toBe(RUN_STATUS.flagged);
@@ -320,6 +320,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
         { ...validSummary, avgFps: 333 },
         "flagged",
         null,
+        [],
         first!,
         db.pool,
       );
@@ -332,6 +333,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
         validSummary,
         "validated",
         null,
+        [],
         second!,
         db.pool,
       );
@@ -368,6 +370,39 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
   });
 
   describe("canonical resolution (§11.9)", () => {
+    it("suppresses a stale curated driver requirement (§15.4)", async () => {
+      const id = "run_driver_requirement_freshness";
+      const gameId = await resolveGameId("capframex", "Cyberpunk 2077", db.pool);
+      expect(gameId).toBeTruthy();
+
+      await insertRun(pendingRun(id), db.pool);
+      expect(
+        await finalizeRun(
+          {
+            id,
+            framesObjectKey: `runs/${id}.parquet`,
+            stagingCleanup: stagingCleanup(id),
+            visibility: RUN_VISIBILITY.unlisted,
+            managementTokenHash: null,
+            signature: null,
+            gameId,
+            gpuHardwareId: null,
+            cpuHardwareId: null,
+          },
+          db.pool,
+        ),
+      ).toBe(true);
+      expect(await readRunRequiredDriver(id, db.pool)).toBe("566.36");
+      expect((await readRunForVerification(id, db.pool))?.requiredDriver).toBe("566.36");
+
+      await db.pool.query(
+        "update games set required_driver_checked_at = now() - interval '31 days' where id = $1",
+        [gameId],
+      );
+      expect(await readRunRequiredDriver(id, db.pool)).toBeNull();
+      expect((await readRunForVerification(id, db.pool))?.requiredDriver).toBeNull();
+    });
+
     it("match-or-creates a game and reuses it across alias variants", async () => {
       const first = await resolveGameId("capframex", "Cyberpunk 2077", db.pool);
       expect(first).toBeTruthy();
@@ -419,6 +454,70 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       // A CPU with the same name string would be a separate canonical row.
       const cpu = await resolveHardwareId("cpu", "capframex", "AMD Ryzen 7 7800X3D", null, db.pool);
       expect(cpu).not.toBe(gpu);
+    });
+
+    it("keeps same-source CPU and GPU aliases independently addressable", async () => {
+      const label = "AMD Ryzen 7 8700G";
+      const gpu = await resolveHardwareId("gpu", "capframex", label, "amd", db.pool);
+      const cpu = await resolveHardwareId("cpu", "capframex", label, null, db.pool);
+
+      expect(gpu).toBeTruthy();
+      expect(cpu).toBeTruthy();
+      expect(cpu).not.toBe(gpu);
+      expect(await resolveHardwareId("gpu", "capframex", label, "amd", db.pool)).toBe(gpu);
+      expect(await resolveHardwareId("cpu", "capframex", label, null, db.pool)).toBe(cpu);
+
+      const aliases = await db.pool.query<{ alias_kind: string; hardware_kind: string }>(
+        `select ha.kind as alias_kind, h.kind as hardware_kind
+           from hardware_aliases ha
+           join hardware h on h.id = ha.hardware_id
+          where ha.source = 'capframex'
+            and ha.normalized_name = 'amd ryzen 7 8700g'
+          order by ha.kind`,
+      );
+      expect(aliases.rows).toEqual([
+        { alias_kind: "cpu", hardware_kind: "cpu" },
+        { alias_kind: "gpu", hardware_kind: "gpu" },
+      ]);
+    });
+
+    it("rejects a second same-kind mapping for one source alias", async () => {
+      const label = "AMD Radeon 780M";
+      const original = await resolveHardwareId("gpu", "capframex", label, "amd", db.pool);
+      expect(original).toBeTruthy();
+
+      const competing = await db.pool.query<{ id: string }>(
+        `insert into hardware (kind, vendor, canonical_name)
+         values ('gpu', 'amd', 'Competing Radeon 780M')
+         returning id`,
+      );
+
+      await expect(
+        db.pool.query(
+          `insert into hardware_aliases (hardware_id, kind, source, raw_name, normalized_name)
+           values ($1, $2, $3, $4, $5)`,
+          [competing.rows[0]!.id, "gpu", "capframex", label, "amd radeon 780m"],
+        ),
+      ).rejects.toMatchObject({ code: "23505" });
+    });
+
+    it("rejects an alias kind that disagrees with its hardware row", async () => {
+      const cpu = await resolveHardwareId(
+        "cpu",
+        "capframex",
+        "AMD Ryzen 5 7600",
+        null,
+        db.pool,
+      );
+      expect(cpu).toBeTruthy();
+
+      await expect(
+        db.pool.query(
+          `insert into hardware_aliases (hardware_id, kind, source, raw_name, normalized_name)
+           values ($1, $2, $3, $4, $5)`,
+          [cpu, "gpu", "curation", "Mismatched alias", "mismatched alias"],
+        ),
+      ).rejects.toMatchObject({ code: "23503" });
     });
 
     it("returns null (non-fatal) for blank names", async () => {

@@ -57,14 +57,18 @@ function hasTimeRemaining(deadlineAt?: number): boolean {
 }
 
 export async function drainJobs(
-  { maxJobs = 10, budgetMs = 25_000 }: { maxJobs?: number; budgetMs?: number } = {},
+  {
+    maxJobs = 10,
+    budgetMs = 25_000,
+    deadlineAt,
+  }: { maxJobs?: number; budgetMs?: number; deadlineAt?: number } = {},
   deps: DrainDeps = realDeps(),
 ): Promise<DrainResult> {
-  const startedAt = Date.now();
+  const deadline = deadlineAt ?? Date.now() + budgetMs;
   const result: DrainResult = { claimed: 0, validated: 0, flagged: 0, retried: 0, failed: 0 };
   const attemptedThisPass = new Set<string>();
 
-  while (result.claimed < maxJobs && Date.now() - startedAt < budgetMs) {
+  while (result.claimed < maxJobs && Date.now() < deadline) {
     // Jobs this pass already retried are excluded from the claim — retry
     // belongs to a LATER pass, but one transiently failing job at the head
     // of the queue must not starve every younger job behind it.
@@ -184,6 +188,9 @@ export interface MaintenancePassResult extends DrainResult {
   prunedRateLimitWindows: number;
 }
 
+/** Keep cleanup queues moving even when verification work is continuously backlogged. */
+const MAINTENANCE_RESERVE_MS = 5_000;
+
 /**
  * The full §11.5/§11.11 housekeeping pass — drain jobs, reap stale and
  * finalized staging objects, and prune rate-limit windows. Both entry points
@@ -196,11 +203,29 @@ export async function runMaintenancePass(
 ): Promise<MaintenancePassResult> {
   const { maxJobs = 10, budgetMs = 25_000 } = opts;
   const deadlineAt = Date.now() + budgetMs;
-  const drained = await drainJobs({ maxJobs, budgetMs }, deps);
-  const cleanedStalePending = await cleanupStalePending(deps, { deadlineAt });
-  const cleanedFinalizedStaging = await cleanupFinalizedStaging(deps, { deadlineAt });
-  const prunedRateLimitWindows = hasTimeRemaining(deadlineAt)
-    ? await pruneRateLimits(deps.db)
-    : 0;
+  // Verification can use the bulk of a pass, but it must not consume all of
+  // it: otherwise a sustained ingest backlog starves staging-object cleanup
+  // and rate-limit pruning indefinitely.
+  const maintenanceReserveMs = Math.min(MAINTENANCE_RESERVE_MS, Math.ceil(budgetMs / 2));
+  // Start every durable lane immediately. Deadline checks prevent cleanup from
+  // expanding without bound, while concurrent lanes mean a slow R2/Parquet
+  // verification cannot delay cleanup until after its own deadline.
+  let drained: DrainResult;
+  let cleanedStalePending: number;
+  let cleanedFinalizedStaging: number;
+  let prunedRateLimitWindows: number;
+  if (hasTimeRemaining(deadlineAt)) {
+    [drained, cleanedStalePending, cleanedFinalizedStaging, prunedRateLimitWindows] = await Promise.all([
+      drainJobs({ maxJobs, deadlineAt: deadlineAt - maintenanceReserveMs }, deps),
+      cleanupStalePending(deps, { deadlineAt }),
+      cleanupFinalizedStaging(deps, { deadlineAt }),
+      pruneRateLimits(deps.db),
+    ]);
+  } else {
+    drained = { claimed: 0, validated: 0, flagged: 0, retried: 0, failed: 0 };
+    cleanedStalePending = 0;
+    cleanedFinalizedStaging = 0;
+    prunedRateLimitWindows = 0;
+  }
   return { ...drained, cleanedStalePending, cleanedFinalizedStaging, prunedRateLimitWindows };
 }

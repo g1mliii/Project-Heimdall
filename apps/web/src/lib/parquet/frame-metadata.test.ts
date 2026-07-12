@@ -34,9 +34,8 @@ describe("computeFrameParquetSummary", () => {
     readChunks.mockClear();
     readObjects.mockClear();
 
-    await expect(computeFrameParquetSummary(parquetBytes())).resolves.toEqual(
-      computeRunSummary(validFrames),
-    );
+    const { summary } = await computeFrameParquetSummary(parquetBytes());
+    expect(summary).toEqual(computeRunSummary(validFrames));
 
     expect(readChunks).toHaveBeenCalledTimes(FRAME_PARQUET_COLUMN_NAMES.length);
     for (const [index, columnName] of FRAME_PARQUET_COLUMN_NAMES.entries()) {
@@ -64,7 +63,8 @@ describe("computeFrameParquetSummary", () => {
     padded.set(bytes, 1);
     const view = Buffer.from(padded.buffer, 1, bytes.byteLength);
 
-    await expect(computeFrameParquetSummary(view)).resolves.toEqual(computeRunSummary(validFrames));
+    const { summary } = await computeFrameParquetSummary(view);
+    expect(summary).toEqual(computeRunSummary(validFrames));
   });
 
   it("matches the canonical frame-object summary over varied valid captures", async () => {
@@ -73,10 +73,26 @@ describe("computeFrameParquetSummary", () => {
         seed,
         count: 10 + ((seed * 7919) % 500),
       });
-      await expect(computeFrameParquetSummary(parquetBytes(frames))).resolves.toEqual(
-        computeRunSummary(frames),
-      );
+      const { summary } = await computeFrameParquetSummary(parquetBytes(frames));
+      expect(summary).toEqual(computeRunSummary(frames));
     }
+  });
+
+  it("retains the diagnostics sensor columns present in the capture", async () => {
+    const { diagnosticsColumns } = await computeFrameParquetSummary(parquetBytes());
+    expect(diagnosticsColumns.frameTimeMs.length).toBe(validFrames.length);
+    // validFrames carry full sensors, so all three diagnostics columns survive.
+    expect(diagnosticsColumns.vramUsedMb?.[0]).toBe(validFrames[0]!.vramUsedMb);
+    expect(diagnosticsColumns.gpuLoadPct?.[0]).toBe(validFrames[0]!.gpuLoadPct);
+    expect(diagnosticsColumns.cpuLoadPct?.[0]).toBe(validFrames[0]!.cpuLoadPct);
+  });
+
+  it("drops diagnostics sensor columns a capture never reported", async () => {
+    const { diagnosticsColumns } = await computeFrameParquetSummary(parquetBytes(missingSensorFrames));
+    expect(diagnosticsColumns.vramUsedMb).toBeUndefined();
+    expect(diagnosticsColumns.gpuLoadPct).toBeUndefined();
+    expect(diagnosticsColumns.cpuLoadPct).toBeUndefined();
+    expect(diagnosticsColumns.frameTimeMs.length).toBe(missingSensorFrames.length);
   });
 });
 

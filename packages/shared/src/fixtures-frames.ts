@@ -124,6 +124,7 @@ export const syntheticRunBase: Omit<Run, "summary"> = {
     resolution: "2560x1440",
   },
   generatedFrameTech: "dlss3",
+  diagnostics: [],
   schemaVersion: CURRENT_SCHEMA_VERSION,
   parserVersion: "capframex@1.0.0",
   createdAt: "2026-06-01T12:00:00.000Z",

@@ -116,10 +116,59 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     expect(run?.status).toBe(RUN_STATUS.validated);
     // The recompute over DOUBLE columns is bit-identical to the client's.
     expect(run?.summary).toEqual(honestSummary);
+    // Clean, GPU-bound run with healthy RAM and no curated driver: no findings
+    // (§16.2 — no false positives, verified end-to-end).
+    expect(run?.diagnostics).toEqual([]);
 
     // Idempotent: nothing left to drain.
     const again = await drainJobs({}, realDeps(async () => parquetBytes));
     expect(again.claimed).toBe(0);
+  });
+
+  it("produces and persists diagnostics; a reclaimed retry replaces, never duplicates", async () => {
+    const id = "run_wk_diagnostics";
+    await setupFinalizedRun(
+      id,
+      runFixture(id, {
+        // RAM below rated fires without any frame sensors — deterministic at the
+        // worker level regardless of the (GPU-bound) synthetic frames.
+        hardware: { ...validRun.hardware, ramSpeedMtps: 4800, ramRatedSpeedMtps: 6000 },
+      }),
+    );
+
+    await drainJobs({}, realDeps(async () => parquetBytes));
+    const run = await readRun(id, db.pool);
+    expect(run?.status).toBe(RUN_STATUS.validated);
+    expect(run?.diagnostics.map((d) => d.code)).toEqual(["ram-below-rated"]);
+    const finding = run!.diagnostics[0]!;
+    expect(finding.severity).toBe("warn");
+    expect(finding.detail).toContain("4800");
+
+    const countRows = async () =>
+      (
+        await db.pool.query<{ n: number }>(
+          "select count(*)::int as n from diagnostics where run_id = $1",
+          [id],
+        )
+      ).rows[0]!.n;
+    expect(await countRows()).toBe(1);
+
+    // Model a worker that stored findings then died before marking its job done;
+    // the expired lease is reclaimed and the run re-verified.
+    await db.pool.query(
+      `update verification_jobs
+          set status = 'running',
+              locked_at = now() - interval '11 minutes',
+              not_before = now() - interval '1 minute'
+        where run_id = $1`,
+      [id],
+    );
+    await drainJobs({}, realDeps(async () => parquetBytes));
+
+    // Delete-then-insert keeps it at exactly one row across the retry.
+    expect(await countRows()).toBe(1);
+    const rerun = await readRun(id, db.pool);
+    expect(rerun?.diagnostics.map((d) => d.code)).toEqual(["ram-below-rated"]);
   });
 
   it("tampered client summary is corrected AND flagged (12.4)", async () => {

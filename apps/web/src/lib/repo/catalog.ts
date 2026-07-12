@@ -3,8 +3,8 @@
  * (alias-aware) and map GPU/CPU display strings to canonical hardware rows.
  *
  * Race-safe by construction: creates use `on conflict do nothing` + re-select,
- * leaning on the unique keys from 0001/0004 (games.slug, game_aliases /
- * hardware_aliases (source, normalized_name), hardware (kind,
+ * leaning on the unique keys from 0001/0004 (games.slug, game_aliases,
+ * hardware_aliases (source, normalized_name, kind), hardware (kind,
  * lower(canonical_name))). Callers treat failures as non-fatal — a run always
  * keeps its raw strings; canonical ids are enrichment, not a gate.
  */
@@ -16,18 +16,23 @@ import { query, getPool, type Queryable } from "../db";
  * The alias-lookup → canonical-lookup → insert-on-conflict → re-select →
  * record-alias state machine, shared by games and hardware so a fix to the
  * race-recovery or alias-recording logic can never drift between the two.
- * Every step returns ids as bigint-as-string.
+ * Alias reads prefer the exact capture source but fall back to another source
+ * in one indexed query; every step returns ids as bigint-as-string.
  */
 async function matchOrCreate(steps: {
-  findAlias(): Promise<string | undefined>;
+  findAlias(): Promise<{ id: string; exactSource: boolean } | undefined>;
   findCanonical(): Promise<string | undefined>;
   insertCanonical(): Promise<string | undefined>;
   recordAlias(id: string): Promise<void>;
 }): Promise<string | null> {
   const aliasHit = await steps.findAlias();
   if (aliasHit) {
-    await steps.recordAlias(aliasHit);
-    return aliasHit;
+    // Avoid a no-op upsert for the normal repeated-capture path. A hit from a
+    // different source records this spelling once, then becomes exact too.
+    if (!aliasHit.exactSource) {
+      await steps.recordAlias(aliasHit.id);
+    }
+    return aliasHit.id;
   }
 
   const id =
@@ -65,14 +70,18 @@ export async function resolveGameId(
   const slug = slugifyGameName(rawName);
 
   return matchOrCreate({
-    findAlias: async () =>
-      (
-        await query<{ game_id: string }>(
-          "select game_id from game_aliases where normalized_name = $1 limit 1",
-          [normalized],
-          db,
-        )
-      )[0]?.game_id,
+    findAlias: async () => {
+      const row = (await query<{ game_id: string; exact_source: boolean }>(
+        `select game_id, source = $1 as exact_source
+           from game_aliases
+          where normalized_name = $2
+          order by (source = $1) desc
+          limit 1`,
+        [source, normalized],
+        db,
+      ))[0];
+      return row ? { id: row.game_id, exactSource: row.exact_source } : undefined;
+    },
     findCanonical: async () =>
       firstId(
         await query<{ id: string }>(
@@ -126,18 +135,19 @@ export async function resolveHardwareId(
     );
 
   return matchOrCreate({
-    findAlias: async () =>
-      (
-        await query<{ hardware_id: string }>(
-          `select ha.hardware_id
+    findAlias: async () => {
+      const row = (await query<{ hardware_id: string; exact_source: boolean }>(
+        `select ha.hardware_id, ha.source = $1 as exact_source
              from hardware_aliases ha
-             join hardware h on h.id = ha.hardware_id
-            where ha.normalized_name = $1 and h.kind = $2
+             join hardware h on h.id = ha.hardware_id and h.kind = ha.kind
+            where ha.normalized_name = $2 and ha.kind = $3
+            order by (ha.source = $1) desc
             limit 1`,
-          [normalized, kind],
-          db,
-        )
-      )[0]?.hardware_id,
+        [source, normalized, kind],
+        db,
+      ))[0];
+      return row ? { id: row.hardware_id, exactSource: row.exact_source } : undefined;
+    },
     findCanonical,
     insertCanonical: async () =>
       firstId(
@@ -152,10 +162,10 @@ export async function resolveHardwareId(
       ),
     recordAlias: async (hardwareId) => {
       await db.query(
-        `insert into hardware_aliases (hardware_id, source, raw_name, normalized_name)
-         values ($1, $2, $3, $4)
-         on conflict (source, normalized_name) do nothing`,
-        [hardwareId, source, rawName, normalized],
+        `insert into hardware_aliases (hardware_id, kind, source, raw_name, normalized_name)
+         values ($1, $2, $3, $4, $5)
+         on conflict (source, normalized_name, kind) do nothing`,
+        [hardwareId, kind, source, rawName, normalized],
       );
     },
   });

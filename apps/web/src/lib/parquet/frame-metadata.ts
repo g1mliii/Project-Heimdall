@@ -5,6 +5,8 @@
 
 import type { FileMetaData } from "hyparquet";
 import {
+  DIAGNOSTIC_FRAME_PARQUET_COLUMNS,
+  DIAGNOSTIC_FRAME_SENSOR_FIELDS,
   FRAME_PARQUET_COLUMNS,
   INGEST_LIMITS,
   assertFrameParquetTimeOrder,
@@ -14,6 +16,8 @@ import {
   parseOptionalFrameParquetNumber,
 } from "@heimdall/shared";
 import type { RunSummary } from "@heimdall/shared";
+import type { DiagnosticFrameSensorField } from "@heimdall/shared";
+import type { DiagnosticsFrameColumns } from "@heimdall/parsers";
 import { buildFrameSeriesFromColumns, type FrameSeries } from "../run/frame-series";
 
 export const FRAME_PARQUET_COLUMN_NAMES = FRAME_PARQUET_COLUMNS.map((column) => column.name);
@@ -165,17 +169,37 @@ async function readFrameParquetColumn(
   }
 }
 
+/** Sensor columns the diagnostics engine consumes (§15), derived from the shared Parquet contract. */
+const DIAGNOSTICS_SENSOR_COLUMNS = new Map<string, DiagnosticFrameSensorField>(
+  DIAGNOSTIC_FRAME_PARQUET_COLUMNS.map(({ name, field }) => [name, field]),
+);
+
+/**
+ * Compact per-frame view for the diagnostics engine, retained alongside the
+ * canonical summary during the single Parquet pass. `frameTimeMs` is always
+ * present; a sensor column is present only when it carried ≥1 real value (an
+ * absent sensor is dropped so its rules no-op, §15.5).
+ */
+export type FrameParquetDiagnosticsColumns = DiagnosticsFrameColumns &
+  { frameTimeMs: Float64Array } &
+  Partial<Record<DiagnosticFrameSensorField, Float64Array>>;
+
+export interface FrameParquetSummary {
+  summary: RunSummary;
+  diagnosticsColumns: FrameParquetDiagnosticsColumns;
+}
+
 /**
  * Validate every persisted frame column while retaining only the scalar data
- * needed for the canonical summary. Columns decode one at a time because
- * hyparquet starts all requested columns concurrently; this keeps verification
- * bounded by the Parquet bytes, two Float64Arrays, and one temporary presence
- * bitmap instead of a full object graph (or every decoded column) for up to
- * 500,000 FrameSample rows.
+ * needed for the canonical summary AND the diagnostics engine. Columns decode
+ * one at a time because hyparquet starts all requested columns concurrently;
+ * this keeps verification bounded by the Parquet bytes and a handful of
+ * Float64Arrays (frame times + the three diagnostics sensors) instead of a full
+ * object graph for up to 500,000 FrameSample rows.
  */
 export async function computeFrameParquetSummary(
   input: ArrayBuffer | Uint8Array,
-): Promise<RunSummary> {
+): Promise<FrameParquetSummary> {
   const { parquetMetadata, parquetRead } = await import("hyparquet");
   const buffer = asArrayBuffer(input);
   const metadata = parquetMetadata(buffer);
@@ -183,6 +207,11 @@ export async function computeFrameParquetSummary(
   let times: Float64Array | undefined = new Float64Array(frameCount);
   const frameTimes = new Float64Array(frameCount);
   let generatedFrameCount = 0;
+
+  // Retained diagnostics sensor columns (NaN = value absent for that frame).
+  // Allocate lazily: sensor-sparse captures should not pay 12 MiB for three
+  // unused 500k-frame buffers.
+  const sensorArrays: Partial<Record<DiagnosticFrameSensorField, Float64Array>> = {};
 
   for (const expectedColumnName of FRAME_PARQUET_COLUMN_NAMES) {
     await readFrameParquetColumn(
@@ -204,7 +233,16 @@ export async function computeFrameParquetSummary(
           if (parseOptionalFrameParquetGenerated(value, row) === true) generatedFrameCount++;
           return;
         }
-        parseOptionalFrameParquetNumber(expectedColumnName, value, row);
+        const parsed = parseOptionalFrameParquetNumber(expectedColumnName, value, row);
+        const field = DIAGNOSTICS_SENSOR_COLUMNS.get(expectedColumnName);
+        if (field !== undefined && parsed !== undefined) {
+          let sensorArray = sensorArrays[field];
+          if (!sensorArray) {
+            sensorArray = new Float64Array(frameCount).fill(NaN);
+            sensorArrays[field] = sensorArray;
+          }
+          sensorArray[row] = parsed;
+        }
       },
     );
 
@@ -224,7 +262,15 @@ export async function computeFrameParquetSummary(
   // dependency behind the worker-only path so downloading chart frames does
   // not pull the parser bundle into the browser.
   const { computeRunSummaryFromFrameTimes } = await import("@heimdall/parsers");
-  return computeRunSummaryFromFrameTimes(frameTimes, generatedFrameCount);
+  const summary = computeRunSummaryFromFrameTimes(frameTimes, generatedFrameCount);
+
+  const diagnosticsColumns: FrameParquetDiagnosticsColumns = { frameTimeMs: frameTimes };
+  for (const field of DIAGNOSTIC_FRAME_SENSOR_FIELDS) {
+    const sensorArray = sensorArrays[field];
+    if (sensorArray) diagnosticsColumns[field] = sensorArray;
+  }
+
+  return { summary, diagnosticsColumns };
 }
 
 /**

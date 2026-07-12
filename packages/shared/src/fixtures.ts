@@ -70,6 +70,7 @@ export const validRun: Run = {
   hardware: { ...baseHardware },
   summary: validSummary,
   generatedFrameTech: "none",
+  diagnostics: [],
   schemaVersion: CURRENT_SCHEMA_VERSION,
   parserVersion: PARSER_VERSION,
   createdAt: "2026-06-01T12:00:00.000Z",

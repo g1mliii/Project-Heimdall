@@ -97,6 +97,10 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0009_staging_cleanup_jobs.sql",
       "0010_verification_job_backoff.sql",
       "0011_maintenance_hot_path_indexes.sql",
+      "0012_seed_required_drivers.sql",
+      "0013_diagnostics_columns.sql",
+      "0014_driver_requirement_freshness.sql",
+      "0015_hardware_alias_kind_aware.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
@@ -375,6 +379,12 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     const cascadeRun = fixtureRunWithId("run_cascade_0001");
     await insertRun(cascadeRun, pool);
     await pool.query("insert into verification_jobs (run_id) values ($1)", [cascadeRun.id]);
+    // Reconciled 0013 shape: title + detail (not the retired `message` column).
+    await pool.query(
+      `insert into diagnostics (run_id, code, severity, title, detail)
+       values ($1, 'ram-below-rated', 'warn', 'RAM below rated', 'Enable EXPO.')`,
+      [cascadeRun.id],
+    );
     await pool.query("delete from runs where id = $1", [cascadeRun.id]);
     const summaries = await pool.query(
       "select 1 from run_summaries where run_id = $1",
@@ -384,7 +394,21 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "select 1 from verification_jobs where run_id = $1",
       [cascadeRun.id],
     );
+    const diagnostics = await pool.query(
+      "select 1 from diagnostics where run_id = $1",
+      [cascadeRun.id],
+    );
     expect(summaries.rows).toEqual([]);
     expect(jobs.rows).toEqual([]);
+    expect(diagnostics.rows).toEqual([]);
+  });
+
+  it("persists and reads back total VRAM capacity (§15.1)", async () => {
+    const run = {
+      ...fixtureRunWithId("run_vram_total"),
+      hardware: { ...validRun.hardware, gpuVramTotalMb: 12_288 },
+    };
+    await insertRun(run, pool);
+    expect((await readRun(run.id, pool))?.hardware.gpuVramTotalMb).toBe(12_288);
   });
 });

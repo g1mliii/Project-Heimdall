@@ -44,6 +44,8 @@ export async function POST(request: Request): Promise<NextResponse> {
         body.generatedFrameTech === GENERATED_FRAME_TECH.none
           ? GENERATED_FRAME_TECH.unknown
           : body.generatedFrameTech,
+      // Rules engine runs at verification; a freshly created run has none yet.
+      diagnostics: [],
       schemaVersion: body.schemaVersion,
       parserVersion: body.parserVersion,
       createdAt: new Date().toISOString(),

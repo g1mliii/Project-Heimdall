@@ -6,7 +6,15 @@
 
 import { RUN_STATUS, RUN_VISIBILITY } from "@heimdall/shared";
 import type { Run } from "@heimdall/shared";
-import { query, getPool, readRun, type Queryable } from "../db";
+import { query, getPool, readDiagnostics, readRun, type Queryable } from "../db";
+
+function isPreAuthVisible(run: Pick<Run, "visibility" | "status">): boolean {
+  return (
+    run.visibility !== RUN_VISIBILITY.private &&
+    run.status !== RUN_STATUS.flagged &&
+    run.status !== RUN_STATUS.hidden
+  );
+}
 
 /**
  * Pre-auth read gate shared by GET /api/runs/:id and GET /api/runs/:id/frames:
@@ -14,17 +22,41 @@ import { query, getPool, readRun, type Queryable } from "../db";
  * probe can't confirm a private run exists. Ownership arrives in Phase 8 —
  * keep the gate HERE so both routes change together.
  */
-export async function readVisibleRun(id: string, db: Queryable = getPool()): Promise<Run | null> {
-  const run = await readRun(id, db);
-  if (
-    !run ||
-    run.visibility === RUN_VISIBILITY.private ||
-    run.status === RUN_STATUS.flagged ||
-    run.status === RUN_STATUS.hidden
-  ) {
+export async function readVisibleRun(
+  id: string,
+  db: Queryable = getPool(),
+  { withDiagnostics = true }: { withDiagnostics?: boolean } = {},
+): Promise<Run | null> {
+  // Gate before reading findings: private/flagged/hidden probes must not pay
+  // for a diagnostics query they can never observe.
+  const run = await readRun(id, db, { withDiagnostics: false });
+  if (!run || !isPreAuthVisible(run)) {
     return null;
   }
-  return run;
+  return withDiagnostics ? { ...run, diagnostics: await readDiagnostics(id, db) } : run;
+}
+
+/** Minimal pre-auth frame-read gate: the chart needs no summary or diagnostics. */
+export async function readVisibleFramesState(
+  id: string,
+  db: Queryable = getPool(),
+): Promise<{ framesObjectKey: string | null } | null> {
+  const rows = await query<{
+    visibility: Run["visibility"];
+    status: Run["status"];
+    frames_object_key: string | null;
+  }>(
+    `select visibility, status, frames_object_key
+       from runs
+      where id = $1`,
+    [id],
+    db,
+  );
+  const row = rows[0];
+  if (!row || !isPreAuthVisible(row)) {
+    return null;
+  }
+  return { framesObjectKey: row.frames_object_key };
 }
 
 export interface FinalizeRunParams {

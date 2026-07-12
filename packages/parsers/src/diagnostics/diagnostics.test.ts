@@ -1,0 +1,252 @@
+/**
+ * Rules-engine tests (§16). Each rule fires on a fixture crafted to trip exactly
+ * it; a clean synthetic run trips none (no false positives, §16.2); a
+ * sensor-absent input no-ops the sensor-gated rules (§15.5); and a generative
+ * pass proves the engine never throws.
+ */
+
+import { describe, expect, it } from "vitest";
+import {
+  makeSyntheticFrames,
+  type FrameSample,
+  type GpuVendor,
+  type HardwareSnapshot,
+} from "@heimdall/shared";
+import { computeRunSummary } from "../metrics";
+import { DIAGNOSTIC_RULES, framesToColumns, runDiagnostics, type DiagnosticsInput } from "./index";
+
+const baseHardware: HardwareSnapshot = {
+  gpu: "NVIDIA GeForce RTX 4070",
+  cpu: "AMD Ryzen 7 7800X3D",
+  gpuVendor: "nvidia",
+  ramGb: 32,
+  ramSpeedMtps: 6000,
+  ramRatedSpeedMtps: 6000,
+  gpuDriver: "566.36",
+};
+
+function inputFor(
+  frames: FrameSample[],
+  overrides: Partial<DiagnosticsInput> = {},
+): DiagnosticsInput {
+  return {
+    summary: computeRunSummary(frames),
+    hardware: baseHardware,
+    source: "capframex",
+    vendor: "nvidia",
+    frames: framesToColumns(frames),
+    ...overrides,
+  };
+}
+
+/** Baseline stream at ~10 ms with `stutterMs`-clearing spikes at the given indices. */
+function framesWithStutters(
+  count: number,
+  stutterIndices: number[],
+  sensors: (i: number) => Partial<FrameSample> = () => ({}),
+): FrameSample[] {
+  const spikes = new Set(stutterIndices);
+  return Array.from({ length: count }, (_, i) => ({
+    timeMs: i * 10,
+    frameTimeMs: spikes.has(i) ? 60 : 10,
+    ...sensors(i),
+  }));
+}
+
+describe("runDiagnostics — per-rule fixtures", () => {
+  it("fires vram-saturation when stutters land on saturated VRAM", () => {
+    const frames = framesWithStutters(30, [7, 14, 21], () => ({ vramUsedMb: 11_900 }));
+    const findings = runDiagnostics(
+      inputFor(frames, { hardware: { ...baseHardware, gpuVramTotalMb: 12_288 } }),
+    );
+    const codes = findings.map((f) => f.code);
+    expect(codes).toEqual(["vram-saturation-stutter"]);
+    const vram = findings.find((f) => f.code === "vram-saturation-stutter")!;
+    expect(vram.severity).toBe("bad");
+  });
+
+  it("does NOT fire vram-saturation when VRAM has headroom", () => {
+    const frames = framesWithStutters(30, [7, 14, 21], () => ({ vramUsedMb: 4_000 }));
+    const findings = runDiagnostics(
+      inputFor(frames, { hardware: { ...baseHardware, gpuVramTotalMb: 12_288 } }),
+    );
+    expect(findings.map((f) => f.code)).not.toContain("vram-saturation-stutter");
+  });
+
+  it("no-ops vram-saturation when total capacity is unknown", () => {
+    const frames = framesWithStutters(30, [7, 14, 21], () => ({ vramUsedMb: 11_900 }));
+    const findings = runDiagnostics(inputFor(frames)); // no gpuVramTotalMb
+    expect(findings.map((f) => f.code)).not.toContain("vram-saturation-stutter");
+  });
+
+  it("fires cpu-bottleneck when the CPU is pegged and the GPU idles", () => {
+    const frames = Array.from({ length: 40 }, (_, i) => ({
+      timeMs: i * 13,
+      // Deliberately not near a common FPS cap: a cap-like cadence must
+      // suppress this rule rather than produce a false CPU diagnosis.
+      frameTimeMs: 13,
+      cpuLoadPct: 98,
+      gpuLoadPct: 50,
+    }));
+    const findings = runDiagnostics(inputFor(frames));
+    expect(findings.map((f) => f.code)).toEqual(["cpu-bottleneck"]);
+    const cpu = findings.find((f) => f.code === "cpu-bottleneck");
+    expect(cpu?.severity).toBe("warn");
+  });
+
+  it("does NOT fire cpu-bottleneck for a stable common FPS cap", () => {
+    const cappedFrameTimeMs = 1000 / 60;
+    const frames = Array.from({ length: 120 }, (_, i) => ({
+      timeMs: i * cappedFrameTimeMs,
+      frameTimeMs: cappedFrameTimeMs,
+      cpuLoadPct: 98,
+      gpuLoadPct: 50,
+    }));
+    expect(runDiagnostics(inputFor(frames)).map((f) => f.code)).not.toContain("cpu-bottleneck");
+  });
+
+  it("does NOT fire cpu-bottleneck when the GPU is the limiter", () => {
+    const frames = framesWithStutters(40, [], () => ({ cpuLoadPct: 55, gpuLoadPct: 98 }));
+    expect(runDiagnostics(inputFor(frames)).map((f) => f.code)).not.toContain("cpu-bottleneck");
+  });
+
+  it("no-ops cpu-bottleneck when load sensors are absent", () => {
+    const frames = framesWithStutters(40, []); // frameTimeMs only
+    expect(runDiagnostics(inputFor(frames)).map((f) => f.code)).not.toContain("cpu-bottleneck");
+  });
+
+  it("does NOT diagnose a CPU bottleneck from sparse load telemetry", () => {
+    const frames = Array.from({ length: 120 }, (_, i) => ({
+      timeMs: i * 13,
+      frameTimeMs: 13,
+      ...(i === 0 ? { cpuLoadPct: 98, gpuLoadPct: 50 } : {}),
+    }));
+
+    expect(runDiagnostics(inputFor(frames)).map((f) => f.code)).not.toContain("cpu-bottleneck");
+  });
+
+  it("fires ram-below-rated when configured speed trails rated", () => {
+    const frames = framesWithStutters(20, []);
+    const findings = runDiagnostics(
+      inputFor(frames, { hardware: { ...baseHardware, ramSpeedMtps: 4800, ramRatedSpeedMtps: 6000 } }),
+    );
+    expect(findings.map((f) => f.code)).toEqual(["ram-below-rated"]);
+    const ram = findings.find((f) => f.code === "ram-below-rated");
+    expect(ram?.severity).toBe("warn");
+    expect(ram?.detail).toContain("4800");
+  });
+
+  it("no-ops ram-below-rated within tolerance", () => {
+    const frames = framesWithStutters(20, []);
+    const findings = runDiagnostics(
+      inputFor(frames, { hardware: { ...baseHardware, ramSpeedMtps: 5980, ramRatedSpeedMtps: 6000 } }),
+    );
+    expect(findings.map((f) => f.code)).not.toContain("ram-below-rated");
+  });
+
+  it("fires gpu-driver-outdated against a curated required driver", () => {
+    const frames = framesWithStutters(20, []);
+    const findings = runDiagnostics(
+      inputFor(frames, {
+        hardware: { ...baseHardware, gpuDriver: "566.14" },
+        game: { requiredDriver: "566.36" },
+      }),
+    );
+    expect(findings.map((f) => f.code)).toEqual(["gpu-driver-outdated"]);
+    const driver = findings.find((f) => f.code === "gpu-driver-outdated");
+    expect(driver?.severity).toBe("info");
+  });
+
+  it("self-suppresses gpu-driver-outdated with no curated value", () => {
+    const frames = framesWithStutters(20, []);
+    const findings = runDiagnostics(
+      inputFor(frames, { hardware: { ...baseHardware, gpuDriver: "500.00" } }),
+    );
+    expect(findings.map((f) => f.code)).not.toContain("gpu-driver-outdated");
+  });
+
+  it("self-suppresses gpu-driver-outdated when the driver is current", () => {
+    const frames = framesWithStutters(20, []);
+    const findings = runDiagnostics(
+      inputFor(frames, {
+        hardware: { ...baseHardware, gpuDriver: "570.00" },
+        game: { requiredDriver: "566.36" },
+      }),
+    );
+    expect(findings.map((f) => f.code)).not.toContain("gpu-driver-outdated");
+  });
+
+  it("never fires gpu-driver-outdated for AMD/Intel vs the NVIDIA-only seed", () => {
+    const frames = framesWithStutters(20, []);
+    for (const vendor of ["amd", "intel"] as const) {
+      const findings = runDiagnostics(
+        inputFor(frames, {
+          vendor,
+          hardware: { ...baseHardware, gpuVendor: vendor, gpuDriver: "31.0.24002.92" },
+          game: { requiredDriver: "566.36" },
+        }),
+      );
+      expect(findings.map((f) => f.code)).not.toContain("gpu-driver-outdated");
+    }
+  });
+
+  it("never fires gpu-driver-outdated for an NVIDIA Windows quad-format driver string", () => {
+    const frames = framesWithStutters(20, []);
+    const findings = runDiagnostics(
+      inputFor(frames, {
+        hardware: { ...baseHardware, gpuDriver: "31.0.15.6636" },
+        game: { requiredDriver: "566.36" },
+      }),
+    );
+    expect(findings.map((f) => f.code)).not.toContain("gpu-driver-outdated");
+  });
+});
+
+describe("runDiagnostics — no false positives (§16.2)", () => {
+  it("surfaces nothing on a clean synthetic run", () => {
+    const frames = makeSyntheticFrames();
+    // Full sensors, GPU-bound, healthy RAM, no curated driver, unknown VRAM total.
+    const findings = runDiagnostics(inputFor(frames));
+    expect(findings).toEqual([]);
+  });
+});
+
+describe("runDiagnostics — totality (§15.5)", () => {
+  it("never throws across a generated spread of inputs", () => {
+    let seed = 0x1234_5678;
+    const rand = () => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    const vendors: GpuVendor[] = ["nvidia", "amd", "intel", "unknown"];
+    for (let iter = 0; iter < 200; iter++) {
+      const n = 1 + Math.floor(rand() * 40);
+      const frames: FrameSample[] = Array.from({ length: n }, (_, i) => {
+        const frame: FrameSample = { timeMs: i, frameTimeMs: 0.1 + rand() * 80 };
+        if (rand() > 0.5) frame.vramUsedMb = rand() > 0.9 ? NaN : rand() * 16_000;
+        if (rand() > 0.5) frame.cpuLoadPct = rand() * 100;
+        if (rand() > 0.5) frame.gpuLoadPct = rand() * 100;
+        return frame;
+      });
+      const input = inputFor(frames, {
+        vendor: vendors[Math.floor(rand() * vendors.length)]!,
+        hardware: {
+          ...baseHardware,
+          gpuVramTotalMb: rand() > 0.5 ? rand() * 24_000 : undefined,
+          ramSpeedMtps: Math.floor(rand() * 8000),
+          ramRatedSpeedMtps: Math.floor(rand() * 8000),
+        },
+        ...(rand() > 0.5 ? { game: { requiredDriver: `${Math.floor(rand() * 600)}.00` } } : {}),
+      });
+      const findings = runDiagnostics(input);
+      // Beyond totality, every generative result must preserve the public
+      // finding contract: exactly one known rule per code with usable copy.
+      expect(new Set(findings.map((finding) => finding.code)).size).toBe(findings.length);
+      for (const finding of findings) {
+        expect(DIAGNOSTIC_RULES.some((rule) => rule.code === finding.code)).toBe(true);
+        expect(finding.title.trim()).not.toBe("");
+        expect(finding.detail.trim()).not.toBe("");
+      }
+    }
+  });
+});

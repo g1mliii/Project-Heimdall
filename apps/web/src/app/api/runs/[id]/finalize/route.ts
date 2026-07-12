@@ -3,7 +3,8 @@
  * HEAD-validate the object (§11.10), resolve canonical game/hardware ids
  * (§11.9), record visibility + hashed management token + optional signature,
  * and enqueue the durable verification job — atomically with the finalize
- * (§11.5). A best-effort drain kick follows; durability never depends on it.
+ * (§11.5). A best-effort, one-job drain kick follows; the bounded cron/CLI
+ * worker remains the durable fallback when that process cannot finish.
  */
 
 import { NextResponse } from "next/server";
@@ -74,7 +75,7 @@ export async function POST(request: Request, context: Context): Promise<NextResp
       return jsonError(403, "key-mismatch", "uploadObjectKey does not belong to this run");
     }
 
-    const run = await readRun(id);
+    const run = await readRun(id, undefined, { withDiagnostics: false });
     if (!run) {
       return jsonError(404, "not-found", "run not found");
     }
@@ -178,8 +179,9 @@ export async function POST(request: Request, context: Context): Promise<NextResp
       console.error(`finalize ${id}: staging cleanup failed`, error);
     });
 
-    // Best-effort immediate drain — the enqueued row is the durable truth; if
-    // this process dies right here, cron picks the job up (§11.5).
+    // Keep the normal upload path responsive without relying on this process
+    // for durability. The queued row is still drained by cron/CLI if this
+    // best-effort kick is interrupted or fails.
     void drainJobs({ maxJobs: 1 }).catch((error) => {
       console.error(`finalize ${id}: drain kick failed (job remains queued)`, error);
     });

@@ -188,7 +188,7 @@ export function RunPageClient({
 
         {/* Right column: diagnostics + hardware */}
         <div className={styles.sideColumn}>
-          <DiagnosticsCard />
+          <DiagnosticsCard diagnostics={run.diagnostics} status={run.status} />
           <HardwareCard
             hardware={run.hardware}
             series={frames.kind === "ready" ? frames.series : undefined}

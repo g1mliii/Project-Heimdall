@@ -9,9 +9,9 @@
 
 import { createPublicKey, verify as cryptoVerify } from "node:crypto";
 import { RUN_STATUS } from "@heimdall/shared";
-import type { RunSummary } from "@heimdall/shared";
-import { readRun, type Queryable } from "../db";
-import { readRunSignature } from "../repo/runs";
+import type { DiagnosticFinding, RunSummary } from "@heimdall/shared";
+import { runDiagnostics } from "@heimdall/parsers";
+import { readRunForVerification, type Queryable } from "../db";
 import { applyVerificationResult, type ClaimedJob } from "../repo/jobs";
 import { computeFrameParquetSummary } from "../parquet/frame-metadata";
 
@@ -88,23 +88,22 @@ function verifyEd25519(publicKeyBase64: string, data: Uint8Array, signatureBase6
 export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<VerifyOutcome> {
   const { db } = deps;
 
-  const [run, stored] = await Promise.all([
-    readRun(job.runId, db),
-    readRunSignature(job.runId, db),
-  ]);
-  if (!run || !stored) {
+  const state = await readRunForVerification(job.runId, db);
+  if (!state) {
     return { kind: "failed", error: "run row disappeared" };
   }
-  if (!stored.framesObjectKey) {
+  const { run, signature, requiredDriver } = state;
+  if (!run.framesObjectKey) {
     return { kind: "failed", error: "run has no frames object key" };
   }
 
   let recomputed: RunSummary;
   let signatureValid: boolean | null;
+  let findings: DiagnosticFinding[];
   {
     let bytes: Uint8Array;
     try {
-      bytes = await deps.getObject(stored.framesObjectKey);
+      bytes = await deps.getObject(run.framesObjectKey);
     } catch (error) {
       // Storage errors are presumed transient; the attempts cap terminalizes
       // a genuinely missing object.
@@ -113,26 +112,43 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
 
     try {
       // Validate the full report schema in column chunks, retaining only the
-      // scalar buffers needed by the canonical summary. This avoids a large
-      // FrameSample object graph for 500k-frame captures.
-      recomputed = await computeFrameParquetSummary(bytes);
+      // scalar buffers needed by the canonical summary and the diagnostics
+      // engine. This avoids a large FrameSample object graph for 500k-frame
+      // captures.
+      const parquet = await computeFrameParquetSummary(bytes);
+      recomputed = parquet.summary;
+
+      // Keep the per-frame typed arrays scoped to this block. At 500k frames
+      // they can hold up to 16 MiB; only compact findings need to survive the
+      // subsequent awaited database write.
+      findings = runDiagnostics({
+        summary: recomputed,
+        hardware: run.hardware,
+        source: run.captureSource,
+        vendor: run.hardware.gpuVendor ?? "unknown",
+        ...(requiredDriver !== null ? { game: { requiredDriver } } : {}),
+        frames: parquet.diagnosticsColumns,
+      });
     } catch (error) {
       return { kind: "failed", error: `unreadable parquet: ${String(error)}` };
     }
 
     signatureValid =
-      deps.publicKeyBase64 && stored.signature
-        ? verifyEd25519(deps.publicKeyBase64, bytes, stored.signature)
+      deps.publicKeyBase64 && signature
+        ? verifyEd25519(deps.publicKeyBase64, bytes, signature)
         : null;
   }
   // The bounded R2 payload goes out of scope before the database write on a
-  // large run; only the recomputed scalar summary and signature verdict remain.
+  // large run; only the recomputed summary, compact findings, and signature
+  // verdict remain.
 
   const mismatch = summaryMismatch(run.summary, recomputed);
   const status = mismatch === null && run.status !== RUN_STATUS.flagged ? "validated" : "flagged";
+
   // Either way the recompute becomes the stored truth — "corrected and
-  // flagged" (§12.4) is exactly the flagged arm of this write.
-  await applyVerificationResult(job.runId, recomputed, status, signatureValid, job, db);
+  // flagged" (§12.4) is exactly the flagged arm of this write. Findings land in
+  // the same atomic write.
+  await applyVerificationResult(job.runId, recomputed, status, signatureValid, findings, job, db);
 
   return status === "validated"
     ? { kind: "validated" }

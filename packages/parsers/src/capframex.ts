@@ -14,6 +14,7 @@ import { findCsvHeader, headerFailure } from "./internal/csv";
 import { CAPFRAMEX_COLUMNS, type SensorColumnField } from "./internal/columns";
 import { finalizeFrames, guardSensor, parseFrameRowsAt } from "./internal/frames";
 import { inferGpuVendor } from "./internal/vendor";
+import { parseVramTotalMb } from "./internal/hardware";
 import { parserVersionString } from "./version";
 
 const SOURCE = "capframex" as const;
@@ -226,6 +227,10 @@ function extractHardware(root: Record<string, unknown>): HardwareSnapshot | unde
   } else if (typeof ram === "number" && Number.isFinite(ram) && ram > 0) {
     hardware.ramGb = ram;
   }
+  const vramTotalMb = parseVramTotalMb(
+    getCi(info, ["gpumemorytotal", "gpumemtotal", "gpudedicatedmemory", "graphiccardmemory", "gpumemory"]),
+  );
+  if (vramTotalMb !== undefined) hardware.gpuVramTotalMb = vramTotalMb;
 
   return hardware;
 }

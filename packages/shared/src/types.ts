@@ -47,6 +47,8 @@ export interface HardwareSnapshot {
   os?: string;
   /** GPU driver version string. */
   gpuDriver?: string;
+  /** Total dedicated VRAM in MB, best-effort from the source — drives §15.1. */
+  gpuVramTotalMb?: number;
   /** Capture resolution, e.g. "2560x1440". */
   resolution?: string;
   /** Canonical GPU id (PCI device/subsystem-derived) once resolved (§4.4). */
@@ -126,6 +128,11 @@ export interface Run {
   hardware: HardwareSnapshot;
   summary: RunSummary;
   generatedFrameTech: GeneratedFrameTech;
+  /**
+   * Auto-diagnostic findings from the Phase 6 rules engine — written by the
+   * verification worker, empty until (and unless) a rule fires.
+   */
+  diagnostics: Diagnostic[];
   /** Ingest schema version, so old uploads reprocess safely (§2.2). */
   schemaVersion: number;
   /** Parser version that produced the summary, for the same reason. */
@@ -153,9 +160,10 @@ export interface Diagnostic {
   title: string;
   /** Plain-English explanation/advice. */
   detail: string;
-  /** Sensors the rule consumed; the rule no-ops when any are absent (§15.5). */
-  requiredSensors?: string[];
 }
+
+/** A newly produced diagnostic before Postgres assigns its identity. */
+export type DiagnosticFinding = Omit<Diagnostic, "id">;
 
 /** A head-to-head comparison between two runs (Phase 10). */
 export interface Comparison {
