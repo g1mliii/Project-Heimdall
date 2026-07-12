@@ -8,22 +8,12 @@
  */
 
 import { createPublicKey, verify as cryptoVerify } from "node:crypto";
-import { parquetMetadata, parquetReadObjects } from "hyparquet";
-import type { FileMetaData } from "hyparquet";
-import { computeRunSummary } from "@heimdall/parsers";
-import {
-  FRAME_PARQUET_COLUMNS,
-  INGEST_LIMITS,
-  RUN_STATUS,
-  rowsToFrameSamples,
-} from "@heimdall/shared";
+import { RUN_STATUS } from "@heimdall/shared";
 import type { RunSummary } from "@heimdall/shared";
 import { readRun, type Queryable } from "../db";
 import { readRunSignature } from "../repo/runs";
 import { applyVerificationResult, type ClaimedJob } from "../repo/jobs";
-
-const FRAME_PARQUET_COLUMN_NAMES = FRAME_PARQUET_COLUMNS.map((column) => column.name);
-const MAX_DECODED_FRAME_PARQUET_BYTES = BigInt(INGEST_LIMITS.maxParquetBytes);
+import { computeFrameParquetSummary } from "../parquet/frame-metadata";
 
 export interface VerifyDeps {
   db: Queryable;
@@ -95,52 +85,6 @@ function verifyEd25519(publicKeyBase64: string, data: Uint8Array, signatureBase6
   }
 }
 
-/** Reject oversized or internally inconsistent captures before decoding rows. */
-export function frameCountFromMetadata(
-  metadata: Pick<FileMetaData, "num_rows" | "row_groups">,
-): number {
-  const rowCount = metadata.num_rows;
-  const min = BigInt(INGEST_LIMITS.minFramesPerRun);
-  const max = BigInt(INGEST_LIMITS.maxFramesPerRun);
-  if (rowCount < min || rowCount > max) {
-    throw new Error(`frame count ${rowCount} outside ingest limits`);
-  }
-  const rowGroupCount = metadata.row_groups.reduce((total, group) => total + group.num_rows, 0n);
-  if (rowCount !== rowGroupCount) {
-    throw new Error(`parquet metadata row count ${rowCount} disagrees with row groups ${rowGroupCount}`);
-  }
-  return Number(rowCount);
-}
-
-/** Reject malformed physical frame columns before the reader decodes page data. */
-export function validateFrameParquetMetadata(
-  metadata: Pick<FileMetaData, "num_rows" | "row_groups">,
-): number {
-  const frameCount = frameCountFromMetadata(metadata);
-  let uncompressedBytes = 0n;
-  for (const rowGroup of metadata.row_groups) {
-    const columns = new Map(
-      rowGroup.columns.flatMap((chunk) =>
-        chunk.meta_data ? [[chunk.meta_data.path_in_schema[0], chunk.meta_data] as const] : [],
-      ),
-    );
-    for (const frameColumn of FRAME_PARQUET_COLUMNS) {
-      const column = columns.get(frameColumn.name);
-      if (!column) {
-        throw new Error(`parquet is missing required column ${frameColumn.name}`);
-      }
-      if (column.type !== frameColumn.type || column.num_values !== rowGroup.num_rows) {
-        throw new Error(`parquet column ${frameColumn.name} has an invalid physical layout`);
-      }
-      uncompressedBytes += column.total_uncompressed_size;
-      if (uncompressedBytes > MAX_DECODED_FRAME_PARQUET_BYTES) {
-        throw new Error(`parquet frame columns exceed decoded-byte limit ${MAX_DECODED_FRAME_PARQUET_BYTES}`);
-      }
-    }
-  }
-  return frameCount;
-}
-
 export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<VerifyOutcome> {
   const { db } = deps;
 
@@ -155,42 +99,34 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
     return { kind: "failed", error: "run has no frames object key" };
   }
 
-  let bytes: Uint8Array;
-  try {
-    bytes = await deps.getObject(stored.framesObjectKey);
-  } catch (error) {
-    // Storage errors are presumed transient; the attempts cap terminalizes
-    // a genuinely missing object.
-    return { kind: "retry", error: `object read failed: ${String(error)}` };
-  }
-
   let recomputed: RunSummary;
-  try {
-    const buffer = bytes.buffer.slice(
-      bytes.byteOffset,
-      bytes.byteOffset + bytes.byteLength,
-    ) as ArrayBuffer;
-    const metadata = parquetMetadata(buffer);
-    const frameCount = validateFrameParquetMetadata(metadata);
-    const rows = await parquetReadObjects({
-      file: buffer,
-      metadata,
-      columns: FRAME_PARQUET_COLUMN_NAMES,
-      rowEnd: frameCount,
-    });
-    const frames = rowsToFrameSamples(rows);
-    if (frames.length !== frameCount) {
-      return { kind: "failed", error: `decoded ${frames.length} frames but metadata declared ${frameCount}` };
+  let signatureValid: boolean | null;
+  {
+    let bytes: Uint8Array;
+    try {
+      bytes = await deps.getObject(stored.framesObjectKey);
+    } catch (error) {
+      // Storage errors are presumed transient; the attempts cap terminalizes
+      // a genuinely missing object.
+      return { kind: "retry", error: `object read failed: ${String(error)}` };
     }
-    recomputed = computeRunSummary(frames);
-  } catch (error) {
-    return { kind: "failed", error: `unreadable parquet: ${String(error)}` };
-  }
 
-  const signatureValid =
-    deps.publicKeyBase64 && stored.signature
-      ? verifyEd25519(deps.publicKeyBase64, bytes, stored.signature)
-      : null;
+    try {
+      // Validate the full report schema in column chunks, retaining only the
+      // scalar buffers needed by the canonical summary. This avoids a large
+      // FrameSample object graph for 500k-frame captures.
+      recomputed = await computeFrameParquetSummary(bytes);
+    } catch (error) {
+      return { kind: "failed", error: `unreadable parquet: ${String(error)}` };
+    }
+
+    signatureValid =
+      deps.publicKeyBase64 && stored.signature
+        ? verifyEd25519(deps.publicKeyBase64, bytes, stored.signature)
+        : null;
+  }
+  // The bounded R2 payload goes out of scope before the database write on a
+  // large run; only the recomputed scalar summary and signature verdict remain.
 
   const mismatch = summaryMismatch(run.summary, recomputed);
   const status = mismatch === null && run.status !== RUN_STATUS.flagged ? "validated" : "flagged";

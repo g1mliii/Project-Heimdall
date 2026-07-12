@@ -6,7 +6,7 @@
 //
 // Components are typed .tsx, built to dist/ by tsup (see package.json exports).
 
-export { Button, type ButtonProps } from "./components/core/Button";
+export { Button, ButtonLink, type ButtonLinkProps, type ButtonProps } from "./components/core/Button";
 export { IconButton, type IconButtonProps } from "./components/core/IconButton";
 export { Badge, type BadgeProps } from "./components/core/Badge";
 export { Tag, type TagProps } from "./components/core/Tag";
@@ -26,3 +26,4 @@ export { Tooltip, type TooltipProps } from "./components/feedback/Tooltip";
 export { Spinner, type SpinnerProps } from "./components/feedback/Spinner";
 
 export { Tabs, type TabsProps, type TabItem } from "./components/navigation/Tabs";
+export { NavTabs, type NavTabsProps, type NavTabItem } from "./components/navigation/NavTabs";

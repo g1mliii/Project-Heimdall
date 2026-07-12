@@ -151,9 +151,13 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     expect((await readRun(id, db.pool))?.status).toBe(RUN_STATUS.flagged);
 
     // Model a worker dying after it stored the canonical flagged summary but
-    // before it marked its job succeeded; the stale lock is then reclaimed.
+    // before it marked its job succeeded; the expired lease is then reclaimed.
     await db.pool.query(
-      "update verification_jobs set status = 'running', locked_at = now() - interval '11 minutes' where run_id = $1",
+      `update verification_jobs
+          set status = 'running',
+              locked_at = now() - interval '11 minutes',
+              not_before = now() - interval '1 minute'
+        where run_id = $1`,
       [id],
     );
     expect(await drainJobs({}, realDeps(async () => parquetBytes))).toMatchObject({ flagged: 1, validated: 0 });
@@ -239,6 +243,19 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     const run = await readRun("run_wk_corrupt", db.pool);
     expect(run?.status).toBe(RUN_STATUS.flagged);
     expect(await readVisibleRun("run_wk_corrupt", db.pool)).toBeNull();
+  });
+
+  it("rejects invalid report-only columns before a run can validate", async () => {
+    const id = "run_wk_invalid_report_column";
+    await setupFinalizedRun(id);
+    const invalidReportFrames = frames.map((frame, index) =>
+      index === 0 ? { ...frame, gpuLoadPct: 101 } : frame,
+    );
+
+    const result = await drainJobs({}, realDeps(async () => makeParquet(invalidReportFrames)));
+
+    expect(result).toMatchObject({ claimed: 1, failed: 1, validated: 0 });
+    expect((await readRun(id, db.pool))?.status).toBe(RUN_STATUS.flagged);
   });
 
   it("pending/flagged runs never match the aggregate-eligibility guard (12.5)", async () => {

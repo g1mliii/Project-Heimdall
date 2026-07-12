@@ -43,10 +43,31 @@ export async function consumeRateLimit(
   };
 }
 
-/** Housekeeping: windows older than a day are dead weight (§11.11 pass). */
-export async function pruneRateLimits(db: Queryable = getPool()): Promise<number> {
+/**
+ * Housekeeping: windows older than a day are dead weight (§11.11 pass).
+ * Bound each pass so a long outage never turns the next cron invocation into
+ * one large, lock-heavy delete transaction.
+ */
+export async function pruneRateLimits(
+  db: Queryable = getPool(),
+  { limit = 1_000 }: { limit?: number } = {},
+): Promise<number> {
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new RangeError("rate-limit prune limit must be a positive integer");
+  }
   const result = await db.query(
-    "delete from rate_limits where window_start < now() - interval '1 day'",
+    `with expired as (
+       select ctid
+         from rate_limits
+        where window_start < now() - interval '1 day'
+        order by window_start
+        for update skip locked
+        limit $1
+     )
+     delete from rate_limits rl
+      using expired
+      where rl.ctid = expired.ctid`,
+    [limit],
   );
   return result.rowCount ?? 0;
 }

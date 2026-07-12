@@ -96,6 +96,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0008_generated_frame_unknown.sql",
       "0009_staging_cleanup_jobs.sql",
       "0010_verification_job_backoff.sql",
+      "0011_maintenance_hot_path_indexes.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
@@ -145,8 +146,9 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "comparisons_after_run_id_idx",
       "verifications_verified_by_idx",
       "verification_jobs_run_id_idx",
-      "verification_jobs_status_locked_at_idx",
+      "verification_jobs_active_claim_idx",
       "staging_cleanup_jobs_not_before_idx",
+      "runs_pending_unfinalized_created_at_idx",
     ]) {
       expect(names).toContain(expected);
     }
@@ -160,6 +162,40 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
           and contype = 'f'`,
     );
     expect(rows).toEqual([]);
+  });
+
+  it("gives legacy worker claims a lease during a rolling deploy", async () => {
+    const run = fixtureRunWithId("run_legacy_lease_0001");
+    await insertRun(run, pool);
+    const inserted = await pool.query<{ id: string }>(
+      "insert into verification_jobs (run_id) values ($1) returning id",
+      [run.id],
+    );
+    const verificationLease = await pool.query<{ lease_safe: boolean }>(
+      `update verification_jobs
+          set status = 'running', locked_at = clock_timestamp()
+        where id = $1
+        returning not_before > locked_at as lease_safe`,
+      [inserted.rows[0]?.id],
+    );
+    expect(verificationLease.rows[0]?.lease_safe).toBe(true);
+
+    await pool.query(
+      `insert into staging_cleanup_jobs (run_id, object_key, not_before)
+       values ($1, $2, now())`,
+      [run.id, `staging/runs/${run.id}.parquet`],
+    );
+    const stagingLease = await pool.query<{ lease_safe: boolean }>(
+      `update staging_cleanup_jobs
+          set locked_at = clock_timestamp()
+        where run_id = $1
+        returning not_before > locked_at as lease_safe`,
+      [run.id],
+    );
+    expect(stagingLease.rows[0]?.lease_safe).toBe(true);
+
+    await pool.query("delete from staging_cleanup_jobs where run_id = $1", [run.id]);
+    await pool.query("delete from runs where id = $1", [run.id]);
   });
 
   it("keeps aggregate and queue hot-path indexes scale-oriented", async () => {
@@ -177,7 +213,8 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
           'runs_created_at_idx',
           'runs_status_visibility_idx',
           'runs_user_id_idx',
-          'verification_jobs_status_locked_at_idx'
+          'verification_jobs_active_claim_idx',
+          'runs_pending_unfinalized_created_at_idx'
         )`,
     );
     const byName = new Map(rows.map((row) => [row.name, row]));
@@ -189,15 +226,19 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     expect(byName.get("runs_status_visibility_idx")?.definition).toContain("created_at DESC");
     expect(byName.get("runs_user_id_idx")?.definition).toContain("created_at DESC");
     expect(byName.get("runs_user_id_idx")?.definition).toContain("id DESC");
-    expect(byName.get("verification_jobs_status_locked_at_idx")?.definition).toContain(
+    expect(byName.get("verification_jobs_active_claim_idx")?.definition).toContain(
       "created_at",
     );
-    expect(byName.get("verification_jobs_status_locked_at_idx")?.definition).toContain(
+    expect(byName.get("verification_jobs_active_claim_idx")?.definition).toContain(
       "not_before",
     );
-    const queuePredicate = byName.get("verification_jobs_status_locked_at_idx")?.predicate ?? "";
+    const queuePredicate = byName.get("verification_jobs_active_claim_idx")?.predicate ?? "";
     expect(queuePredicate).toContain("'pending'");
     expect(queuePredicate).toContain("'running'");
+    expect(byName.get("runs_pending_unfinalized_created_at_idx")?.definition).toContain("created_at");
+    const reaperPredicate = byName.get("runs_pending_unfinalized_created_at_idx")?.predicate ?? "";
+    expect(reaperPredicate).toContain("status = 'pending'::text");
+    expect(reaperPredicate).toContain("frames_object_key IS NULL");
   });
 
   it("CHECK constraints stay in lockstep with the shared enum constants", async () => {

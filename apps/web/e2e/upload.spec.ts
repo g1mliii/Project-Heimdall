@@ -6,6 +6,7 @@ const FIXTURES = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../../packages/parsers/fixtures",
 );
+const SINGLE_UPLOAD_RUN_ID = "run_e2e_0001";
 
 function fulfillR2Cors(route: Route) {
   return route.fulfill({
@@ -56,18 +57,18 @@ test("single-file upload flow reaches done with mocked ingest APIs", async ({ pa
       status: 201,
       contentType: "application/json",
       body: JSON.stringify({
-        id: "run_e2e_0001",
+        id: SINGLE_UPLOAD_RUN_ID,
         uploadUrl: "https://r2.invalid/put",
-        uploadObjectKey: "staging/runs/run_e2e_0001.parquet",
+        uploadObjectKey: `staging/runs/${SINGLE_UPLOAD_RUN_ID}.parquet`,
       }),
     }),
   );
   await page.route("https://r2.invalid/put", fulfillR2Cors);
-  await page.route("**/api/runs/run_e2e_0001/finalize", (route) =>
+  await page.route(`**/api/runs/${SINGLE_UPLOAD_RUN_ID}/finalize`, (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ id: "run_e2e_0001", status: "pending" }),
+      body: JSON.stringify({ id: SINGLE_UPLOAD_RUN_ID, status: "pending" }),
     }),
   );
 
@@ -79,7 +80,10 @@ test("single-file upload flow reaches done with mocked ingest APIs", async ({ pa
 
   await expect(page.getByText(/Uploaded — /)).toBeVisible();
   await expect(page.getByText("Save your delete token — it's shown once")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Back to benchmarks" })).toHaveAttribute("href", "/");
+  await expect(page.getByRole("link", { name: "View run" })).toHaveAttribute(
+    "href",
+    `/runs/${SINGLE_UPLOAD_RUN_ID}`,
+  );
 });
 
 test("ambiguous finalize failures keep the delete token visible", async ({ page }) => {

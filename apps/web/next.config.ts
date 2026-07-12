@@ -11,6 +11,9 @@ const nextConfig: NextConfig = {
     // stray lockfile elsewhere on the machine and mis-trace output files.
     root: path.resolve(import.meta.dirname, "..", ".."),
   },
+  // The dev-tools floating button photobombs Playwright visual baselines
+  // (e2e runs against `next dev` locally); production builds never show it.
+  devIndicators: false,
 };
 
 export default nextConfig;

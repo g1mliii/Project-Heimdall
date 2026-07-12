@@ -19,17 +19,27 @@ import {
   type RunSummary,
 } from "@heimdall/shared";
 
-/** Nearest-rank percentile over an ascending-sorted array. */
-function nearestRank(sortedAsc: readonly number[], p: number): number {
+/** Nearest-rank percentile over an ascending-sorted numeric buffer. */
+function nearestRank(sortedAsc: ArrayLike<number>, p: number): number {
   const rank = Math.ceil((p / 100) * sortedAsc.length);
   return sortedAsc[Math.min(Math.max(rank, 1), sortedAsc.length) - 1]!;
 }
 
 /** Mean of the slowest `count` frames (the tail of the ascending sort). */
-function slowestMeanMs(sortedAsc: readonly number[], count: number): number {
+function slowestMeanMs(sortedAsc: ArrayLike<number>, count: number): number {
   let sum = 0;
   for (let i = sortedAsc.length - count; i < sortedAsc.length; i++) sum += sortedAsc[i]!;
   return sum / count;
+}
+
+/**
+ * The frame-time threshold above which a frame counts as a stutter, given the
+ * run's median frame time (§9.1). Single source of truth for the STUTTER rule:
+ * `computeRunSummary` counts with it, and the run-page chart highlights the
+ * exact same frames with it — the two can never disagree.
+ */
+export function stutterThresholdMs(medianFrameTimeMs: number): number {
+  return Math.max(STUTTER.medianMultiplier * medianFrameTimeMs, STUTTER.minFrameTimeMs);
 }
 
 function confidence(n: number): ConfidenceLevel {
@@ -45,28 +55,19 @@ function confidence(n: number): ConfidenceLevel {
  * `no-valid-frames` error fires first — so a throw here is a programmer error,
  * not a data condition, and stays an exception rather than a ParseResult.
  */
-export function computeRunSummary(frames: readonly FrameSample[]): RunSummary {
-  const n = frames.length;
-  if (n === 0) throw new RangeError("computeRunSummary requires at least one frame");
-
-  const sorted = new Array<number>(n);
-  let sumMs = 0;
-  let generatedCount = 0;
-  for (let i = 0; i < n; i++) {
-    const frame = frames[i]!;
-    const frameTimeMs = frame.frameTimeMs;
-    sorted[i] = frameTimeMs;
-    sumMs += frameTimeMs;
-    if (frame.generated === true) generatedCount++;
-  }
+function summarizeSortedFrameTimes(
+  sorted: number[] | Float64Array,
+  sumMs: number,
+  generatedFrameCount: number,
+): RunSummary {
+  const n = sorted.length;
   sorted.sort((a, b) => a - b);
 
   const medianMs = nearestRank(sorted, 50);
+  const thresholdMs = stutterThresholdMs(medianMs);
   let stutterCount = 0;
   for (const value of sorted) {
-    if (value > STUTTER.medianMultiplier * medianMs && value > STUTTER.minFrameTimeMs) {
-      stutterCount++;
-    }
+    if (value > thresholdMs) stutterCount++;
   }
 
   return {
@@ -77,9 +78,51 @@ export function computeRunSummary(frames: readonly FrameSample[]): RunSummary {
     frameTimeP95Ms: nearestRank(sorted, 95),
     frameTimeP99Ms: nearestRank(sorted, 99),
     stutterCount,
-    generatedFramePct: generatedCount / n,
+    generatedFramePct: generatedFrameCount / n,
     pointOnePercentLowConfidence: confidence(n),
     sampleCount: n,
     durationSeconds: sumMs / 1000,
   };
+}
+
+/**
+ * Compute a canonical summary from a validated scalar frame-time buffer.
+ *
+ * The verification worker uses this after streaming Parquet column chunks so
+ * it never needs to materialize hundreds of thousands of FrameSample objects.
+ * Callers own validation of values and the generated-frame count; parser input
+ * has already passed those checks by the time it reaches this module.
+ */
+export function computeRunSummaryFromFrameTimes(
+  frameTimesMs: ArrayLike<number>,
+  generatedFrameCount: number,
+): RunSummary {
+  const n = frameTimesMs.length;
+  if (n === 0) throw new RangeError("computeRunSummaryFromFrameTimes requires at least one frame");
+
+  const sorted = new Float64Array(n);
+  let sumMs = 0;
+  for (let i = 0; i < n; i++) {
+    const frameTimeMs = frameTimesMs[i]!;
+    sorted[i] = frameTimeMs;
+    sumMs += frameTimeMs;
+  }
+  return summarizeSortedFrameTimes(sorted, sumMs, generatedFrameCount);
+}
+
+export function computeRunSummary(frames: readonly FrameSample[]): RunSummary {
+  const n = frames.length;
+  if (n === 0) throw new RangeError("computeRunSummary requires at least one frame");
+
+  const sorted = new Array<number>(n);
+  let sumMs = 0;
+  let generatedFrameCount = 0;
+  for (let i = 0; i < n; i++) {
+    const frame = frames[i]!;
+    const frameTimeMs = frame.frameTimeMs;
+    sorted[i] = frameTimeMs;
+    sumMs += frameTimeMs;
+    if (frame.generated === true) generatedFrameCount++;
+  }
+  return summarizeSortedFrameTimes(sorted, sumMs, generatedFrameCount);
 }

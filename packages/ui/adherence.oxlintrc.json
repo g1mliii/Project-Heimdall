@@ -103,8 +103,8 @@
         "message": "<Input> doesn't accept that prop. Declared props: label, hint, error, icon, mono, wrapClassName (native DOM/aria/data passthrough props are allowed)."
       },
       {
-        "selector": "JSXOpeningElement[name.name='Meter'] > JSXAttribute > JSXIdentifier[name!=/^(?:label|value|max|display|color|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",
-        "message": "<Meter> doesn't accept that prop. Declared props: label, value, max, display, color (native DOM/aria/data passthrough props are allowed)."
+        "selector": "JSXOpeningElement[name.name='Meter'] > JSXAttribute > JSXIdentifier[name!=/^(?:label|value|max|display|color|layout|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",
+        "message": "<Meter> doesn't accept that prop. Declared props: label, value, max, display, color, layout (native DOM/aria/data passthrough props are allowed)."
       },
       {
         "selector": "JSXOpeningElement[name.name='SegmentedOption'] > JSXAttribute > JSXIdentifier[name!=/^(?:value|label|icon|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",

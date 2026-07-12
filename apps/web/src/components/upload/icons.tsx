@@ -1,35 +1,8 @@
-import type * as React from "react";
+/** Upload-flow glyphs, built from the shared icon factory. */
 
-/**
- * Inline Lucide glyphs for the upload flow — stroked, currentColor, matching
- * the design system's icon rules (readme: primitives inline the few svgs they
- * need so screens ship without an icon runtime).
- */
+import { icon } from "../icons";
 
-interface IconProps extends React.SVGAttributes<SVGSVGElement> {
-  size?: number;
-}
-
-function icon(children: React.ReactNode) {
-  return function LucideIcon({ size = 18, ...rest }: IconProps) {
-    return (
-      <svg
-        viewBox="0 0 24 24"
-        width={size}
-        height={size}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden="true"
-        {...rest}
-      >
-        {children}
-      </svg>
-    );
-  };
-}
+export { CheckIcon } from "../icons";
 
 export const UploadCloudIcon = icon(
   <g>
@@ -46,8 +19,6 @@ export const FolderUpIcon = icon(
     <path d="m9 13 3-3 3 3" />
   </g>,
 );
-
-export const CheckIcon = icon(<path d="M20 6 9 17l-5-5" />);
 
 export const XIcon = icon(
   <g>

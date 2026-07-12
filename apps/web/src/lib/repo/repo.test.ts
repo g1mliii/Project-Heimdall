@@ -273,9 +273,12 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       await finalizeFixture(db.pool, "run_job_0004");
       const crashed = await claimNextVerificationJob({}, db.pool);
       expect(crashed?.runId).toBe("run_job_0004");
-      // Simulate a worker crash: job left `running`, lock long stale.
+      // Simulate a worker crash: job left `running` with an expired lease.
       await db.pool.query(
-        "update verification_jobs set locked_at = now() - interval '1 hour' where id = $1",
+        `update verification_jobs
+            set locked_at = now() - interval '1 hour',
+                not_before = now() - interval '1 minute'
+          where id = $1`,
         [crashed!.id],
       );
       const reclaimed = await claimNextVerificationJob({ staleRunningMinutes: 10 }, db.pool);
@@ -303,7 +306,10 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       const first = await claimNextVerificationJob({}, db.pool);
       expect(first?.runId).toBe("run_job_stale_claim");
       await db.pool.query(
-        "update verification_jobs set locked_at = now() - interval '11 minutes' where id = $1",
+        `update verification_jobs
+            set locked_at = now() - interval '11 minutes',
+                not_before = now() - interval '1 minute'
+          where id = $1`,
         [first!.id],
       );
       const second = await claimNextVerificationJob({}, db.pool);

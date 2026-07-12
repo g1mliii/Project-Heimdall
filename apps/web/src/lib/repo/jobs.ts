@@ -1,10 +1,11 @@
 /**
  * Verification-job queue repository (§11.5) over the `verification_jobs`
- * table (0003). Claims use FOR UPDATE SKIP LOCKED against the partial
- * (pending|running) index from 0006; a `running` row whose lock has gone stale
- * is reclaimable — that IS the stuck-job reaper. Every claim increments
- * `attempts`, so a permanently crashing job self-terminates at the cap
- * (enforced by the caller via `failVerificationJob(..., terminal)`).
+ * table (0003). Claims use FOR UPDATE SKIP LOCKED against the partial active
+ * queue index. A claim writes its lease deadline into `not_before`, so pending
+ * retries and stale running work share one ordered, indexable eligibility path.
+ * Every claim increments `attempts`, so a permanently crashing job
+ * self-terminates at the cap (enforced by the caller via
+ * `failVerificationJob(..., terminal)`).
  */
 
 import { GENERATED_FRAME_TECH, RUN_STATUS, type RunSummary } from "@heimdall/shared";
@@ -31,13 +32,16 @@ export async function claimNextVerificationJob(
 ): Promise<ClaimedJob | null> {
   const rows = await query<{ id: string; run_id: string; attempts: number }>(
     `update verification_jobs vj
-        set status = 'running', locked_at = now(), attempts = vj.attempts + 1
+        set status = 'running',
+            locked_at = now(),
+            not_before = now() + make_interval(mins => $1),
+            attempts = vj.attempts + 1
       where vj.id = (
         select id from verification_jobs
-         where ((status = 'pending' and not_before <= now())
-            or (status = 'running' and locked_at < now() - make_interval(mins => $1)))
+         where status in ('pending', 'running')
+           and not_before <= now()
            and id <> all($2::bigint[])
-         order by created_at, id
+         order by not_before, created_at, id
          for update skip locked
          limit 1
       )
@@ -68,7 +72,8 @@ export async function completeVerificationJob(
 /**
  * Put a claimed job back untouched — used when a drain pass re-claims a job
  * it already attempted (retry belongs to a LATER pass, with real backoff, not
- * a tight loop). Undoes the claim's attempt increment.
+ * a tight loop). Undoes the claim's attempt increment and clears its lease so
+ * another pass can claim it immediately.
  */
 export async function releaseVerificationJob(
   id: string,
@@ -77,7 +82,10 @@ export async function releaseVerificationJob(
 ): Promise<boolean> {
   const result = await db.query(
     `update verification_jobs
-        set status = 'pending', locked_at = null, attempts = greatest(attempts - 1, 0)
+        set status = 'pending',
+            locked_at = null,
+            not_before = now(),
+            attempts = greatest(attempts - 1, 0)
       where id = $1
         and status = 'running'
         and attempts = $2`,

@@ -41,6 +41,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check:deps
       - run: pnpm audit:deps
+      # The web tests import the published @heimdall/ui entrypoint, whose
+      # package exports target dist/. Build it in CI's clean checkout first.
+      - run: pnpm --filter @heimdall/ui build
       - run: pnpm verify # lint + typecheck + test across the workspace
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/heimdall_test

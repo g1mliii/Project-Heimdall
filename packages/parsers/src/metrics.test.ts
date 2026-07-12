@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { runSummarySchema, STUTTER, type FrameSample } from "@heimdall/shared";
 
-import { computeRunSummary } from "./metrics";
+import { computeRunSummary, computeRunSummaryFromFrameTimes } from "./metrics";
 import { makeLcg } from "./testing/rng";
 
 /** Bare frames from a frame-time list, timestamped by cumulative sum. */
@@ -122,6 +122,25 @@ describe("generative invariants (seeded LCG, §10.2)", () => {
       expect(summary.stutterCount).toBeLessThanOrEqual(n);
       expect(summary.sampleCount).toBe(n);
       expect(runSummarySchema.safeParse(summary).success).toBe(true);
+    }
+  });
+
+  it("keeps the scalar-buffer implementation bit-identical to the frame-object oracle", () => {
+    const rand = makeLcg(0x85ebca6b);
+
+    for (let iteration = 0; iteration < 200; iteration++) {
+      const n = 1 + Math.floor(rand() * 300);
+      const stream: FrameSample[] = frames(
+        Array.from({ length: n }, () => 0.1 + rand() * 99.9),
+      ).map((frame) => (rand() < 0.1 ? { ...frame, generated: rand() < 0.5 } : frame));
+      const generatedFrameCount = stream.filter((frame) => frame.generated === true).length;
+
+      expect(
+        computeRunSummaryFromFrameTimes(
+          Float64Array.from(stream, (frame) => frame.frameTimeMs),
+          generatedFrameCount,
+        ),
+      ).toEqual(computeRunSummary(stream));
     }
   });
 });

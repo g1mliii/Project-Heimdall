@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { Space_Grotesk, Hanken_Grotesk, JetBrains_Mono } from "next/font/google";
 import "@heimdall/ui/styles.css";
+import { TopBar } from "@/components/shell/TopBar";
 
 // Self-host the three design-system faces. Each exposes a CSS variable that the
 // @heimdall/ui typography tokens (--font-display / --font-sans / --font-mono)
@@ -34,7 +35,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   // base.css paints <body> with var(--bg-base) — the dark-first instrument canvas.
   return (
     <html lang="en" className={`${display.variable} ${sans.variable} ${mono.variable}`}>
-      <body>{children}</body>
+      <body>
+        <TopBar />
+        {children}
+      </body>
     </html>
   );
 }

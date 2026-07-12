@@ -197,7 +197,7 @@ textarea.hd-input { height: auto; min-height: 80px; padding: var(--space-3); res
 
 /* ════ Tabs ══════════════════════════════════════════════════════ */
 .hd-tabs { display: flex; gap: var(--space-1); border-bottom: var(--border-thin) solid var(--line-1); }
-.hd-tab { appearance: none; background: transparent; border: none; cursor: pointer; font-family: var(--font-sans); font-size: var(--text-base); font-weight: var(--weight-medium); color: var(--fg-3); padding: var(--space-3) var(--space-3); position: relative; transition: var(--transition-control); display: inline-flex; align-items: center; gap: var(--space-2); }
+.hd-tab { appearance: none; background: transparent; border: none; cursor: pointer; font-family: var(--font-sans); font-size: var(--text-base); font-weight: var(--weight-medium); color: var(--fg-3); padding: var(--space-3) var(--space-3); position: relative; transition: var(--transition-control); display: inline-flex; align-items: center; gap: var(--space-2); text-decoration: none; }
 .hd-tab:hover { color: var(--fg-1); }
 .hd-tab--active { color: var(--fg-1); }
 .hd-tab--active::after { content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--brand-teal); border-radius: var(--radius-pill); }
@@ -245,6 +245,9 @@ textarea.hd-input { height: auto; min-height: 80px; padding: var(--space-3); res
 .hd-meter__value { font-family: var(--font-mono); font-size: var(--text-sm); font-weight: var(--weight-medium); color: var(--fg-1); font-variant-numeric: tabular-nums; }
 .hd-meter__track { height: 8px; border-radius: var(--radius-pill); background: var(--bg-inset); overflow: hidden; }
 .hd-meter__fill { height: 100%; border-radius: var(--radius-pill); background: var(--brand-teal); transition: width var(--dur-slow) var(--ease-out); }
+.hd-meter--inline { display: grid; grid-template-columns: 5rem minmax(0, 1fr) 3.5rem; align-items: center; gap: var(--space-3); }
+.hd-meter--inline .hd-meter__label { display: inline-flex; align-items: center; gap: var(--space-1); }
+.hd-meter--inline .hd-meter__value { text-align: right; }
 
 /* ════ Avatar ════════════════════════════════════════════════════ */
 .hd-avatar { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: var(--radius-pill); background: var(--bg-card-hover); color: var(--fg-1); font-family: var(--font-display); font-weight: var(--weight-semibold); font-size: var(--text-sm); overflow: hidden; flex: none; border: var(--border-thin) solid var(--line-2); }
