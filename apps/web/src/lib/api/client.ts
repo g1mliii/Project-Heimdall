@@ -9,13 +9,8 @@
  * with `hyparquet` via dynamic import so the reader stays off non-run pages.
  */
 
-import {
-  INGEST_LIMITS,
-  framesUrlResponseSchema,
-  rowsToFrameSamples,
-  runResponseSchema,
-} from "@heimdall/shared";
-import type { FrameSample, FramesUrlResponse, RunResponse } from "@heimdall/shared";
+import { INGEST_LIMITS, framesUrlResponseSchema, rowsToFrameSamples } from "@heimdall/shared";
+import type { FrameSample, FramesUrlResponse } from "@heimdall/shared";
 import { FRAME_PARQUET_COLUMN_NAMES, validateFrameParquetMetadata } from "../parquet/frame-metadata";
 
 export type ApiResult<T> =
@@ -71,19 +66,6 @@ async function getJson<T>(
   } catch (error) {
     return failure("invalid-response", error instanceof Error ? error.message : String(error));
   }
-}
-
-/** `GET /api/runs/:id` — the run row (metadata + summary + hardware). */
-export function getRun(
-  id: string,
-  transport: ApiTransport = defaultTransport(),
-): Promise<ApiResult<RunResponse>> {
-  return getJson(
-    `/api/runs/${encodeURIComponent(id)}`,
-    (body) => runResponseSchema.parse(body),
-    "run fetch failed",
-    transport,
-  );
 }
 
 /**

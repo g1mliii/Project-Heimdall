@@ -42,18 +42,26 @@ function subtitle(run: Run): string {
   return parts.join(" · ");
 }
 
+type ShareState = "idle" | "copied" | "failed";
+
 export function RunHeader({ run }: { run: Run }) {
-  const [copied, setCopied] = React.useState(false);
+  const [shareState, setShareState] = React.useState<ShareState>("idle");
   const resetTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   React.useEffect(() => () => {
     if (resetTimer.current !== null) clearTimeout(resetTimer.current);
   }, []);
 
   async function share() {
-    await navigator.clipboard.writeText(window.location.href);
-    setCopied(true);
     if (resetTimer.current !== null) clearTimeout(resetTimer.current);
-    resetTimer.current = setTimeout(() => setCopied(false), COPY_RESET_MS);
+    try {
+      // Throws (or is undefined) on insecure contexts, denied permission, or an
+      // unfocused document — surface "Copy failed" instead of a silent no-op.
+      await navigator.clipboard.writeText(window.location.href);
+      setShareState("copied");
+    } catch {
+      setShareState("failed");
+    }
+    resetTimer.current = setTimeout(() => setShareState("idle"), COPY_RESET_MS);
   }
 
   const techLabel = TECH_LABELS[run.generatedFrameTech];
@@ -113,9 +121,13 @@ export function RunHeader({ run }: { run: Run }) {
         <Button
           variant="primary"
           onClick={() => void share()}
-          iconLeft={copied ? <CheckIcon size={16} /> : <ShareIcon size={16} />}
+          iconLeft={shareState === "copied" ? <CheckIcon size={16} /> : <ShareIcon size={16} />}
         >
-          {copied ? "Link copied" : "Share"}
+          {shareState === "copied"
+            ? "Link copied"
+            : shareState === "failed"
+              ? "Copy failed"
+              : "Share"}
         </Button>
       </div>
     </div>

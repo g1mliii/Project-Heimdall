@@ -26,8 +26,9 @@ function confidenceTitle(summary: RunSummary): string {
 }
 
 export function SmoothnessBars({ summary }: { summary: RunSummary }) {
-  // Nice headroom above the fastest tier so no bar renders 100% wide.
-  const barMax = Math.ceil((summary.avgFps * 1.1) / 10) * 10;
+  // Nice headroom above the fastest tier so no bar renders 100% wide. Floor at
+  // 10 so a degenerate 0-fps summary can't make every bar width NaN.
+  const barMax = Math.max(10, Math.ceil((summary.avgFps * 1.1) / 10) * 10);
   const rows = [
     { label: "Avg FPS", value: summary.avgFps, color: "var(--tier-avg)" },
     { label: "1% low", value: summary.onePercentLowFps, color: "var(--tier-p1)" },

@@ -50,7 +50,9 @@ export function RunPageClient({
       if (cancelled) return;
       if (result.ok) {
         const series = buildFrameSeries(result.data);
-        setFrames({ kind: "ready", series, stutterIndices: findStutterIndices(series.frameTimes) });
+        // Reuse the canonical median already on the summary — no re-sort.
+        const stutterIndices = findStutterIndices(series.frameTimes, run.summary.frameTimeP50Ms);
+        setFrames({ kind: "ready", series, stutterIndices });
       } else if (result.code === "not-finalized") {
         setFrames({ kind: "not-finalized" });
       } else {

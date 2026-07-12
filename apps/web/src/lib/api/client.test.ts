@@ -17,8 +17,8 @@ vi.mock("hyparquet", async (importOriginal) => {
 
 import { parquetMetadata, parquetReadObjects } from "hyparquet";
 import { parquetWriteBuffer } from "hyparquet-writer";
-import { framesToColumnData, INGEST_LIMITS, makeSyntheticFrames, validRun } from "@heimdall/shared";
-import { fetchFrames, getFramesUrl, getRun, loadRunFrames, type ApiTransport } from "./client";
+import { framesToColumnData, INGEST_LIMITS, makeSyntheticFrames } from "@heimdall/shared";
+import { fetchFrames, getFramesUrl, loadRunFrames, type ApiTransport } from "./client";
 
 function transportReturning(handler: (url: string) => Response | Promise<Response>): ApiTransport {
   return {
@@ -31,51 +31,6 @@ function parquetBytes(frames = makeSyntheticFrames({ seed: 3, count: 200 })): Ar
   return parquetWriteBuffer({ columnData: framesToColumnData(frames) });
 }
 
-describe("getRun", () => {
-  it("returns the schema-validated run on 200", async () => {
-    const transport = transportReturning(() => Response.json(validRun));
-    const result = await getRun(validRun.id, transport);
-    expect(result).toEqual({ ok: true, data: validRun });
-    expect(transport.fetch).toHaveBeenCalledWith(`/api/runs/${validRun.id}`);
-  });
-
-  it("surfaces the envelope code on 404", async () => {
-    const transport = transportReturning(() =>
-      Response.json({ error: { code: "not-found", message: "run not found" } }, { status: 404 }),
-    );
-    const result = await getRun("run_missing", transport);
-    expect(result).toEqual({ ok: false, code: "not-found", message: "run not found" });
-  });
-
-  it("falls back to http-<status> on a non-JSON error body", async () => {
-    const transport = transportReturning(() => new Response("boom", { status: 500 }));
-    const result = await getRun("run_x", transport);
-    expect(result).toMatchObject({ ok: false, code: "http-500" });
-  });
-
-  it("reports network for a thrown fetch", async () => {
-    const transport = transportReturning(() => {
-      throw new Error("offline");
-    });
-    const result = await getRun("run_x", transport);
-    expect(result).toEqual({ ok: false, code: "network", message: "offline" });
-  });
-
-  it("reports invalid-response when the 200 body fails the schema", async () => {
-    const transport = transportReturning(() => Response.json({ id: 42 }));
-    const result = await getRun("run_x", transport);
-    expect(result).toMatchObject({ ok: false, code: "invalid-response" });
-  });
-
-  it("URL-encodes hostile ids", async () => {
-    const transport = transportReturning(() =>
-      Response.json({ error: { code: "not-found", message: "run not found" } }, { status: 404 }),
-    );
-    await getRun("../secrets", transport);
-    expect(transport.fetch).toHaveBeenCalledWith("/api/runs/..%2Fsecrets");
-  });
-});
-
 describe("getFramesUrl", () => {
   it("returns the signed URL payload on 200", async () => {
     const transport = transportReturning(() =>
@@ -86,6 +41,14 @@ describe("getFramesUrl", () => {
       ok: true,
       data: { url: "https://r2.example.test/get", expiresInSeconds: 3600 },
     });
+  });
+
+  it("URL-encodes hostile ids", async () => {
+    const transport = transportReturning(() =>
+      Response.json({ error: { code: "not-found", message: "run not found" } }, { status: 404 }),
+    );
+    await getFramesUrl("../secrets", transport);
+    expect(transport.fetch).toHaveBeenCalledWith("/api/runs/..%2Fsecrets/frames");
   });
 
   it("surfaces not-finalized on 409", async () => {

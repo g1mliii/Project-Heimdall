@@ -9,26 +9,15 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { ButtonLink, Tabs } from "@heimdall/ui";
+import { icon } from "@/components/icons";
 
-function UploadIcon({ size = 16 }: { size?: number }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width={size}
-      height={size}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M12 3v12" />
-      <path d="m17 8-5-5-5 5" />
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-    </svg>
-  );
-}
+const UploadIcon = icon(
+  <g>
+    <path d="M12 3v12" />
+    <path d="m17 8-5-5-5 5" />
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+  </g>,
+);
 
 const NAV = [
   { value: "/", label: "Benchmarks" },
@@ -85,7 +74,7 @@ export function TopBar() {
         aria-label="Primary navigation"
       />
       <div style={{ flex: 1 }} />
-      <ButtonLink as={Link} href="/upload" variant="primary" iconLeft={<UploadIcon />}>
+      <ButtonLink as={Link} href="/upload" variant="primary" iconLeft={<UploadIcon size={16} />}>
         Upload log
       </ButtonLink>
     </header>

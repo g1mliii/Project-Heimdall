@@ -83,13 +83,18 @@ interface ChartColors {
 
 function resolveColors(element: HTMLElement): ChartColors {
   const styles = getComputedStyle(element);
-  const token = (name: string) => styles.getPropertyValue(name).trim() || "currentColor";
+  // Fall back to a VALID canvas color per role — "currentColor" is not a legal
+  // fillStyle/strokeStyle and the 2D context silently ignores it, leaving the
+  // trace/dots black (invisible on the dark canvas). These literals only apply
+  // if a --chart-* token ever fails to resolve.
+  const token = (name: string, fallback: string) =>
+    styles.getPropertyValue(name).trim() || fallback;
   return {
-    trace: token("--chart-frametime"),
-    stutter: token("--chart-stutter"),
-    band: token("--chart-band"),
-    grid: token("--chart-grid"),
-    halo: token("--bg-card"),
+    trace: token("--chart-frametime", "turquoise"),
+    stutter: token("--chart-stutter", "red"),
+    band: token("--chart-band", "rgba(255, 255, 255, 0.03)"),
+    grid: token("--chart-grid", "rgba(255, 255, 255, 0.06)"),
+    halo: token("--bg-card", "black"),
   };
 }
 
