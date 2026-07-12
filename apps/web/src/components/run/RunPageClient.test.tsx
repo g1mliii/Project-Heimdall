@@ -16,7 +16,7 @@ import { computeRunSummary } from "@heimdall/parsers";
 import { makeSyntheticFrames, RUN_STATUS, syntheticRunBase } from "@heimdall/shared";
 import type { Run } from "@heimdall/shared";
 import type { ApiResult } from "@/lib/api/client";
-import type { FrameSample } from "@heimdall/shared";
+import { buildFrameSeries, type FrameSeries } from "@/lib/run/frame-series";
 import { RunPageClient, type FramesLoader } from "./RunPageClient";
 import { RunHeader } from "./RunHeader";
 import { RunStatTiles } from "./RunStatTiles";
@@ -33,8 +33,9 @@ vi.mock("./chart/FrameTimeChart", () => ({
 
 const frames = makeSyntheticFrames({ seed: 7, count: 1000 });
 const run: Run = { ...syntheticRunBase, summary: computeRunSummary(frames) };
+const series = buildFrameSeries(frames);
 
-const okLoader: FramesLoader = () => Promise.resolve({ ok: true, data: frames });
+const okLoader: FramesLoader = () => Promise.resolve({ ok: true, data: series });
 const failLoader =
   (code: string, message: string): FramesLoader =>
   () =>
@@ -44,7 +45,7 @@ afterEach(cleanup);
 
 describe("RunPageClient states", () => {
   it("shows a spinner while frames load", () => {
-    const never: FramesLoader = () => new Promise<ApiResult<FrameSample[]>>(() => {});
+    const never: FramesLoader = () => new Promise<ApiResult<FrameSeries>>(() => {});
     render(<RunPageClient run={run} loadFrames={never} />);
     expect(screen.getByRole("status", { name: "Loading frame data" })).toBeInTheDocument();
   });
@@ -53,7 +54,7 @@ describe("RunPageClient states", () => {
     let signal: AbortSignal | undefined;
     const pendingLoader: FramesLoader = (_id, nextSignal) => {
       signal = nextSignal;
-      return new Promise<ApiResult<FrameSample[]>>(() => {});
+      return new Promise<ApiResult<FrameSeries>>(() => {});
     };
     const { unmount } = render(<RunPageClient run={run} loadFrames={pendingLoader} />);
 
@@ -79,14 +80,19 @@ describe("RunPageClient states", () => {
       status: RUN_STATUS.pending,
       summary: { ...run.summary, frameTimeP50Ms: 1_000 },
     };
-    const pendingFrames: FrameSample[] = [
+    const pendingFrames = [
       { timeMs: 0, frameTimeMs: 8 },
       { timeMs: 8, frameTimeMs: 8 },
       { timeMs: 16, frameTimeMs: 8 },
       { timeMs: 24, frameTimeMs: 80 },
     ];
 
-    render(<RunPageClient run={pending} loadFrames={() => Promise.resolve({ ok: true, data: pendingFrames })} />);
+    render(
+      <RunPageClient
+        run={pending}
+        loadFrames={() => Promise.resolve({ ok: true, data: buildFrameSeries(pendingFrames) })}
+      />,
+    );
 
     expect(
       await screen.findByRole("img", { name: "Frame-time progression chart" }),

@@ -14,8 +14,6 @@ export interface FrameSeries {
   /** Monotonic frame start positions on the chart x axis (ms). */
   times: Float64Array;
   frameTimes: Float64Array;
-  /** 1 = generated (DLSS3/FSR3/XeSS), 0 = app-rendered or unknown. */
-  generated: Uint8Array;
   /** Furthest frame end on the x axis, including every frame duration. */
   totalDurationMs: number;
   /** Fastest/slowest frame time across the capture (0 when empty) — the chart
@@ -28,31 +26,67 @@ export interface FrameSeries {
   peakVramUsedMb?: number;
 }
 
-export function buildFrameSeries(frames: readonly FrameSample[]): FrameSeries {
-  const count = frames.length;
-  const times = new Float64Array(count);
-  const frameTimes = new Float64Array(count);
-  const generated = new Uint8Array(count);
+export interface FrameSeriesSensorStats {
+  avgGpuLoadPct?: number;
+  peakVramUsedMb?: number;
+}
 
-  let gpuLoadSum = 0;
-  let gpuLoadCount = 0;
-  let peakVram: number | undefined;
+/**
+ * Complete a chart series from validated columnar timing data. `sourceTimes`
+ * is normalized in place, so callers can avoid an extra full-size allocation
+ * after decoding a large Parquet projection.
+ */
+export function buildFrameSeriesFromColumns(
+  sourceTimes: Float64Array,
+  frameTimes: Float64Array,
+  sensorStats: FrameSeriesSensorStats = {},
+): FrameSeries {
+  if (sourceTimes.length !== frameTimes.length) {
+    throw new RangeError("frame time columns must have the same length");
+  }
+
+  const count = frameTimes.length;
+
   let previousFrameEndMs = 0;
   let minFrameTimeMs = Infinity;
   let maxFrameTimeMs = 0;
 
   for (let i = 0; i < count; i++) {
-    const frame = frames[i]!;
     // Stored timestamps never decrease, but can repeat or overlap a long prior
     // frame. Normalize every overlapping start to the prior frame end so chart
     // times remain strictly increasing for binary-search windowing.
-    const frameStartMs = Math.max(frame.timeMs, previousFrameEndMs);
-    times[i] = frameStartMs;
+    const frameStartMs = Math.max(sourceTimes[i]!, previousFrameEndMs);
+    const frameTimeMs = frameTimes[i]!;
+    sourceTimes[i] = frameStartMs;
+    previousFrameEndMs = frameStartMs + frameTimeMs;
+    if (frameTimeMs < minFrameTimeMs) minFrameTimeMs = frameTimeMs;
+    if (frameTimeMs > maxFrameTimeMs) maxFrameTimeMs = frameTimeMs;
+  }
+
+  return {
+    count,
+    times: sourceTimes,
+    frameTimes,
+    totalDurationMs: previousFrameEndMs,
+    minFrameTimeMs: count === 0 ? 0 : minFrameTimeMs,
+    maxFrameTimeMs,
+    ...sensorStats,
+  };
+}
+
+export function buildFrameSeries(frames: readonly FrameSample[]): FrameSeries {
+  const count = frames.length;
+  const times = new Float64Array(count);
+  const frameTimes = new Float64Array(count);
+
+  let gpuLoadSum = 0;
+  let gpuLoadCount = 0;
+  let peakVram: number | undefined;
+
+  for (let i = 0; i < count; i++) {
+    const frame = frames[i]!;
+    times[i] = frame.timeMs;
     frameTimes[i] = frame.frameTimeMs;
-    previousFrameEndMs = frameStartMs + frame.frameTimeMs;
-    if (frame.frameTimeMs < minFrameTimeMs) minFrameTimeMs = frame.frameTimeMs;
-    if (frame.frameTimeMs > maxFrameTimeMs) maxFrameTimeMs = frame.frameTimeMs;
-    if (frame.generated === true) generated[i] = 1;
     if (frame.gpuLoadPct !== undefined) {
       gpuLoadSum += frame.gpuLoadPct;
       gpuLoadCount++;
@@ -62,15 +96,8 @@ export function buildFrameSeries(frames: readonly FrameSample[]): FrameSeries {
     }
   }
 
-  return {
-    count,
-    times,
-    frameTimes,
-    generated,
-    totalDurationMs: previousFrameEndMs,
-    minFrameTimeMs: count === 0 ? 0 : minFrameTimeMs,
-    maxFrameTimeMs,
+  return buildFrameSeriesFromColumns(times, frameTimes, {
     ...(gpuLoadCount > 0 ? { avgGpuLoadPct: gpuLoadSum / gpuLoadCount } : {}),
     ...(peakVram !== undefined ? { peakVramUsedMb: peakVram } : {}),
-  };
+  });
 }

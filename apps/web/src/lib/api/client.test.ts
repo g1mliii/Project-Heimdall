@@ -11,11 +11,11 @@ vi.mock("hyparquet", async (importOriginal) => {
   return {
     ...actual,
     parquetMetadata: vi.fn(actual.parquetMetadata),
-    parquetReadObjects: vi.fn(actual.parquetReadObjects),
+    parquetRead: vi.fn(actual.parquetRead),
   };
 });
 
-import { parquetMetadata, parquetReadObjects } from "hyparquet";
+import { parquetMetadata, parquetRead } from "hyparquet";
 import { parquetWriteBuffer } from "hyparquet-writer";
 import { framesToColumnData, INGEST_LIMITS, makeSyntheticFrames } from "@heimdall/shared";
 import { fetchFrames, getFramesUrl, loadRunFrames, type ApiTransport } from "./client";
@@ -79,22 +79,22 @@ describe("fetchFrames", () => {
   it("decodes only the frame fields needed by the chart", async () => {
     const frames = makeSyntheticFrames({ seed: 3, count: 200 });
     const transport = transportReturning(() => new Response(parquetBytes(frames)));
-    const readObjects = vi.mocked(parquetReadObjects);
-    readObjects.mockClear();
+    const read = vi.mocked(parquetRead);
+    read.mockClear();
     const result = await fetchFrames("https://r2.example.test/get", transport);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.data).toEqual(
-        frames.map(({ timeMs, frameTimeMs, gpuLoadPct, vramUsedMb }) => ({
-          timeMs,
-          frameTimeMs,
-          gpuLoadPct,
-          vramUsedMb,
-        })),
+      expect(result.data.count).toBe(frames.length);
+      expect(Array.from(result.data.times)).toEqual(frames.map((frame) => frame.timeMs));
+      expect(Array.from(result.data.frameTimes)).toEqual(frames.map((frame) => frame.frameTimeMs));
+      expect(result.data.avgGpuLoadPct).toBeCloseTo(
+        frames.reduce((sum, frame) => sum + frame.gpuLoadPct!, 0) / frames.length,
       );
+      expect(result.data.peakVramUsedMb).toBe(Math.max(...frames.map((frame) => frame.vramUsedMb!)));
     }
-    expect(readObjects).toHaveBeenCalledWith(
-      expect.objectContaining({ columns: FRAME_CHART_PARQUET_COLUMN_NAMES }),
+    expect(read).toHaveBeenCalledTimes(FRAME_CHART_PARQUET_COLUMN_NAMES.length);
+    expect(read.mock.calls.map(([options]) => options.columns)).toEqual(
+      FRAME_CHART_PARQUET_COLUMN_NAMES.map((column) => [column]),
     );
   });
 
@@ -115,8 +115,8 @@ describe("fetchFrames", () => {
       num_rows: BigInt(INGEST_LIMITS.maxFramesPerRun + 1),
       row_groups: [],
     } as never);
-    const readObjects = vi.mocked(parquetReadObjects);
-    readObjects.mockClear();
+    const read = vi.mocked(parquetRead);
+    read.mockClear();
 
     const result = await fetchFrames(
       "https://r2.example.test/get",
@@ -124,7 +124,7 @@ describe("fetchFrames", () => {
     );
 
     expect(result).toMatchObject({ ok: false, code: "invalid-response" });
-    expect(readObjects).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
     metadata.mockRestore();
   });
 });
@@ -139,7 +139,7 @@ describe("loadRunFrames", () => {
     );
     const result = await loadRunFrames("run_x", transport);
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.data).toHaveLength(200);
+    if (result.ok) expect(result.data.count).toBe(200);
   });
 
   it("passes a cancellation signal through both hops", async () => {

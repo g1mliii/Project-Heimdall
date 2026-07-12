@@ -10,9 +10,10 @@
  */
 
 import { INGEST_LIMITS, framesUrlResponseSchema } from "@heimdall/shared";
-import type { FrameSample, FramesUrlResponse } from "@heimdall/shared";
+import type { FramesUrlResponse } from "@heimdall/shared";
 import { readApiFailure } from "./errors";
-import { decodeFrameParquet, FRAME_CHART_PARQUET_COLUMN_NAMES } from "../parquet/frame-metadata";
+import { decodeFrameParquetToSeries } from "../parquet/frame-metadata";
+import type { FrameSeries } from "../run/frame-series";
 
 export type ApiResult<T> =
   | { ok: true; data: T }
@@ -82,12 +83,12 @@ export function getFramesUrl(
   );
 }
 
-/** Fetch the signed Parquet URL and decode it into validated frames. */
+/** Fetch the signed Parquet URL and decode it directly into chart columns. */
 export async function fetchFrames(
   url: string,
   transport: ApiTransport = defaultTransport(),
   signal?: AbortSignal,
-): Promise<ApiResult<FrameSample[]>> {
+): Promise<ApiResult<FrameSeries>> {
   let response: Response;
   try {
     response = await transportFetch(transport, url, signal);
@@ -101,18 +102,18 @@ export async function fetchFrames(
     if (buffer.byteLength > INGEST_LIMITS.maxParquetBytes) {
       return failure("parquet-too-large", `frames object is ${buffer.byteLength} bytes`);
     }
-    return { ok: true, data: await decodeFrameParquet(buffer, FRAME_CHART_PARQUET_COLUMN_NAMES) };
+    return { ok: true, data: await decodeFrameParquetToSeries(buffer) };
   } catch (error) {
     return failure("invalid-response", error instanceof Error ? error.message : String(error));
   }
 }
 
-/** The full two-hop frames flow: signed URL → Parquet bytes → `FrameSample[]`. */
+/** The full two-hop frames flow: signed URL → Parquet bytes → chart series. */
 export async function loadRunFrames(
   id: string,
   transport: ApiTransport = defaultTransport(),
   signal?: AbortSignal,
-): Promise<ApiResult<FrameSample[]>> {
+): Promise<ApiResult<FrameSeries>> {
   const urlResult = await getFramesUrl(id, transport, signal);
   if (!urlResult.ok) return urlResult;
   return fetchFrames(urlResult.data.url, transport, signal);

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { makeSyntheticFrames } from "@heimdall/shared";
 
-import { buildFrameSeries } from "./frame-series";
+import { buildFrameSeries, buildFrameSeriesFromColumns } from "./frame-series";
 
 describe("buildFrameSeries", () => {
   it("transposes frames into typed columns with sensor stats", () => {
@@ -11,8 +11,6 @@ describe("buildFrameSeries", () => {
     expect(series.count).toBe(500);
     expect(series.times[0]).toBe(frames[0]!.timeMs);
     expect(series.frameTimes[499]).toBe(frames[499]!.frameTimeMs);
-    expect(series.generated[0]).toBe(1); // i % 5 === 0 → generated
-    expect(series.generated[2]).toBe(0);
     expect(series.totalDurationMs).toBeCloseTo(
       frames[499]!.timeMs + frames[499]!.frameTimeMs,
       12,
@@ -53,6 +51,22 @@ describe("buildFrameSeries", () => {
 
     expect(Array.from(series.times)).toEqual([0, 5, 25, 28]);
     expect(series.totalDurationMs).toBe(32);
+  });
+
+  it("completes decoded timing columns in place without frame objects", () => {
+    const times = Float64Array.from([0, 5, 5, 6]);
+    const frameTimes = Float64Array.from([5, 20, 3, 4]);
+
+    const series = buildFrameSeriesFromColumns(times, frameTimes, {
+      avgGpuLoadPct: 95,
+      peakVramUsedMb: 12_000,
+    });
+
+    expect(series.times).toBe(times);
+    expect(Array.from(series.times)).toEqual([0, 5, 25, 28]);
+    expect(series.totalDurationMs).toBe(32);
+    expect(series.avgGpuLoadPct).toBe(95);
+    expect(series.peakVramUsedMb).toBe(12_000);
   });
 
   it("handles an empty frame list", () => {

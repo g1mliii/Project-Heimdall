@@ -12,9 +12,9 @@ import {
   parseFrameParquetTimeMs,
   parseOptionalFrameParquetGenerated,
   parseOptionalFrameParquetNumber,
-  rowsToFrameSamples,
 } from "@heimdall/shared";
-import type { FrameSample, RunSummary } from "@heimdall/shared";
+import type { RunSummary } from "@heimdall/shared";
+import { buildFrameSeriesFromColumns, type FrameSeries } from "../run/frame-series";
 
 export const FRAME_PARQUET_COLUMN_NAMES = FRAME_PARQUET_COLUMNS.map((column) => column.name);
 /** Columns needed to render the Phase 5 chart and hardware summary. */
@@ -23,7 +23,9 @@ export const FRAME_CHART_PARQUET_COLUMN_NAMES = [
   "frame_time_ms",
   "gpu_load_pct",
   "vram_used_mb",
-];
+] as const;
+const [TIME_MS_COLUMN, FRAME_TIME_MS_COLUMN, GPU_LOAD_PCT_COLUMN, VRAM_USED_MB_COLUMN] =
+  FRAME_CHART_PARQUET_COLUMN_NAMES;
 const MAX_DECODED_FRAME_PARQUET_BYTES = BigInt(INGEST_LIMITS.maxParquetBytes);
 
 interface FrameParquetChunk {
@@ -32,6 +34,8 @@ interface FrameParquetChunk {
   rowStart: number;
   rowEnd: number;
 }
+
+type ParquetRead = typeof import("hyparquet").parquetRead;
 
 function asArrayBuffer(input: ArrayBuffer | Uint8Array): ArrayBuffer {
   if (input instanceof ArrayBuffer) return input;
@@ -95,6 +99,73 @@ export function validateFrameParquetMetadata(
 }
 
 /**
+ * Decode and validate one column at a time. Besides keeping the peak heap
+ * bounded, the presence bitmap proves that unordered row groups yielded each
+ * row exactly once before a caller trusts the typed output buffer.
+ */
+async function readFrameParquetColumn(
+  parquetRead: ParquetRead,
+  buffer: ArrayBuffer,
+  metadata: FileMetaData,
+  frameCount: number,
+  expectedColumnName: string,
+  onValue: (value: unknown, row: number) => void,
+): Promise<void> {
+  const seenRows = new Uint8Array(frameCount);
+  let observedRows = 0;
+  let validationError: Error | undefined;
+
+  const recordError = (message: string): void => {
+    validationError ??= new Error(message);
+  };
+
+  const validateChunk = ({ columnName, columnData, rowStart, rowEnd }: FrameParquetChunk): void => {
+    if (validationError) return;
+    try {
+      const expectedRows = rowEnd - rowStart;
+      if (
+        columnName !== expectedColumnName ||
+        !Number.isInteger(rowStart) ||
+        !Number.isInteger(rowEnd) ||
+        rowStart < 0 ||
+        rowEnd > frameCount ||
+        expectedRows < 0 ||
+        columnData.length !== expectedRows
+      ) {
+        recordError(`parquet column ${columnName} emitted an invalid row range`);
+        return;
+      }
+      observedRows += expectedRows;
+
+      for (let offset = 0; offset < expectedRows; offset++) {
+        const row = rowStart + offset;
+        if (seenRows[row] !== 0) {
+          recordError(`parquet column ${columnName} repeats row ${row}`);
+          return;
+        }
+        seenRows[row] = 1;
+        onValue(columnData[offset], row);
+      }
+    } catch (error) {
+      recordError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  await parquetRead({
+    file: buffer,
+    metadata,
+    columns: [expectedColumnName],
+    rowEnd: frameCount,
+    onChunk: validateChunk,
+  });
+
+  if (validationError) throw validationError;
+  if (observedRows !== frameCount) {
+    throw new Error(`parquet column ${expectedColumnName} decoded an incomplete row range`);
+  }
+}
+
+/**
  * Validate every persisted frame column while retaining only the scalar data
  * needed for the canonical summary. Columns decode one at a time because
  * hyparquet starts all requested columns concurrently; this keeps verification
@@ -114,74 +185,29 @@ export async function computeFrameParquetSummary(
   let generatedFrameCount = 0;
 
   for (const expectedColumnName of FRAME_PARQUET_COLUMN_NAMES) {
-    // A single-column pass lets each decoded column become collectible before
-    // the next starts. Keep one compact presence map because row groups may
-    // complete out of order; count + no duplicates proves full coverage.
-    const seenRows = new Uint8Array(frameCount);
-    let observedRows = 0;
-    let validationError: Error | undefined;
-
-    const recordError = (message: string): void => {
-      validationError ??= new Error(message);
-    };
-
-    const validateChunk = ({ columnName, columnData, rowStart, rowEnd }: FrameParquetChunk): void => {
-      if (validationError) return;
-      try {
-        const expectedRows = rowEnd - rowStart;
-        if (
-          columnName !== expectedColumnName ||
-          !Number.isInteger(rowStart) ||
-          !Number.isInteger(rowEnd) ||
-          rowStart < 0 ||
-          rowEnd > frameCount ||
-          expectedRows < 0 ||
-          columnData.length !== expectedRows
-        ) {
-          recordError(`parquet column ${columnName} emitted an invalid row range`);
+    await readFrameParquetColumn(
+      parquetRead,
+      buffer,
+      metadata,
+      frameCount,
+      expectedColumnName,
+      (value, row) => {
+        if (expectedColumnName === "time_ms") {
+          times![row] = parseFrameParquetTimeMs(value, row);
           return;
         }
-        observedRows += expectedRows;
-
-        for (let offset = 0; offset < expectedRows; offset++) {
-          const row = rowStart + offset;
-          const value = columnData[offset];
-          if (seenRows[row] !== 0) {
-            recordError(`parquet column ${columnName} repeats row ${row}`);
-            return;
-          }
-          seenRows[row] = 1;
-          if (columnName === "time_ms") {
-            times![row] = parseFrameParquetTimeMs(value, row);
-            continue;
-          }
-          if (columnName === "frame_time_ms") {
-            frameTimes[row] = parseFrameParquetFrameTimeMs(value, row);
-            continue;
-          }
-          if (columnName === "generated") {
-            if (parseOptionalFrameParquetGenerated(value, row) === true) generatedFrameCount++;
-            continue;
-          }
-          parseOptionalFrameParquetNumber(columnName, value, row);
+        if (expectedColumnName === "frame_time_ms") {
+          frameTimes[row] = parseFrameParquetFrameTimeMs(value, row);
+          return;
         }
-      } catch (error) {
-        recordError(error instanceof Error ? error.message : String(error));
-      }
-    };
+        if (expectedColumnName === "generated") {
+          if (parseOptionalFrameParquetGenerated(value, row) === true) generatedFrameCount++;
+          return;
+        }
+        parseOptionalFrameParquetNumber(expectedColumnName, value, row);
+      },
+    );
 
-    await parquetRead({
-      file: buffer,
-      metadata,
-      columns: [expectedColumnName],
-      rowEnd: frameCount,
-      onChunk: validateChunk,
-    });
-
-    if (validationError) throw validationError;
-    if (observedRows !== frameCount) {
-      throw new Error(`parquet column ${expectedColumnName} decoded an incomplete row range`);
-    }
     if (expectedColumnName === "time_ms") {
       let previousTimeMs: number | undefined;
       for (let row = 0; row < frameCount; row++) {
@@ -202,28 +228,79 @@ export async function computeFrameParquetSummary(
 }
 
 /**
- * The single frame-Parquet decode path, shared by the run-page reader (client)
- * and verification worker (server): both fully validate the stored layout. The
- * browser explicitly requests the chart projection; the worker uses
- * `computeFrameParquetSummary()` to avoid object materialization. `hyparquet`
- * is dynamic-imported so it stays off non-run client bundles. Throws on any
- * layout, size, or row-count violation — callers decide how to surface it.
+ * Decode the run-page projection directly into the typed columns the chart
+ * consumes. This deliberately never builds a `FrameSample[]`: a valid
+ * 500,000-frame capture otherwise creates a large object graph immediately
+ * before `buildFrameSeries` copies the same fields into typed arrays.
  */
-export async function decodeFrameParquet(
-  buffer: ArrayBuffer,
-  columns: string[] = FRAME_PARQUET_COLUMN_NAMES,
-): Promise<FrameSample[]> {
-  const { parquetMetadata, parquetReadObjects } = await import("hyparquet");
+export async function decodeFrameParquetToSeries(buffer: ArrayBuffer): Promise<FrameSeries> {
+  const { parquetMetadata, parquetRead } = await import("hyparquet");
   const metadata = parquetMetadata(buffer);
   const frameCount = validateFrameParquetMetadata(metadata);
-  const rows = await parquetReadObjects({
-    file: buffer,
+
+  const times = new Float64Array(frameCount);
+  const frameTimes = new Float64Array(frameCount);
+  let gpuLoadSum = 0;
+  let gpuLoadCount = 0;
+  let peakVramUsedMb: number | undefined;
+
+  await readFrameParquetColumn(
+    parquetRead,
+    buffer,
     metadata,
-    columns,
-    rowEnd: frameCount,
-  });
-  if (rows.length !== frameCount) {
-    throw new Error(`decoded ${rows.length} frames but metadata declared ${frameCount}`);
+    frameCount,
+    TIME_MS_COLUMN,
+    (value, row) => {
+      times[row] = parseFrameParquetTimeMs(value, row);
+    },
+  );
+  await readFrameParquetColumn(
+    parquetRead,
+    buffer,
+    metadata,
+    frameCount,
+    FRAME_TIME_MS_COLUMN,
+    (value, row) => {
+      frameTimes[row] = parseFrameParquetFrameTimeMs(value, row);
+    },
+  );
+  await readFrameParquetColumn(
+    parquetRead,
+    buffer,
+    metadata,
+    frameCount,
+    GPU_LOAD_PCT_COLUMN,
+    (value, row) => {
+      const gpuLoadPct = parseOptionalFrameParquetNumber(GPU_LOAD_PCT_COLUMN, value, row);
+      if (gpuLoadPct !== undefined) {
+        gpuLoadSum += gpuLoadPct;
+        gpuLoadCount++;
+      }
+    },
+  );
+  await readFrameParquetColumn(
+    parquetRead,
+    buffer,
+    metadata,
+    frameCount,
+    VRAM_USED_MB_COLUMN,
+    (value, row) => {
+      const vramUsedMb = parseOptionalFrameParquetNumber(VRAM_USED_MB_COLUMN, value, row);
+      if (vramUsedMb !== undefined && (peakVramUsedMb === undefined || vramUsedMb > peakVramUsedMb)) {
+        peakVramUsedMb = vramUsedMb;
+      }
+    },
+  );
+
+  let previousTimeMs: number | undefined;
+  for (let row = 0; row < frameCount; row++) {
+    const timeMs = times[row]!;
+    assertFrameParquetTimeOrder(previousTimeMs, timeMs, row);
+    previousTimeMs = timeMs;
   }
-  return rowsToFrameSamples(rows);
+
+  return buildFrameSeriesFromColumns(times, frameTimes, {
+    ...(gpuLoadCount > 0 ? { avgGpuLoadPct: gpuLoadSum / gpuLoadCount } : {}),
+    ...(peakVramUsedMb !== undefined ? { peakVramUsedMb } : {}),
+  });
 }

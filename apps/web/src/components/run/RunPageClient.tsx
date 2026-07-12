@@ -10,9 +10,9 @@
 
 import * as React from "react";
 import { Card, Diagnostic, Button, Segmented, Spinner } from "@heimdall/ui";
-import { RUN_STATUS, type FrameSample, type Run } from "@heimdall/shared";
+import { RUN_STATUS, type Run } from "@heimdall/shared";
 import { loadRunFrames, type ApiResult } from "@/lib/api/client";
-import { buildFrameSeries, type FrameSeries } from "@/lib/run/frame-series";
+import type { FrameSeries } from "@/lib/run/frame-series";
 import { findStutterIndices, medianFrameTimeMs } from "@/lib/run/stutters";
 import { CHART_UNITS, type ChartUnit } from "@/lib/run/units";
 import { FrameTimeChart } from "./chart/FrameTimeChart";
@@ -23,7 +23,7 @@ import { DiagnosticsCard } from "./DiagnosticsCard";
 import { HardwareCard } from "./HardwareCard";
 import styles from "./RunPageClient.module.css";
 
-export type FramesLoader = (id: string, signal?: AbortSignal) => Promise<ApiResult<FrameSample[]>>;
+export type FramesLoader = (id: string, signal?: AbortSignal) => Promise<ApiResult<FrameSeries>>;
 
 type FramesState =
   | { kind: "loading" }
@@ -53,16 +53,15 @@ export function RunPageClient({
       .then((result) => {
         if (cancelled) return;
         if (result.ok) {
-          const series = buildFrameSeries(result.data);
           // Pending summaries originate with the uploader. Only a validated run
           // may reuse its server-recomputed median; every other status derives
           // the threshold from the decoded frames.
           const medianMs =
             run.status === RUN_STATUS.validated
               ? run.summary.frameTimeP50Ms
-              : medianFrameTimeMs(series.frameTimes);
-          const stutterIndices = findStutterIndices(series.frameTimes, medianMs);
-          setFrames({ kind: "ready", series, stutterIndices });
+              : medianFrameTimeMs(result.data.frameTimes);
+          const stutterIndices = findStutterIndices(result.data.frameTimes, medianMs);
+          setFrames({ kind: "ready", series: result.data, stutterIndices });
         } else if (result.code === "not-finalized") {
           setFrames({ kind: "not-finalized" });
         } else {
