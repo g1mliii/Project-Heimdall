@@ -8,9 +8,9 @@
  *
  * The key intentionally spans: canonical game + canonical GPU (the hardware/
  * title identity), resolution + upscaler + ray-tracing + frame-generation (the
- * rendering pipeline), the frame-pacing ceiling (cap/VSync/VRR), and the scene
- * type (a `benchmark-scene` never pools with `gameplay`, and `freeform` stays
- * separately filterable per §17.5).
+ * rendering pipeline), graphics API, the frame-pacing ceiling (cap/VSync/VRR),
+ * and the scene type (a `benchmark-scene` never pools with `gameplay`, and
+ * `freeform` stays separately filterable per §17.5).
  */
 
 import type {
@@ -30,6 +30,8 @@ export interface ComparabilityInput {
   upscaler: UpscalerMode;
   rayTracing: RayTracingMode;
   frameGeneration: GeneratedFrameTech;
+  /** Runtime graphics API (null when the capture did not expose one). */
+  graphicsApi: string | null;
   /** Applied FPS cap, or null for uncapped. */
   frameCapFps: number | null;
   vsync: boolean;
@@ -45,6 +47,7 @@ const KEY_FIELDS = [
   "upscaler",
   "rayTracing",
   "frameGeneration",
+  "graphicsApi",
   "frameCapFps",
   "vsync",
   "vrr",
@@ -88,6 +91,7 @@ export function comparabilityKeySql(alias = "runs"): string {
     `coalesce(${alias}.upscaler, '${MISSING}')`,
     `coalesce(${alias}.ray_tracing, '${MISSING}')`,
     `coalesce(${alias}.generated_frame_tech, '${MISSING}')`,
+    `coalesce(${alias}.graphics_api, '${MISSING}')`,
     `coalesce(${alias}.frame_pacing_cap::text, '${MISSING}')`,
     boolText(`${alias}.vsync`),
     boolText(`${alias}.vrr`),
@@ -96,6 +100,31 @@ export function comparabilityKeySql(alias = "runs"): string {
   // Every part is already coalesced to the '~' sentinel, so concat_ws never
   // skips a NULL and collapses distinct keys.
   return `concat_ws('|', ${parts.join(", ")})`;
+}
+
+/**
+ * Index-friendly SQL predicate for two run aliases to share every component
+ * of a comparability key. This deliberately uses raw `is not distinct from`
+ * comparisons rather than comparing the rendered key expression, so Postgres
+ * can use the partial comparability indexes. Both aliases are trusted
+ * developer-supplied SQL identifiers, never user input.
+ */
+export function comparabilityMatchSql(leftAlias: string, rightAlias: string): string {
+  return [
+    "game_id",
+    "gpu_hardware_id",
+    "resolution",
+    "upscaler",
+    "ray_tracing",
+    "generated_frame_tech",
+    "graphics_api",
+    "frame_pacing_cap",
+    "vsync",
+    "vrr",
+    "scene_type",
+  ]
+    .map((column) => `${leftAlias}.${column} is not distinct from ${rightAlias}.${column}`)
+    .join(" and ");
 }
 
 /**

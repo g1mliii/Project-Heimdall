@@ -107,6 +107,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0018_comparability_index.sql",
       "0019_comparability_frame_pacing_index.sql",
       "0020_benchmark_set_scope.sql",
+      "0021_graphics_api_comparability.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
@@ -470,6 +471,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       upscaler: "dlss" as const,
       rayTracing: "on" as const,
       frameGeneration: "dlss3" as const,
+      graphicsApi: "dx12",
       framePacing: { capFps: 120, vsync: true, vrr: false },
     };
     const run = {
@@ -491,6 +493,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     const { rows } = await pool.query<{
       upscaler: string;
       ray_tracing: string;
+      graphics_api: string;
       frame_pacing_cap: number;
       vsync: boolean;
       vrr: boolean;
@@ -498,13 +501,14 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       benchmark_set_id: string;
       is_warmup: boolean;
     }>(
-      `select upscaler, ray_tracing, frame_pacing_cap, vsync, vrr, scene_type, benchmark_set_id, is_warmup
+      `select upscaler, ray_tracing, graphics_api, frame_pacing_cap, vsync, vrr, scene_type, benchmark_set_id, is_warmup
          from runs where id = $1`,
       [run.id],
     );
     expect(rows[0]).toEqual({
       upscaler: "dlss",
       ray_tracing: "on",
+      graphics_api: "dx12",
       frame_pacing_cap: 120,
       vsync: true,
       vrr: false,
@@ -525,6 +529,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "upscaler",
       "ray_tracing",
       "generated_frame_tech",
+      "graphics_api",
       "frame_pacing_cap",
       "vsync",
       "vrr",
@@ -535,5 +540,38 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     // The partial predicate is preserved from 0004.
     expect(definition).toContain("validated");
     expect(definition).toContain("public");
+  });
+
+  it("backfills graphics API from pre-0021 methodology rows", async () => {
+    const run = {
+      ...fixtureRunWithId("run_graphics_api_backfill"),
+      methodologyManifest: {
+        version: 1,
+        sceneType: "benchmark-scene" as const,
+        upscaler: "none" as const,
+        rayTracing: "off" as const,
+        frameGeneration: "none" as const,
+        graphicsApi: "dx12",
+        framePacing: { vsync: false, vrr: false },
+      },
+    };
+    await insertRun(run, pool);
+    await pool.query(
+      `update runs
+          set graphics_api = null,
+              settings_json = jsonb_set(settings_json, '{graphicsApi}', to_jsonb($2::text))
+        where id = $1`,
+      [run.id, "x".repeat(65)],
+    );
+    await pool.query("delete from schema_migrations where version = $1", [
+      "0021_graphics_api_comparability.sql",
+    ]);
+
+    expect(await migrate(pool)).toEqual(["0021_graphics_api_comparability.sql"]);
+    const { rows } = await pool.query<{ graphics_api: string | null }>(
+      "select graphics_api from runs where id = $1",
+      [run.id],
+    );
+    expect(rows[0]?.graphics_api).toMatch(/^legacy:[0-9a-f]{32}$/);
   });
 });

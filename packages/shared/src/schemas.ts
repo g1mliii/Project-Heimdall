@@ -49,9 +49,15 @@ export const runStatusSchema = z.enum([
 
 const pct = z.number().min(0).max(100);
 const MAX_METADATA_TEXT_LENGTH = 512;
+// `resolution` and `graphicsApi` are copied into indexed run columns. Keep
+// their worst-case UTF-8 tuple contribution safely below Postgres's B-tree
+// index-row limit while leaving descriptive manifest fields at 512 characters.
+const MAX_INDEXED_METADATA_TEXT_LENGTH = 64;
 const MAX_MANIFEST_CAVEATS = 16;
 const MAX_EVIDENCE_METRICS = 16;
-const metadataTextSchema = z.string().trim().min(1).max(MAX_METADATA_TEXT_LENGTH);
+const metadataText = (maxLength: number) => z.string().trim().min(1).max(maxLength);
+const metadataTextSchema = metadataText(MAX_METADATA_TEXT_LENGTH);
+const indexedMetadataTextSchema = metadataText(MAX_INDEXED_METADATA_TEXT_LENGTH);
 /** Opaque client-generated identity; unlike the local display label, it is never human-chosen. */
 const benchmarkSetIdSchema = z.string().uuid();
 /** URL-safe 256-bit browser-held capability used only to join an existing set. */
@@ -68,7 +74,9 @@ export const hardwareSnapshotSchema = z.object({
   os: z.string().optional(),
   gpuDriver: z.string().optional(),
   gpuVramTotalMb: z.number().positive().optional(),
-  resolution: z.string().optional(),
+  // This is mirrored into the indexed `runs.resolution` column when a
+  // methodology manifest does not supply a separate value.
+  resolution: indexedMetadataTextSchema.optional(),
   canonicalGpuId: z.string().optional(),
   canonicalCpuId: z.string().optional(),
 });
@@ -187,7 +195,10 @@ export const rayTracingModeSchema = z.enum(["off", "on", "unknown"]);
 export const hagsStateSchema = z.enum(["enabled", "disabled", "unknown"]);
 
 export const framePacingSchema = z.object({
-  capFps: z.number().positive().optional(),
+  // `runs.frame_pacing_cap` is an integer. Reject fractional limiter values
+  // at the API boundary rather than letting a schema-valid request fail during
+  // the database insert.
+  capFps: z.number().int().positive().optional(),
   vsync: z.boolean(),
   vrr: z.boolean(),
   refreshHz: z.number().positive().optional(),
@@ -200,8 +211,8 @@ export const methodologyManifestSchema = z.object({
   scene: metadataTextSchema.optional(),
   sceneType: sceneTypeSchema,
   settingsPreset: metadataTextSchema.optional(),
-  graphicsApi: metadataTextSchema.optional(),
-  resolution: metadataTextSchema.optional(),
+  graphicsApi: indexedMetadataTextSchema.optional(),
+  resolution: indexedMetadataTextSchema.optional(),
   upscaler: upscalerModeSchema,
   rayTracing: rayTracingModeSchema,
   frameGeneration: generatedFrameTechSchema,

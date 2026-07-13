@@ -494,12 +494,14 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
           visibility = RUN_VISIBILITY.public,
           status = RUN_STATUS.validated,
           vsync = false,
+          graphicsApi = "dx12",
           setId = benchmarkSetId,
         }: {
           isWarmup?: boolean;
           visibility?: Run["visibility"];
           status?: Run["status"];
           vsync?: boolean;
+          graphicsApi?: string;
           setId?: string;
         } = {},
       ): Run => ({
@@ -518,6 +520,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
           upscaler: "none",
           rayTracing: "off",
           frameGeneration: "none",
+          graphicsApi,
           framePacing: { vsync, vrr: false },
         },
       });
@@ -530,6 +533,9 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
           benchmarkSetSecretHash,
         }),
         insertRun(makeSetRun("run_set_other_profile", 40, { vsync: true }), db.pool, {
+          benchmarkSetSecretHash,
+        }),
+        insertRun(makeSetRun("run_set_other_api", 40, { graphicsApi: "vulkan" }), db.pool, {
           benchmarkSetSecretHash,
         }),
         insertRun(makeSetRun("run_set_private", 40, { visibility: RUN_VISIBILITY.private }), db.pool, {

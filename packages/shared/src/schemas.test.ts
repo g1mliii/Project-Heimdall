@@ -186,6 +186,47 @@ describe("DTO round-trip stability (§3.2)", () => {
     ).toBe(true);
   });
 
+  it("rejects fractional frame caps before they reach the integer run column", () => {
+    expect(
+      createRunRequestSchema.safeParse({
+        ...validCreateRunRequest,
+        methodologyManifest: {
+          version: 1,
+          sceneType: "benchmark-scene",
+          upscaler: "none",
+          rayTracing: "off",
+          frameGeneration: "none",
+          framePacing: { capFps: 59.94, vsync: false, vrr: false },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("bounds indexed methodology strings below PostgreSQL's B-tree tuple limit", () => {
+    const methodologyManifest = {
+      version: 1,
+      sceneType: "benchmark-scene" as const,
+      upscaler: "none" as const,
+      rayTracing: "off" as const,
+      frameGeneration: "none" as const,
+      framePacing: { vsync: false, vrr: false },
+    };
+    for (const field of ["graphicsApi", "resolution"] as const) {
+      expect(
+        createRunRequestSchema.safeParse({
+          ...validCreateRunRequest,
+          methodologyManifest: { ...methodologyManifest, [field]: "x".repeat(65) },
+        }).success,
+      ).toBe(false);
+    }
+    expect(
+      createRunRequestSchema.safeParse({
+        ...validCreateRunRequest,
+        hardware: { ...validCreateRunRequest.hardware, resolution: "x".repeat(65) },
+      }).success,
+    ).toBe(false);
+  });
+
   it("round-trips a generated spread of summaries (property-style)", () => {
     // Lightweight generative property check without pulling in a PBT dependency:
     // a deterministic LCG drives the inputs, so failures reproduce exactly.

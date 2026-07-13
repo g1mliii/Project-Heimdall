@@ -67,6 +67,11 @@ function formatMb(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1);
 }
 
+function isPositiveInteger(value: string): boolean {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0;
+}
+
 function progressLine(progress: UploadProgress): { title: string; data: string } {
   switch (progress.stage) {
     case "parsing":
@@ -150,6 +155,10 @@ export function UploadClient() {
   const fileInput = React.useRef<HTMLInputElement>(null);
 
   const busy = mode.kind === "single" || mode.kind === "batch";
+  const capFpsError =
+    includeMethodology && capFps.trim() !== "" && !isPositiveInteger(capFps)
+      ? "Frame cap must be a positive whole number."
+      : undefined;
 
   function declaredMethodology(): UploadOptions["methodology"] | undefined {
     if (!includeMethodology) return undefined;
@@ -181,6 +190,7 @@ export function UploadClient() {
     UploadOptions,
     "benchmarkSetId" | "benchmarkSetSecret" | "isWarmup"
   > {
+    if (!includeMethodology) return {};
     const benchmarkSet = getOrCreateBrowserBenchmarkSet(benchmarkSetLabel);
     return benchmarkSet === undefined
       ? {}
@@ -255,6 +265,9 @@ export function UploadClient() {
     }
     if (!game.trim()) {
       setGameError("Name the game first — runs are grouped by title.");
+      return;
+    }
+    if (capFpsError !== undefined) {
       return;
     }
     setGameError(null);
@@ -397,6 +410,7 @@ export function UploadClient() {
               <Input
                 label="Frame cap"
                 hint="Leave empty when uncapped or unknown."
+                error={capFpsError}
                 type="number"
                 placeholder="120"
                 value={capFps}

@@ -8,6 +8,7 @@ import { benchmarkSetConfidence } from "@heimdall/parsers";
 import type { BenchmarkSetStats } from "@heimdall/parsers";
 import {
   aggregateEligibilitySql,
+  comparabilityMatchSql,
   comparabilityProfileSql,
   isAggregateEligible,
   RUN_STATUS,
@@ -95,7 +96,7 @@ export async function readVisibleBenchmarkSet(
   const rows = await query<BenchmarkSetAggregateRow>(
     `with base as (
        select game_id, gpu_hardware_id, resolution, upscaler, ray_tracing,
-              generated_frame_tech, frame_pacing_cap, vsync, vrr, scene_type
+              generated_frame_tech, graphics_api, frame_pacing_cap, vsync, vrr, scene_type
          from runs base
         where base.id = $2
           and base.benchmark_set_id = $1
@@ -110,16 +111,7 @@ export async function readVisibleBenchmarkSet(
               as stddev_avg_fps
        from base
        join runs r on r.benchmark_set_id = $1
-         and r.game_id is not distinct from base.game_id
-         and r.gpu_hardware_id is not distinct from base.gpu_hardware_id
-         and r.resolution is not distinct from base.resolution
-         and r.upscaler is not distinct from base.upscaler
-         and r.ray_tracing is not distinct from base.ray_tracing
-         and r.generated_frame_tech is not distinct from base.generated_frame_tech
-         and r.frame_pacing_cap is not distinct from base.frame_pacing_cap
-         and r.vsync is not distinct from base.vsync
-         and r.vrr is not distinct from base.vrr
-         and r.scene_type is not distinct from base.scene_type
+         and ${comparabilityMatchSql("r", "base")}
        join run_summaries s on s.run_id = r.id
       where ${aggregateEligibilitySql("r")}
         and ${comparabilityProfileSql("r")}`,

@@ -4,6 +4,7 @@ import {
   COMPARABILITY_KEY_FIELD_COUNT,
   comparabilityKey,
   comparabilityKeySql,
+  comparabilityMatchSql,
   comparabilityProfileSql,
   type ComparabilityInput,
 } from "./comparability";
@@ -15,6 +16,7 @@ const base: ComparabilityInput = {
   upscaler: "dlss",
   rayTracing: "on",
   frameGeneration: "dlss3",
+  graphicsApi: "dx12",
   frameCapFps: 120,
   vsync: true,
   vrr: false,
@@ -39,6 +41,7 @@ describe("comparabilityKey (§16c.3)", () => {
       { upscaler: "fsr" as const },
       { rayTracing: "off" as const },
       { frameGeneration: "none" as const },
+      { graphicsApi: "vulkan" },
     ]) {
       expect(comparabilityKey(base)).not.toBe(comparabilityKey({ ...base, ...override }));
     }
@@ -86,6 +89,7 @@ describe("comparabilityKeySql", () => {
       "r.upscaler",
       "r.ray_tracing",
       "r.generated_frame_tech",
+      "r.graphics_api",
       "r.frame_pacing_cap",
       "r.vsync",
       "r.vrr",
@@ -103,6 +107,27 @@ describe("comparabilityKeySql", () => {
     const sql = comparabilityKeySql();
     expect(sql).toContain("'true'");
     expect(sql).toContain("'false'");
+  });
+});
+
+describe("comparabilityMatchSql", () => {
+  it("uses direct null-safe comparisons for every comparability column", () => {
+    const sql = comparabilityMatchSql("r", "base");
+    for (const column of [
+      "game_id",
+      "gpu_hardware_id",
+      "resolution",
+      "upscaler",
+      "ray_tracing",
+      "generated_frame_tech",
+      "graphics_api",
+      "frame_pacing_cap",
+      "vsync",
+      "vrr",
+      "scene_type",
+    ]) {
+      expect(sql).toContain(`r.${column} is not distinct from base.${column}`);
+    }
   });
 });
 

@@ -65,7 +65,7 @@ export function parsePresentMon(input: string | Uint8Array): ParseResult<ParsedC
 
   // Both pinned profiles can expose a runtime; v2 additionally exposes the
   // presentation/sync columns the merged frame stream cannot reveal (§16a.2).
-  const captureSemantics = detectPresentMonSemantics(lines, found);
+  const captureSemantics = detectPresentMonSemanticsFromRow(stream.firstRow, found);
 
   return success(
     {
@@ -91,13 +91,13 @@ function toPresentationMode(raw: string): PresentationMode {
 }
 
 /**
- * Read presentation/sync semantics from the first data row's PresentMode /
+ * Read presentation/sync semantics from the first kept data row's PresentMode /
  * AllowsTearing / SyncInterval cells. These are per-frame columns but stable
- * across a capture, so the first row is representative. Returns `undefined` when
- * the capture exposes none of them.
+ * across a capture, so the first row of the selected stream is representative.
+ * Returns `undefined` when the capture exposes none of them.
  */
-export function detectPresentMonSemantics(
-  lines: readonly string[],
+function detectPresentMonSemanticsFromRow(
+  firstRow: readonly string[] | undefined,
   found: FoundHeader,
 ): CaptureSemantics | undefined {
   const runtimeIndex = findColumn(found.header, PRESENTMON_SEMANTICS_COLUMNS.runtime);
@@ -113,12 +113,6 @@ export function detectPresentMonSemantics(
     return undefined;
   }
 
-  let firstRow: readonly string[] | undefined;
-  for (let i = found.index + 1; i < lines.length; i++) {
-    if (lines[i]!.trim() === "") continue;
-    firstRow = splitCsvLine(lines[i]!, found.dialect.delimiter);
-    break;
-  }
   if (firstRow === undefined) return undefined;
 
   const semantics: CaptureSemantics = {};
@@ -142,6 +136,25 @@ export function detectPresentMonSemantics(
     semantics.graphicsApi === undefined
     ? undefined
     : semantics;
+}
+
+/**
+ * Read semantics from the first matching data row. Exported for callers that
+ * parse a PresentMon CSV outside {@link parsePresentMon}; the main parser
+ * avoids this additional scan by retaining the selected stream's first row.
+ */
+export function detectPresentMonSemantics(
+  lines: readonly string[],
+  found: FoundHeader,
+  rowFilter?: FrameRowsInput["rowFilter"],
+): CaptureSemantics | undefined {
+  for (let i = found.index + 1; i < lines.length; i++) {
+    if (lines[i]!.trim() === "") continue;
+    const cells = splitCsvLine(lines[i]!, found.dialect.delimiter);
+    if (rowFilter !== undefined && !rowFilter(cells)) continue;
+    return detectPresentMonSemanticsFromRow(cells, found);
+  }
+  return undefined;
 }
 
 /** Normalize the small runtime vocabulary PresentMon writes into methodology. */
@@ -175,23 +188,37 @@ function detectSyncMode(tearingCell?: string, syncIntervalCell?: string): SyncMo
 function dominantStream(
   lines: readonly string[],
   found: FoundHeader,
-): { rowFilter?: FrameRowsInput["rowFilter"]; warnings: ParseWarning[] } {
+): {
+  rowFilter?: FrameRowsInput["rowFilter"];
+  firstRow?: readonly string[];
+  warnings: ParseWarning[];
+} {
   const indices = ["application", "processid", "swapchainaddress"]
     .map((alias) => findColumn(found.header, [alias]))
     .filter((index): index is number => index !== undefined);
-  if (indices.length === 0) return { warnings: [] };
+  if (indices.length === 0) {
+    for (let i = found.index + 1; i < lines.length; i++) {
+      if (lines[i]!.trim() !== "") {
+        return { warnings: [], firstRow: splitCsvLine(lines[i]!, found.dialect.delimiter) };
+      }
+    }
+    return { warnings: [] };
+  }
 
   const keyOf = (cells: readonly string[]): string =>
     indices.map((index) => cells[index]?.trim() ?? "").join("|");
 
   const counts = new Map<string, number>();
+  const firstRows = new Map<string, readonly string[]>();
   for (let i = found.index + 1; i < lines.length; i++) {
     const line = lines[i]!;
     if (line.trim() === "") continue;
-    const key = keyOf(splitCsvLine(line, found.dialect.delimiter));
+    const cells = splitCsvLine(line, found.dialect.delimiter);
+    const key = keyOf(cells);
     counts.set(key, (counts.get(key) ?? 0) + 1);
+    if (!firstRows.has(key)) firstRows.set(key, cells);
   }
-  if (counts.size <= 1) return { warnings: [] };
+  if (counts.size <= 1) return { warnings: [], firstRow: firstRows.values().next().value };
 
   let dominant = "";
   let dominantCount = 0;
@@ -207,6 +234,7 @@ function dominantStream(
   const dropped = totalCount - dominantCount;
   return {
     rowFilter: (cells) => keyOf(cells) === dominant,
+    firstRow: firstRows.get(dominant),
     warnings: [
       {
         code: "multiple-streams",
