@@ -50,10 +50,25 @@ export const hardwareSnapshotSchema = z.object({
   ramRatedSpeedMtps: z.number().int().positive().optional(),
   os: z.string().optional(),
   gpuDriver: z.string().optional(),
+  gpuVramTotalMb: z.number().positive().optional(),
   resolution: z.string().optional(),
   canonicalGpuId: z.string().optional(),
   canonicalCpuId: z.string().optional(),
 });
+
+/**
+ * A single auto-diagnostic result (Phase 6). Mirrors the `Diagnostic` domain
+ * type. Sensor requirements gate the rules engine internally (§15.5) and are not
+ * persisted — richer per-finding evidence is a Phase 6.5 concern.
+ */
+export const diagnosticSchema = z.object({
+  id: z.string().min(1),
+  code: z.string().min(1),
+  severity: diagnosticSeveritySchema,
+  title: z.string().min(1),
+  detail: z.string().min(1),
+});
+export type DiagnosticDto = z.infer<typeof diagnosticSchema>;
 
 export const frameSampleSchema = z.object({
   timeMs: z.number().min(0),
@@ -187,6 +202,7 @@ export const runResponseSchema = z.object({
   hardware: hardwareSnapshotSchema,
   summary: runSummarySchema,
   generatedFrameTech: generatedFrameTechSchema,
+  diagnostics: z.array(diagnosticSchema),
   schemaVersion: z.number().int().positive(),
   parserVersion: z.string().min(1),
   createdAt: z.string().min(1),

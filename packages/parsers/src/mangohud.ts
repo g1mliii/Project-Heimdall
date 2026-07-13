@@ -15,6 +15,7 @@ import { findColumn, findCsvHeader, headerFailure, splitCsvLine, type FoundHeade
 import { MANGOHUD_COLUMNS } from "./internal/columns";
 import { parseFrameRowsAt } from "./internal/frames";
 import { inferGpuVendor } from "./internal/vendor";
+import { parseVramTotalMb } from "./internal/hardware";
 import { parserVersionString } from "./version";
 
 const SOURCE = "mangohud" as const;
@@ -85,6 +86,11 @@ function extractHardware(lines: readonly string[], found: FoundHeader): Hardware
         hardware.ramGb = parsed > RAM_MB_THRESHOLD ? parsed / 1024 : parsed;
       }
     }
+    // Only the explicit total key — a bare `vram` sysinfo field is ambiguous
+    // (often instantaneous/used), and mis-reading it as capacity would fire a
+    // false VRAM-saturation diagnostic (§15.1).
+    const vramTotalMb = parseVramTotalMb(at("gpu_vram_total"));
+    if (vramTotalMb !== undefined) hardware.gpuVramTotalMb = vramTotalMb;
     return hardware;
   }
   return undefined;

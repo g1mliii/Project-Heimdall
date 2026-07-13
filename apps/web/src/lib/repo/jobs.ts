@@ -8,8 +8,16 @@
  * `failVerificationJob(..., terminal)`).
  */
 
-import { GENERATED_FRAME_TECH, RUN_STATUS, type RunSummary } from "@heimdall/shared";
-import { query, getPool, type Queryable } from "../db";
+import { GENERATED_FRAME_TECH, RUN_STATUS, type DiagnosticFinding, type RunSummary } from "@heimdall/shared";
+import {
+  query,
+  getPool,
+  diagnosticInsertColumns,
+  diagnosticInsertSql,
+  type Queryable,
+} from "../db";
+
+export type { DiagnosticFinding } from "@heimdall/shared";
 
 export interface ClaimedJob {
   /** bigint — comes back from pg as a string. */
@@ -156,13 +164,20 @@ export async function applyVerificationResult(
   summary: RunSummary,
   runStatus: "validated" | "flagged",
   signatureValid: boolean | null,
+  diagnostics: readonly DiagnosticFinding[],
   claim: Pick<ClaimedJob, "id" | "attempts">,
   db: Queryable = getPool(),
 ): Promise<void> {
   // `status <> 'hidden'` — a moderation takedown outranks a late verification
   // verdict; without the guard a queued job would flip a hidden run back to
-  // validated/flagged (and, if public, back into aggregate eligibility). The
-  // summary update is gated on the same condition via the CTE.
+  // validated/flagged (and, if public, back into aggregate eligibility). Every
+  // write (summary, diagnostics) is gated on the same run_update via the CTE, so
+  // a hidden run or a stale job claim writes nothing.
+  //
+  // Diagnostics are delete-then-insert per run_id in this one statement, so a
+  // job retry replaces the prior run's findings rather than duplicating them
+  // (idempotent across the ≤5 attempts). Empty arrays clear findings and insert
+  // none — a run that used to warn and no longer does ends clean.
   await db.query(
     `with job_claim as (
        select 1
@@ -183,14 +198,20 @@ export async function applyVerificationResult(
           and status <> 'hidden'
           and exists (select 1 from job_claim)
         returning id
+     ), summary_update as (
+       update run_summaries
+          set avg_fps = $2, p1_low_fps = $3, p01_low_fps = $4,
+              frametime_p50_ms = $5, frametime_p95_ms = $6, frametime_p99_ms = $7,
+              stutter_count = $8, generated_frame_pct = $9, p01_low_confidence = $10,
+              sample_count = $11, duration_seconds = $12
+        where run_id = $1
+          and exists (select 1 from run_update)
+     ), diagnostics_delete as (
+       delete from diagnostics
+        where run_id = $1
+          and exists (select 1 from run_update)
      )
-     update run_summaries
-        set avg_fps = $2, p1_low_fps = $3, p01_low_fps = $4,
-            frametime_p50_ms = $5, frametime_p95_ms = $6, frametime_p99_ms = $7,
-            stutter_count = $8, generated_frame_pct = $9, p01_low_confidence = $10,
-            sample_count = $11, duration_seconds = $12
-      where run_id = $1
-        and exists (select 1 from run_update)`,
+     ${diagnosticInsertSql(1, 19, "exists (select 1 from run_update)")}`,
     [
       runId,
       summary.avgFps,
@@ -210,6 +231,7 @@ export async function applyVerificationResult(
       GENERATED_FRAME_TECH.none,
       claim.id,
       claim.attempts,
+      ...diagnosticInsertColumns(diagnostics),
     ],
   );
 }

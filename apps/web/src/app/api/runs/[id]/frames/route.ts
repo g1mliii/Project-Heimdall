@@ -5,7 +5,7 @@
 
 import { NextResponse } from "next/server";
 import type { FramesUrlResponse } from "@heimdall/shared";
-import { readVisibleRun } from "@/lib/repo/runs";
+import { readVisibleFramesState } from "@/lib/repo/runs";
 import { GET_TTL_SECONDS, presignGet } from "@/lib/r2";
 import { jsonError } from "@/lib/api/http";
 
@@ -16,7 +16,7 @@ type Context = { params: Promise<{ id: string }> };
 export async function GET(_request: Request, context: Context): Promise<NextResponse> {
   try {
     const { id } = await context.params;
-    const run = await readVisibleRun(id);
+    const run = await readVisibleFramesState(id);
     if (!run) {
       return jsonError(404, "not-found", "run not found");
     }

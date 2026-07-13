@@ -42,6 +42,7 @@ vi.mock("@/lib/jobs/drain", () => ({
 }));
 
 import * as r2 from "@/lib/r2";
+import * as jobDrain from "@/lib/jobs/drain";
 import { POST as createRun } from "./route";
 import { DELETE as deleteRunRoute, GET as getRun } from "./[id]/route";
 import { POST as finalizeRun } from "./[id]/finalize/route";
@@ -181,6 +182,7 @@ describe.skipIf(!canRun)("ingest API routes (§11)", () => {
   });
 
   it("finalize: HEAD-validates, resolves canonical ids, enqueues exactly one job (12.2/12.3)", async () => {
+    vi.mocked(jobDrain.drainJobs).mockClear();
     const { id } = await createValidRun();
     const tokenHash = await hashManagementToken(generateManagementToken());
 
@@ -218,6 +220,7 @@ describe.skipIf(!canRun)("ingest API routes (§11)", () => {
     expect(cleanup.rows).toEqual([
       { object_key: `staging/runs/${id}.parquet`, attempts: 0, last_error: null },
     ]);
+    expect(jobDrain.drainJobs).toHaveBeenCalledWith({ maxJobs: 1 });
 
     // Re-finalize: 409, still exactly one job row (12.3).
     const again = await finalize(id);

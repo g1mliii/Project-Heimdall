@@ -44,6 +44,16 @@ export const FRAME_PARQUET_COLUMNS: readonly FrameParquetColumn[] = [
   { name: "gpu_busy_ms", type: "DOUBLE", nullable: true, field: "gpuBusyMs" },
 ] as const;
 
+/** Sensor fields retained by the Phase 6 diagnostics engine. */
+export const DIAGNOSTIC_FRAME_SENSOR_FIELDS = ["vramUsedMb", "gpuLoadPct", "cpuLoadPct"] as const;
+export type DiagnosticFrameSensorField = (typeof DIAGNOSTIC_FRAME_SENSOR_FIELDS)[number];
+
+/** The on-wire columns that back the diagnostics sensor contract. */
+export const DIAGNOSTIC_FRAME_PARQUET_COLUMNS = FRAME_PARQUET_COLUMNS.filter(
+  (column): column is FrameParquetColumn & { field: DiagnosticFrameSensorField } =>
+    (DIAGNOSTIC_FRAME_SENSOR_FIELDS as readonly string[]).includes(column.field),
+);
+
 /** Column-source shape consumed by hyparquet-writer's `parquetWriteBuffer`. */
 export interface FrameColumnData {
   name: string;

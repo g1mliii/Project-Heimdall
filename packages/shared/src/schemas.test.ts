@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createRunRequestSchema,
+  diagnosticSchema,
   finalizeRunRequestSchema,
   runResponseSchema,
   runSummarySchema,
@@ -16,7 +17,7 @@ import {
 } from "./fixtures";
 import { RUN_VISIBILITY } from "./visibility";
 import { CURRENT_SCHEMA_VERSION } from "./constants";
-import type { FrameSample, HardwareSnapshot, RunSummary } from "./types";
+import type { Diagnostic, FrameSample, HardwareSnapshot, RunSummary } from "./types";
 
 describe("schema accept/reject (§3.1)", () => {
   it("accepts a well-formed create request", () => {
@@ -100,6 +101,37 @@ describe("DTO round-trip stability (§3.2)", () => {
     expect(runResponseSchema.parse(JSON.parse(JSON.stringify(run)))).toEqual(run);
   });
 
+  it("round-trips run diagnostics on the response DTO (Phase 6 §17)", () => {
+    const withDiagnostics = {
+      ...fixtures.validRun,
+      diagnostics: [
+        {
+          id: "diag_1",
+          code: "vram-saturation-stutter",
+          severity: "bad" as const,
+          title: "VRAM saturation is causing stutters",
+          detail: "VRAM peaked at ~11900 MB of 12288 MB.",
+        },
+        {
+          id: "diag_2",
+          code: "ram-below-rated",
+          severity: "warn" as const,
+          title: "RAM is running below its rated speed",
+          detail: "Your memory is running at 4800 MT/s but is rated for 6000 MT/s.",
+        },
+      ],
+    };
+    const parsed = runResponseSchema.parse(withDiagnostics);
+    expect(parsed.diagnostics).toHaveLength(2);
+    expect(runResponseSchema.parse(JSON.parse(JSON.stringify(parsed)))).toEqual(parsed);
+  });
+
+  it("rejects a run response missing the diagnostics array", () => {
+    const { diagnostics: _omit, ...withoutDiagnostics } = fixtures.validRun;
+    void _omit;
+    expect(runResponseSchema.safeParse(withoutDiagnostics).success).toBe(false);
+  });
+
   it("requires a management token hash for pre-auth finalize", () => {
     expect(
       finalizeRunRequestSchema.safeParse({
@@ -173,6 +205,19 @@ describe("schema/type drift guards (compile-time)", () => {
     const frame: FrameSample = frameSampleSchema.parse(fixtures.validFrames[0]);
     expect(hwBack).toEqual(hw);
     expect(frame.frameTimeMs).toBeGreaterThan(0);
+  });
+
+  it("Diagnostic stays in sync with diagnosticSchema", () => {
+    const fromSchema = diagnosticSchema.parse({
+      id: "diag_1",
+      code: "ram-below-rated",
+      severity: "warn",
+      title: "RAM is running below its rated speed",
+      detail: "Enable its XMP/EXPO profile.",
+    });
+    const asDomain: Diagnostic = fromSchema;
+    const backToSchema: import("./schemas").DiagnosticDto = asDomain;
+    expect(backToSchema).toEqual(fromSchema);
   });
 
   it("CreateRunRequest infers to the exported type", () => {

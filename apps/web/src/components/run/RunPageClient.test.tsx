@@ -125,13 +125,58 @@ describe("RunPageClient states", () => {
     expect(calls).toBe(2);
   });
 
-  it("keeps the diagnostics stub and hardware rows in every state", async () => {
+  it("shows a clean diagnostics panel and hardware rows when there are no findings", async () => {
     render(<RunPageClient run={run} loadFrames={okLoader} />);
     expect(screen.getByText("Diagnostics")).toBeInTheDocument();
-    expect(screen.getByText("Coming soon")).toBeInTheDocument();
+    expect(screen.getByText("No issues")).toBeInTheDocument();
+    expect(screen.getByText("No issues detected")).toBeInTheDocument();
     expect(screen.getByText(run.hardware.gpu)).toBeInTheDocument();
     // RAM below rated speed → warn row with both numbers.
     expect(await screen.findByText("4800 / 6000 MT/s")).toBeInTheDocument();
+  });
+
+  it("renders real diagnostic findings with severity and a count badge", () => {
+    const diagnosticRun: Run = {
+      ...run,
+      diagnostics: [
+        {
+          id: "d1",
+          code: "vram-saturation-stutter",
+          severity: "bad",
+          title: "VRAM saturation is causing stutters",
+          detail: "Lower texture quality or resolution to free up VRAM headroom.",
+        },
+        {
+          id: "d2",
+          code: "ram-below-rated",
+          severity: "warn",
+          title: "RAM is running below its rated speed",
+          detail: "Enable its XMP/EXPO profile in the BIOS.",
+        },
+      ],
+    };
+    render(<RunPageClient run={diagnosticRun} loadFrames={okLoader} />);
+
+    expect(screen.getByText("2 issues")).toBeInTheDocument();
+    expect(screen.queryByText("No issues detected")).not.toBeInTheDocument();
+
+    const vram = screen.getByText("VRAM saturation is causing stutters");
+    expect(vram).toBeInTheDocument();
+    expect(screen.getByText("Lower texture quality or resolution to free up VRAM headroom.")).toBeInTheDocument();
+    expect(vram.closest(".hd-diag")).toHaveClass("hd-diag--bad");
+
+    const ram = screen.getByText("RAM is running below its rated speed");
+    expect(ram.closest(".hd-diag")).toHaveClass("hd-diag--warn");
+  });
+
+  it("shows a pending diagnostics state (never a false all-clear) before verification", () => {
+    const pendingRun: Run = { ...run, status: RUN_STATUS.pending, diagnostics: [] };
+    render(<RunPageClient run={pendingRun} loadFrames={okLoader} />);
+    expect(screen.getByText("Pending")).toBeInTheDocument();
+    expect(screen.getByText("Diagnostics run after verification")).toBeInTheDocument();
+    // Must NOT claim the run passed checks that have not run yet.
+    expect(screen.queryByText("No issues detected")).not.toBeInTheDocument();
+    expect(screen.queryByText("No issues")).not.toBeInTheDocument();
   });
 });
 

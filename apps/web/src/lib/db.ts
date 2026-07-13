@@ -11,7 +11,14 @@
  */
 
 import pg from "pg";
-import type { HardwareSnapshot, Run, RunSummary } from "@heimdall/shared";
+import { DIAGNOSTICS } from "@heimdall/shared";
+import type {
+  Diagnostic,
+  DiagnosticFinding,
+  HardwareSnapshot,
+  Run,
+  RunSummary,
+} from "@heimdall/shared";
 import { getDbEnv } from "./env";
 
 /** A pg.Pool or checked-out pg.PoolClient — anything that can run a query. */
@@ -70,6 +77,16 @@ export async function query<Row extends pg.QueryResultRow>(
   return result.rows;
 }
 
+/** A hand-curated game-ready requirement expires unless a curation pass refreshes it. */
+export const REQUIRED_DRIVER_MAX_AGE_DAYS = DIAGNOSTICS.driverRequirementMaxAgeDays;
+
+/** Shared by the direct helper and the verification hot-path read. */
+const FRESH_REQUIRED_DRIVER_SQL = `case
+  when g.required_driver_checked_at >= now() - ($2::integer * interval '1 day')
+    then g.required_driver
+  else null
+end`;
+
 /* ── Row ↔ domain mapping ───────────────────────────────────────────────── */
 
 interface RunRow extends pg.QueryResultRow {
@@ -86,6 +103,7 @@ interface RunRow extends pg.QueryResultRow {
   gpu_model: string;
   gpu_vendor: HardwareSnapshot["gpuVendor"] | null;
   gpu_driver: string | null;
+  gpu_vram_total_mb: number | null;
   ram_gb: number | null;
   ram_rated_mtps: number | null;
   ram_actual_mtps: number | null;
@@ -110,7 +128,21 @@ interface RunRow extends pg.QueryResultRow {
   duration_seconds: number;
 }
 
-function rowToRun(row: RunRow): Run {
+const RUN_WITH_SUMMARY_SELECT = `select r.id, r.user_id, r.game_raw, r.gpu_hardware_id, r.cpu_hardware_id,
+        r.capture_source, r.visibility, r.status, r.signature_valid,
+        r.cpu_model, r.gpu_model, r.gpu_vendor, r.gpu_driver, r.gpu_vram_total_mb,
+        r.ram_gb, r.ram_rated_mtps, r.ram_actual_mtps, r.os_build, r.resolution,
+        r.generated_frame_tech, r.frames_object_key,
+        r.schema_version, r.parser_version, r.created_at,
+        s.avg_fps, s.p1_low_fps, s.p01_low_fps,
+        s.frametime_p50_ms, s.frametime_p95_ms, s.frametime_p99_ms,
+        s.stutter_count, s.generated_frame_pct, s.p01_low_confidence,
+        s.sample_count, s.duration_seconds`;
+
+const RUN_WITH_SUMMARY_FROM = `from runs r
+      join run_summaries s on s.run_id = r.id`;
+
+function rowToRun(row: RunRow, diagnostics: Diagnostic[]): Run {
   return {
     id: row.id,
     game: row.game_raw,
@@ -126,6 +158,7 @@ function rowToRun(row: RunRow): Run {
       ramRatedSpeedMtps: row.ram_rated_mtps ?? undefined,
       os: row.os_build ?? undefined,
       gpuDriver: row.gpu_driver ?? undefined,
+      gpuVramTotalMb: row.gpu_vram_total_mb ?? undefined,
       resolution: row.resolution ?? undefined,
       canonicalGpuId: row.gpu_hardware_id ?? undefined,
       canonicalCpuId: row.cpu_hardware_id ?? undefined,
@@ -144,6 +177,7 @@ function rowToRun(row: RunRow): Run {
       durationSeconds: row.duration_seconds,
     },
     generatedFrameTech: row.generated_frame_tech,
+    diagnostics,
     schemaVersion: row.schema_version,
     parserVersion: row.parser_version,
     createdAt: row.created_at.toISOString(),
@@ -151,6 +185,89 @@ function rowToRun(row: RunRow): Run {
     ownerId: row.user_id ?? undefined,
     signatureValid: row.signature_valid ?? undefined,
   };
+}
+
+interface DiagnosticRow extends pg.QueryResultRow {
+  id: string;
+  code: string;
+  severity: Diagnostic["severity"];
+  title: string;
+  detail: string;
+}
+
+/**
+ * Transpose findings into the four positional `text[]` arrays a diagnostics
+ * multi-row insert unnests (code, severity, title, detail).
+ */
+export function diagnosticInsertColumns(
+  diagnostics: readonly DiagnosticFinding[],
+): [string[], string[], string[], string[]] {
+  return [
+    diagnostics.map((d) => d.code),
+    diagnostics.map((d) => d.severity),
+    diagnostics.map((d) => d.title),
+    diagnostics.map((d) => d.detail),
+  ];
+}
+
+/**
+ * The complete diagnostics insert/unnest shape. `runIdParameter` and
+ * `firstFindingParameter` make it usable in both a standalone write and a
+ * larger CTE without duplicating column order, aliases, or casts.
+ */
+export function diagnosticInsertSql(
+  runIdParameter: number,
+  firstFindingParameter: number,
+  guardSql?: string,
+): string {
+  const codeParameter = firstFindingParameter;
+  const severityParameter = codeParameter + 1;
+  const titleParameter = codeParameter + 2;
+  const detailParameter = codeParameter + 3;
+  return `insert into diagnostics (run_id, code, severity, title, detail)
+     select $${runIdParameter}, code, severity, title, detail
+       from unnest($${codeParameter}::text[], $${severityParameter}::text[], $${titleParameter}::text[], $${detailParameter}::text[])
+         as finding(code, severity, title, detail)${guardSql ? `\n      where ${guardSql}` : ""}`;
+}
+
+/**
+ * Insert a run's diagnostics (no id — the column is identity-generated). The
+ * verification worker writes findings through `applyVerificationResult` inside
+ * its atomic verdict; this standalone helper backs seeding/tests. Rows preserve
+ * array order via the identity sequence.
+ */
+export async function insertDiagnostics(
+  runId: string,
+  diagnostics: readonly DiagnosticFinding[],
+  db: Queryable = getPool(),
+): Promise<void> {
+  if (diagnostics.length === 0) return;
+  await db.query(
+    diagnosticInsertSql(1, 2),
+    [runId, ...diagnosticInsertColumns(diagnostics)],
+  );
+}
+
+/** Read a run's diagnostics in insertion order (stable render order). */
+export async function readDiagnostics(
+  runId: string,
+  db: Queryable = getPool(),
+): Promise<Diagnostic[]> {
+  const rows = await query<DiagnosticRow>(
+    `select id, code, severity, title, detail
+       from diagnostics
+      where run_id = $1
+      order by id`,
+    [runId],
+    db,
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    code: row.code,
+    severity: row.severity,
+    title: row.title,
+    detail: row.detail,
+  }));
 }
 
 /**
@@ -184,10 +301,10 @@ export async function insertRun(run: Run, db: Queryable = getPool()): Promise<vo
          cpu_model, gpu_model, gpu_vendor, gpu_driver,
          ram_gb, ram_rated_mtps, ram_actual_mtps, os_build, resolution,
          generated_frame_tech, frames_object_key,
-         schema_version, parser_version, created_at
+         schema_version, parser_version, created_at, gpu_vram_total_mb
        ) values (
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-         $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
+         $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
        )
      )
      insert into run_summaries (
@@ -195,7 +312,7 @@ export async function insertRun(run: Run, db: Queryable = getPool()): Promise<vo
        frametime_p50_ms, frametime_p95_ms, frametime_p99_ms,
        stutter_count, generated_frame_pct, p01_low_confidence,
        sample_count, duration_seconds
-     ) values ($1, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34)`,
+     ) values ($1, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35)`,
     [
       run.id, run.ownerId ?? null, run.game,
       canonicalIdParam(hw.canonicalGpuId, "canonicalGpuId"),
@@ -205,7 +322,7 @@ export async function insertRun(run: Run, db: Queryable = getPool()): Promise<vo
       hw.ramGb ?? null, hw.ramRatedSpeedMtps ?? null, hw.ramSpeedMtps ?? null,
       hw.os ?? null, hw.resolution ?? null,
       run.generatedFrameTech, run.framesObjectKey ?? null,
-      run.schemaVersion, run.parserVersion, run.createdAt,
+      run.schemaVersion, run.parserVersion, run.createdAt, hw.gpuVramTotalMb ?? null,
       summary.avgFps, summary.onePercentLowFps, summary.pointOnePercentLowFps,
       summary.frameTimeP50Ms, summary.frameTimeP95Ms, summary.frameTimeP99Ms,
       summary.stutterCount, summary.generatedFramePct, summary.pointOnePercentLowConfidence,
@@ -220,24 +337,77 @@ export async function insertRun(run: Run, db: Queryable = getPool()): Promise<vo
  * the domain shape doesn't carry (anonymous_management_token_hash, signature)
  * stay out of app memory on the read path.
  */
-export async function readRun(id: string, db: Queryable = getPool()): Promise<Run | null> {
+export async function readRun(
+  id: string,
+  db: Queryable = getPool(),
+  { withDiagnostics = true }: { withDiagnostics?: boolean } = {},
+): Promise<Run | null> {
   const rows = await query<RunRow>(
-    `select r.id, r.user_id, r.game_raw, r.gpu_hardware_id, r.cpu_hardware_id,
-            r.capture_source, r.visibility, r.status, r.signature_valid,
-            r.cpu_model, r.gpu_model, r.gpu_vendor, r.gpu_driver,
-            r.ram_gb, r.ram_rated_mtps, r.ram_actual_mtps, r.os_build, r.resolution,
-            r.generated_frame_tech, r.frames_object_key,
-            r.schema_version, r.parser_version, r.created_at,
-            s.avg_fps, s.p1_low_fps, s.p01_low_fps,
-            s.frametime_p50_ms, s.frametime_p95_ms, s.frametime_p99_ms,
-            s.stutter_count, s.generated_frame_pct, s.p01_low_confidence,
-            s.sample_count, s.duration_seconds
-       from runs r
-       join run_summaries s on s.run_id = r.id
+    `${RUN_WITH_SUMMARY_SELECT}
+       ${RUN_WITH_SUMMARY_FROM}
       where r.id = $1`,
     [id],
     db,
   );
   const row = rows[0];
-  return row ? rowToRun(row) : null;
+  if (!row) return null;
+  // Second query, not a join: a run's diagnostics are 0–4 rows, and joining
+  // them onto the summary would fan the single run row out per finding. Callers
+  // that don't render the run (the verification worker, finalize) skip it to
+  // avoid a wasted round-trip on the ingest hot path.
+  const diagnostics = withDiagnostics ? await readDiagnostics(id, db) : [];
+  return rowToRun(row, diagnostics);
+}
+
+/**
+ * Curated minimum GPU driver for a run's resolved game (§15.4), or null when
+ * the game is unresolved, has no curated value, or curation is stale.
+ */
+export async function readRunRequiredDriver(
+  id: string,
+  db: Queryable = getPool(),
+): Promise<string | null> {
+  const rows = await query<{ required_driver: string | null }>(
+    `select ${FRESH_REQUIRED_DRIVER_SQL} as required_driver
+       from runs r
+       join games g on g.id = r.game_id
+      where r.id = $1`,
+    [id, REQUIRED_DRIVER_MAX_AGE_DAYS],
+    db,
+  );
+  return rows[0]?.required_driver ?? null;
+}
+
+interface VerificationRunRow extends RunRow {
+  signature: string | null;
+  required_driver: string | null;
+}
+
+/**
+ * Server-only verification read. One primary-key query returns the run's
+ * canonical input, signature evidence, finalized object key, and a fresh
+ * game-driver requirement, avoiding three separate pool checkouts per job.
+ */
+export async function readRunForVerification(
+  id: string,
+  db: Queryable = getPool(),
+): Promise<{ run: Run; signature: string | null; requiredDriver: string | null } | null> {
+  const rows = await query<VerificationRunRow>(
+    `${RUN_WITH_SUMMARY_SELECT},
+        r.signature,
+        ${FRESH_REQUIRED_DRIVER_SQL} as required_driver
+       ${RUN_WITH_SUMMARY_FROM}
+       left join games g on g.id = r.game_id
+      where r.id = $1`,
+    [id, REQUIRED_DRIVER_MAX_AGE_DAYS],
+    db,
+  );
+  const row = rows[0];
+  return row
+    ? {
+        run: rowToRun(row, []),
+        signature: row.signature,
+        requiredDriver: row.required_driver,
+      }
+    : null;
 }
