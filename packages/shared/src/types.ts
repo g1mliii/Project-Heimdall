@@ -85,6 +85,73 @@ export interface FrameSample {
   gpuBusyMs?: number;
 }
 
+/** Import the canonical 7-field sensor set so the manifest can't drift from it. */
+import type { CapabilitySensorField } from "./constants";
+
+/**
+ * Explicit VRAM-capacity state (§16a.4). Replaces the ambiguous bare
+ * `gpuVramTotalMb === undefined`, which could not tell "the parser never looked"
+ * from "this GPU has no dedicated VRAM." `unified-memory` also unblocks the
+ * Phase 13 macOS path where CPU/GPU share one pool.
+ */
+export type VramCapacity =
+  | { totalMb: number }
+  | { state: "unified-memory" | "unknown" };
+
+/**
+ * How a run's frames reached the display (§16a.3). Bare CSV captures can't
+ * always reveal this, so `unknown` is a first-class value; the desktop client
+ * (Phase 9) and PresentMon's `PresentMode` column populate it when they can.
+ */
+export type PresentationMode =
+  | "hardware-independent-flip"
+  | "hardware-composed-flip"
+  | "composed"
+  | "legacy"
+  | "unknown";
+
+/** Frame-pacing/sync semantics recorded per run (§16a.3). */
+export type SyncMode = "vsync" | "tearing" | "vrr" | "unknown";
+
+/** Per-sensor presence + frame-alignment for one run. */
+export interface CaptureCapability {
+  /** True when at least one frame carried this sensor. */
+  present: boolean;
+  /**
+   * True when the present values are sampled per-frame (CSV row-per-frame),
+   * false when they are periodically sampled (e.g. 250 ms telemetry polls) and
+   * therefore not safe to correlate against a single frame's timing.
+   */
+  frameAligned: boolean;
+}
+
+/**
+ * Versioned per-run capability manifest (§16a.3/§16a.4): which sensors this run
+ * actually carries and whether they are frame-aligned, its capture semantics,
+ * an explicit VRAM-capacity state, and any source caveats. Derived purely at
+ * parse (`deriveCapabilityManifest`) so the browser and the server recompute it
+ * identically, then persisted as derived rollup metadata in Postgres — never
+ * per-frame. Everything downstream (confidence-graded findings, Phase 7
+ * comparability) reads from here rather than re-sniffing frames.
+ */
+export interface CapabilityManifest {
+  /** The {@link CAPABILITY_MANIFEST_VERSION} this manifest was derived under. */
+  version: number;
+  source: CaptureSource;
+  /** Per-sensor presence + frame-alignment, keyed by the 7-field sensor set. */
+  sensors: Record<CapabilitySensorField, CaptureCapability>;
+  presentationMode: PresentationMode;
+  syncMode: SyncMode;
+  /** True when the capture marked any frame as engine-generated (DLSS3/FSR3/XeSS). */
+  frameGenerationObserved: boolean;
+  vramCapacity: VramCapacity;
+  /**
+   * Human-readable source caveats (e.g. "GPU-execution timing is HAGS-affected
+   * and must never be a hard integrity flag"). Advisory only — never gating.
+   */
+  caveats: string[];
+}
+
 /**
  * The precomputed run summary — Postgres-resident, canonical once the server
  * recompute validates it (§11.5). Mirrors what `metrics.ts` produces in Phase 3.
@@ -112,6 +179,69 @@ export interface RunSummary {
   sampleCount: number;
   /** Capture duration in seconds. */
   durationSeconds: number;
+}
+
+/**
+ * How a capture was produced (§17.5). A `benchmark-scene` is a repeatable
+ * built-in benchmark or fixed route; `gameplay` is a hand-played session;
+ * `freeform` is everything else and stays separately filterable so it never
+ * pools with methodical runs.
+ */
+export type SceneType = "benchmark-scene" | "gameplay" | "freeform";
+
+/** Upscaler family in use (§16c.1). */
+export type UpscalerMode = "none" | "dlss" | "fsr" | "xess" | "unknown";
+
+/** Ray-tracing state (§16c.1). */
+export type RayTracingMode = "off" | "on" | "unknown";
+
+/** Frame-pacing / sync ceiling that shapes comparability (§16c.1/§16c.3). */
+export interface FramePacing {
+  /** Applied FPS cap, if any. */
+  capFps?: number;
+  vsync: boolean;
+  vrr: boolean;
+  /** Display refresh rate in Hz, when known. */
+  refreshHz?: number;
+}
+
+/**
+ * Reproducible methodology manifest (§16c.1). Records HOW a run was captured so
+ * Phase 7 only pools comparable runs. Quasi-identifying, so it inherits the
+ * hardware-snapshot privacy/deletion rules (stored on `runs`, cascaded via the
+ * run FK). Mostly *declared* by the uploader/desktop client; the parser fills
+ * what it can detect (resolution, presentation mode, frame-gen).
+ */
+export interface MethodologyManifest {
+  /** The {@link METHODOLOGY_MANIFEST_VERSION} this manifest was declared under. */
+  version: number;
+  /** Game build/patch string (e.g. "2.1"). */
+  gameBuild?: string;
+  /** Scene/route name within the game. */
+  scene?: string;
+  sceneType: SceneType;
+  /** Graphics-settings preset name (e.g. "Ultra"). */
+  settingsPreset?: string;
+  /** Graphics API (e.g. "dx12", "vulkan"). */
+  graphicsApi?: string;
+  /** Capture resolution, e.g. "2560x1440". */
+  resolution?: string;
+  upscaler: UpscalerMode;
+  rayTracing: RayTracingMode;
+  frameGeneration: GeneratedFrameTech;
+  framePacing: FramePacing;
+  /** Operating system string. */
+  os?: string;
+  /** GPU driver version string. */
+  gpuDriver?: string;
+  /** Capture tool + version, e.g. "PresentMon 2.3.0". */
+  captureTool?: string;
+  /** Pinned capture profile id (e.g. "presentmon-2.x"). */
+  captureProfile?: string;
+  /** Warm-up policy applied before the measured window. */
+  warmupPolicy?: string;
+  /** Measured capture duration in seconds. */
+  captureDurationSeconds?: number;
 }
 
 /**
@@ -145,12 +275,40 @@ export interface Run {
   ownerId?: string;
   /** Whether an optional client signature verified (evidence, not gatekeeping §11.7). */
   signatureValid?: boolean;
+  /**
+   * Per-run capability manifest (§16a.3) — canonical once the verify worker
+   * recomputes it. Optional so a source whose new evidence is absent behaves
+   * exactly as it did in Phase 6 (regression invariant).
+   */
+  capabilityManifest?: CapabilityManifest;
+  /**
+   * Reproducible methodology manifest (§16c.1). Optional — declared at upload;
+   * drives the Phase 7 comparability key. Quasi-identifying (privacy §5).
+   */
+  methodologyManifest?: MethodologyManifest;
 }
 
 /** Severity of an auto-diagnostic, matching the `Diagnostic` UI primitive. */
 export type DiagnosticSeverity = "good" | "warn" | "bad" | "info";
 
-/** A single auto-diagnostic result produced by the rules engine (Phase 6). */
+/**
+ * Concrete evidence a diagnostic fired on (§16b.2). Structured but permissive —
+ * every field is optional so Phase 6 findings (which carry none) round-trip
+ * unchanged, and richer Phase 6.5 findings record exactly what they measured so
+ * a reader can see *why* the rule fired.
+ */
+export interface DiagnosticEvidence {
+  /** Fraction of the capture (0–1) the finding's condition covered. */
+  coverageFraction?: number;
+  /** Sensor fields the finding relied on. */
+  sensors?: string[];
+  /** Named measured values (e.g. `{ cpuBoundFraction: 0.62 }`). */
+  metrics?: Record<string, number>;
+  /** Capture-semantics / source caveats that qualified the finding. */
+  caveats?: string[];
+}
+
+/** A single auto-diagnostic result produced by the rules engine (Phase 6/6.5). */
 export interface Diagnostic {
   id: string;
   /** Stable rule identifier, e.g. "vram-saturation-stutter". */
@@ -160,6 +318,12 @@ export interface Diagnostic {
   title: string;
   /** Plain-English explanation/advice. */
   detail: string;
+  /** Concrete evidence the finding fired on (§16b.2); absent for Phase 6 rules. */
+  evidence?: DiagnosticEvidence;
+  /** Version of the rule that produced this finding (§16b.2). */
+  ruleVersion?: string;
+  /** Confidence label for likelihood-graded findings (§16b); absent = asserted. */
+  confidence?: ConfidenceLevel;
 }
 
 /** A newly produced diagnostic before Postgres assigns its identity. */

@@ -13,9 +13,11 @@
 import pg from "pg";
 import { DIAGNOSTICS } from "@heimdall/shared";
 import type {
+  CapabilityManifest,
   Diagnostic,
   DiagnosticFinding,
   HardwareSnapshot,
+  MethodologyManifest,
   Run,
   RunSummary,
 } from "@heimdall/shared";
@@ -111,6 +113,8 @@ interface RunRow extends pg.QueryResultRow {
   resolution: string | null;
   generated_frame_tech: Run["generatedFrameTech"];
   frames_object_key: string | null;
+  capability_manifest: CapabilityManifest | null;
+  settings_json: MethodologyManifest | null;
   schema_version: number;
   parser_version: string;
   created_at: Date;
@@ -132,7 +136,7 @@ const RUN_WITH_SUMMARY_SELECT = `select r.id, r.user_id, r.game_raw, r.gpu_hardw
         r.capture_source, r.visibility, r.status, r.signature_valid,
         r.cpu_model, r.gpu_model, r.gpu_vendor, r.gpu_driver, r.gpu_vram_total_mb,
         r.ram_gb, r.ram_rated_mtps, r.ram_actual_mtps, r.os_build, r.resolution,
-        r.generated_frame_tech, r.frames_object_key,
+        r.generated_frame_tech, r.frames_object_key, r.capability_manifest, r.settings_json,
         r.schema_version, r.parser_version, r.created_at,
         s.avg_fps, s.p1_low_fps, s.p01_low_fps,
         s.frametime_p50_ms, s.frametime_p95_ms, s.frametime_p99_ms,
@@ -184,6 +188,10 @@ function rowToRun(row: RunRow, diagnostics: Diagnostic[]): Run {
     framesObjectKey: row.frames_object_key ?? undefined,
     ownerId: row.user_id ?? undefined,
     signatureValid: row.signature_valid ?? undefined,
+    // jsonb comes back already parsed; it was written by our own derive path.
+    capabilityManifest: row.capability_manifest ?? undefined,
+    // settings_json holds the declared methodology manifest (§16c.1).
+    methodologyManifest: row.settings_json ?? undefined,
   };
 }
 
@@ -193,27 +201,44 @@ interface DiagnosticRow extends pg.QueryResultRow {
   severity: Diagnostic["severity"];
   title: string;
   detail: string;
+  evidence: Diagnostic["evidence"] | null;
+  rule_version: string | null;
+  confidence: Diagnostic["confidence"] | null;
 }
 
 /**
- * Transpose findings into the four positional `text[]` arrays a diagnostics
- * multi-row insert unnests (code, severity, title, detail).
+ * Transpose findings into the seven positional arrays a diagnostics multi-row
+ * insert unnests (code, severity, title, detail, evidence, rule_version,
+ * confidence). Evidence is JSON-encoded per row (or null) and cast back to jsonb
+ * in the insert; rule_version/confidence are null for Phase 6 findings.
  */
 export function diagnosticInsertColumns(
   diagnostics: readonly DiagnosticFinding[],
-): [string[], string[], string[], string[]] {
+): [
+  string[],
+  string[],
+  string[],
+  string[],
+  (string | null)[],
+  (string | null)[],
+  (string | null)[],
+] {
   return [
     diagnostics.map((d) => d.code),
     diagnostics.map((d) => d.severity),
     diagnostics.map((d) => d.title),
     diagnostics.map((d) => d.detail),
+    diagnostics.map((d) => (d.evidence ? JSON.stringify(d.evidence) : null)),
+    diagnostics.map((d) => d.ruleVersion ?? null),
+    diagnostics.map((d) => d.confidence ?? null),
   ];
 }
 
 /**
  * The complete diagnostics insert/unnest shape. `runIdParameter` and
  * `firstFindingParameter` make it usable in both a standalone write and a
- * larger CTE without duplicating column order, aliases, or casts.
+ * larger CTE without duplicating column order, aliases, or casts. The evidence
+ * text[] is cast to jsonb per row so a null element stays a SQL null.
  */
 export function diagnosticInsertSql(
   runIdParameter: number,
@@ -224,10 +249,13 @@ export function diagnosticInsertSql(
   const severityParameter = codeParameter + 1;
   const titleParameter = codeParameter + 2;
   const detailParameter = codeParameter + 3;
-  return `insert into diagnostics (run_id, code, severity, title, detail)
-     select $${runIdParameter}, code, severity, title, detail
-       from unnest($${codeParameter}::text[], $${severityParameter}::text[], $${titleParameter}::text[], $${detailParameter}::text[])
-         as finding(code, severity, title, detail)${guardSql ? `\n      where ${guardSql}` : ""}`;
+  const evidenceParameter = codeParameter + 4;
+  const ruleVersionParameter = codeParameter + 5;
+  const confidenceParameter = codeParameter + 6;
+  return `insert into diagnostics (run_id, code, severity, title, detail, evidence, rule_version, confidence)
+     select $${runIdParameter}, code, severity, title, detail, evidence::jsonb, rule_version, confidence
+       from unnest($${codeParameter}::text[], $${severityParameter}::text[], $${titleParameter}::text[], $${detailParameter}::text[], $${evidenceParameter}::text[], $${ruleVersionParameter}::text[], $${confidenceParameter}::text[])
+         as finding(code, severity, title, detail, evidence, rule_version, confidence)${guardSql ? `\n      where ${guardSql}` : ""}`;
 }
 
 /**
@@ -254,20 +282,28 @@ export async function readDiagnostics(
   db: Queryable = getPool(),
 ): Promise<Diagnostic[]> {
   const rows = await query<DiagnosticRow>(
-    `select id, code, severity, title, detail
+    `select id, code, severity, title, detail, evidence, rule_version, confidence
        from diagnostics
       where run_id = $1
       order by id`,
     [runId],
     db,
   );
-  return rows.map((row) => ({
-    id: row.id,
-    code: row.code,
-    severity: row.severity,
-    title: row.title,
-    detail: row.detail,
-  }));
+  return rows.map((row) => {
+    // Attach the Phase 6.5 fields only when present so a Phase 6 finding
+    // (all-null) round-trips to exactly the pre-6.5 shape.
+    const diagnostic: Diagnostic = {
+      id: row.id,
+      code: row.code,
+      severity: row.severity,
+      title: row.title,
+      detail: row.detail,
+    };
+    if (row.evidence !== null) diagnostic.evidence = row.evidence;
+    if (row.rule_version !== null) diagnostic.ruleVersion = row.rule_version;
+    if (row.confidence !== null) diagnostic.confidence = row.confidence;
+    return diagnostic;
+  });
 }
 
 /**
@@ -301,10 +337,15 @@ export async function insertRun(run: Run, db: Queryable = getPool()): Promise<vo
          cpu_model, gpu_model, gpu_vendor, gpu_driver,
          ram_gb, ram_rated_mtps, ram_actual_mtps, os_build, resolution,
          generated_frame_tech, frames_object_key,
-         schema_version, parser_version, created_at, gpu_vram_total_mb
+         schema_version, parser_version, created_at, gpu_vram_total_mb,
+         capability_manifest, capability_manifest_version,
+         settings_json, methodology_manifest_version,
+         upscaler, ray_tracing, frame_pacing_cap, vsync, vrr, scene_type
        ) values (
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-         $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
+         $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
+         $36::jsonb, $37,
+         $38::jsonb, $39, $40, $41, $42, $43, $44, $45
        )
      )
      insert into run_summaries (
@@ -327,6 +368,16 @@ export async function insertRun(run: Run, db: Queryable = getPool()): Promise<vo
       summary.frameTimeP50Ms, summary.frameTimeP95Ms, summary.frameTimeP99Ms,
       summary.stutterCount, summary.generatedFramePct, summary.pointOnePercentLowConfidence,
       summary.sampleCount, summary.durationSeconds,
+      run.capabilityManifest ? JSON.stringify(run.capabilityManifest) : null,
+      run.capabilityManifest?.version ?? null,
+      run.methodologyManifest ? JSON.stringify(run.methodologyManifest) : null,
+      run.methodologyManifest?.version ?? null,
+      run.methodologyManifest?.upscaler ?? null,
+      run.methodologyManifest?.rayTracing ?? null,
+      run.methodologyManifest?.framePacing.capFps ?? null,
+      run.methodologyManifest?.framePacing.vsync ?? null,
+      run.methodologyManifest?.framePacing.vrr ?? null,
+      run.methodologyManifest?.sceneType ?? null,
     ],
   );
 }

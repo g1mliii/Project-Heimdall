@@ -202,12 +202,94 @@ describe("runDiagnostics — per-rule fixtures", () => {
   });
 });
 
+describe("runDiagnostics — confidence-graded bottleneck attribution (§16b / 16d.2)", () => {
+  /** N frames carrying verified busy times; `sensors(i)` overrides per frame. */
+  function busyFrames(count: number, sensors: (i: number) => Partial<FrameSample>): FrameSample[] {
+    return Array.from({ length: count }, (_, i) => ({
+      timeMs: i * 13,
+      frameTimeMs: 13,
+      ...sensors(i),
+    }));
+  }
+
+  it("fires likely-cpu-bound (info, graded) when CPU busy dominates", () => {
+    const frames = busyFrames(60, () => ({ cpuBusyMs: 12, gpuBusyMs: 5 }));
+    const findings = runDiagnostics(inputFor(frames));
+    expect(findings.map((f) => f.code)).toEqual(["likely-cpu-bound"]);
+    const cpu = findings[0]!;
+    expect(cpu.severity).toBe("info");
+    expect(cpu.confidence).toBe("high");
+    expect(cpu.ruleVersion).toBe("1.0.0");
+    expect(cpu.evidence?.metrics?.cpuBoundFraction).toBeCloseTo(1, 5);
+    expect(cpu.evidence?.sensors).toEqual(["cpuBusyMs", "gpuBusyMs"]);
+  });
+
+  it("fires likely-gpu-bound when GPU busy dominates", () => {
+    const frames = busyFrames(60, () => ({ cpuBusyMs: 5, gpuBusyMs: 12 }));
+    expect(runDiagnostics(inputFor(frames)).map((f) => f.code)).toEqual(["likely-gpu-bound"]);
+  });
+
+  it("fires frame-capped-or-display-limited at a stable cap above both busy times", () => {
+    const capMs = 1000 / 60;
+    const frames = Array.from({ length: 60 }, (_, i) => ({
+      timeMs: i * capMs,
+      frameTimeMs: capMs,
+      cpuBusyMs: 8,
+      gpuBusyMs: 9,
+    }));
+    expect(runDiagnostics(inputFor(frames)).map((f) => f.code)).toEqual([
+      "frame-capped-or-display-limited",
+    ]);
+  });
+
+  it("fires telemetry-insufficient when busy telemetry is present but sparse", () => {
+    const frames = busyFrames(120, (i) => (i < 10 ? { cpuBusyMs: 12, gpuBusyMs: 5 } : {}));
+    const findings = runDiagnostics(inputFor(frames));
+    expect(findings.map((f) => f.code)).toEqual(["telemetry-insufficient"]);
+    expect(findings[0]!.severity).toBe("info");
+  });
+
+  it("adds NO new finding when the run lacks busy/wait sensors (regression invariant)", () => {
+    // frameTimeMs only — no cpuBusyMs/gpuBusyMs columns → every attribution rule
+    // is gated out, exactly as Phase 6 behaved.
+    const frames = framesWithStutters(60, []);
+    const codes = runDiagnostics(inputFor(frames)).map((f) => f.code);
+    for (const code of [
+      "likely-cpu-bound",
+      "likely-gpu-bound",
+      "frame-capped-or-display-limited",
+      "telemetry-insufficient",
+    ]) {
+      expect(codes).not.toContain(code);
+    }
+  });
+
+  it("stays inconclusive (no attribution) when covered but no regime dominates", () => {
+    // ~50/50 cpu/gpu split → no regime reaches the dominant fraction.
+    const frames = busyFrames(60, (i) =>
+      i % 2 === 0 ? { cpuBusyMs: 12, gpuBusyMs: 5 } : { cpuBusyMs: 5, gpuBusyMs: 12 },
+    );
+    const codes = runDiagnostics(inputFor(frames)).map((f) => f.code);
+    expect(codes).not.toContain("likely-cpu-bound");
+    expect(codes).not.toContain("likely-gpu-bound");
+    expect(codes).not.toContain("telemetry-insufficient");
+  });
+});
+
 describe("runDiagnostics — no false positives (§16.2)", () => {
-  it("surfaces nothing on a clean synthetic run", () => {
+  it("flags no problem on a clean synthetic run — only an informational attribution", () => {
     const frames = makeSyntheticFrames();
     // Full sensors, GPU-bound, healthy RAM, no curated driver, unknown VRAM total.
     const findings = runDiagnostics(inputFor(frames));
-    expect(findings).toEqual([]);
+    // No warn/bad PROBLEM is raised (the §16.2 invariant)...
+    expect(findings.filter((f) => f.severity !== "info")).toEqual([]);
+    // ...but the verified busy-time telemetry yields a likelihood-graded read
+    // that coexists with the Phase 6 rules (16b): this synthetic run is GPU-bound.
+    expect(findings.map((f) => f.code)).toEqual(["likely-gpu-bound"]);
+    const gpu = findings.find((f) => f.code === "likely-gpu-bound")!;
+    expect(gpu.confidence).toBe("high");
+    expect(gpu.ruleVersion).toBe("1.0.0");
+    expect(gpu.evidence?.coverageFraction).toBeCloseTo(1, 5);
   });
 });
 
@@ -226,6 +308,10 @@ describe("runDiagnostics — totality (§15.5)", () => {
         if (rand() > 0.5) frame.vramUsedMb = rand() > 0.9 ? NaN : rand() * 16_000;
         if (rand() > 0.5) frame.cpuLoadPct = rand() * 100;
         if (rand() > 0.5) frame.gpuLoadPct = rand() * 100;
+        // Busy-time telemetry (incl. NaN/absent gaps) exercises the §16b
+        // attribution rules across sparse/misaligned inputs without ever throwing.
+        if (rand() > 0.4) frame.cpuBusyMs = rand() > 0.9 ? NaN : rand() * 40;
+        if (rand() > 0.4) frame.gpuBusyMs = rand() > 0.9 ? NaN : rand() * 40;
         return frame;
       });
       const input = inputFor(frames, {

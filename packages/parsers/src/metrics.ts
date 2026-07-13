@@ -110,6 +110,67 @@ export function computeRunSummaryFromFrameTimes(
   return summarizeSortedFrameTimes(sorted, sumMs, generatedFrameCount);
 }
 
+/** One run's role within a benchmark set (§16c.2). */
+export interface BenchmarkSetMember {
+  summary: RunSummary;
+  /** Warm-up passes are retained but excluded from the set's statistics. */
+  isWarmup: boolean;
+}
+
+/**
+ * Variance/confidence over a benchmark set's NON-warm-up runs (§16c.2). Every
+ * raw run is retained upstream; this never promotes one lucky pass — it reports
+ * the spread so a reader can judge stability. `coefficientOfVariation` is the
+ * stddev of avg FPS as a fraction of the mean (population stddev — we have the
+ * whole set, not a sample of it); confidence grades that spread.
+ */
+export interface BenchmarkSetStats {
+  /** Non-warm-up runs counted. */
+  sampleCount: number;
+  meanAvgFps: number;
+  /** Population standard deviation of avg FPS across the set. */
+  stdDevAvgFps: number;
+  /** stdDev / mean (0 for a single run); lower is more repeatable. */
+  coefficientOfVariation: number;
+  /** How trustworthy the set's central tendency is, by count + spread. */
+  confidence: ConfidenceLevel;
+}
+
+/** Coefficient-of-variation thresholds that grade a benchmark set's stability. */
+const BENCHMARK_SET_CV = { tight: 0.03, loose: 0.08 } as const;
+
+/**
+ * Summarize a benchmark set. Returns `sampleCount: 0` when the set has no
+ * non-warm-up runs (nothing to pool). Pure and total.
+ */
+export function computeBenchmarkSetStats(members: readonly BenchmarkSetMember[]): BenchmarkSetStats {
+  const measured = members.filter((member) => !member.isWarmup).map((member) => member.summary.avgFps);
+  const n = measured.length;
+  if (n === 0) {
+    return { sampleCount: 0, meanAvgFps: 0, stdDevAvgFps: 0, coefficientOfVariation: 0, confidence: "low" };
+  }
+
+  const mean = measured.reduce((sum, fps) => sum + fps, 0) / n;
+  const variance = measured.reduce((sum, fps) => sum + (fps - mean) ** 2, 0) / n;
+  const stdDev = Math.sqrt(variance);
+  const cv = mean > 0 ? stdDev / mean : 0;
+
+  return {
+    sampleCount: n,
+    meanAvgFps: mean,
+    stdDevAvgFps: stdDev,
+    coefficientOfVariation: cv,
+    confidence: benchmarkSetConfidence(n, cv),
+  };
+}
+
+/** ≥3 tight runs is high confidence; a loose spread or a lone run is low. */
+function benchmarkSetConfidence(n: number, cv: number): ConfidenceLevel {
+  if (n >= 3 && cv <= BENCHMARK_SET_CV.tight) return "high";
+  if (n >= 2 && cv <= BENCHMARK_SET_CV.loose) return "medium";
+  return "low";
+}
+
 export function computeRunSummary(frames: readonly FrameSample[]): RunSummary {
   const n = frames.length;
   if (n === 0) throw new RangeError("computeRunSummary requires at least one frame");

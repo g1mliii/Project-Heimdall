@@ -9,7 +9,7 @@ import {
 } from "./sensor-availability";
 import { parseCapFrameX } from "./capframex";
 import { parsePresentMon } from "./presentmon";
-import { readFixture } from "./testing/fixtures";
+import { listFixtureFiles, readFixture } from "./testing/fixtures";
 
 const VENDORS = ["nvidia", "amd", "intel"] as const;
 
@@ -24,12 +24,32 @@ describe("SENSOR_AVAILABILITY matrix completeness (§7.3)", () => {
     }
   });
 
-  it("is honest about provenance: no cell claims verified-real yet", () => {
+  it("keeps provenance honest: a verified-real cell must carry matching evidence + a golden fixture on disk (16d.1)", () => {
     // Flipping a cell to verified-real requires landing the real export in
-    // fixtures/ in the same PR (see fixtures/README.md wanted-list).
+    // fixtures/ in the same PR (see fixtures/README.md flip procedure). This
+    // passes vacuously while every cell is synthetic and becomes load-bearing
+    // the moment one flips: provenance can never outrun the data.
+    const allFixtures = new Set(listFixtureFiles());
     for (const source of captureSourceSchema.options) {
       for (const vendor of VENDORS) {
-        expect(SENSOR_AVAILABILITY[source][vendor]!.provenance).toBe("synthetic");
+        const matrixCell = SENSOR_AVAILABILITY[source][vendor]!;
+        if (matrixCell.provenance === "synthetic") {
+          expect(matrixCell.evidence, `${source}×${vendor} synthetic cell carries no evidence`).toBeUndefined();
+          continue;
+        }
+        const evidence = matrixCell.evidence;
+        expect(evidence, `${source}×${vendor} verified-real cell has structured evidence`).toBeDefined();
+        expect(evidence!.source).toBe(source);
+        expect(evidence!.gpuVendor).toBe(vendor);
+        expect(
+          allFixtures.has(evidence!.fixture),
+          `${source}×${vendor} verified-real fixture ${evidence!.fixture} exists on disk`,
+        ).toBe(true);
+        const expectedPath = evidence!.fixture.replace(/\.[^./]+$/, ".expected.json");
+        expect(
+          allFixtures.has(expectedPath),
+          `${source}×${vendor} verified-real fixture has ${expectedPath}`,
+        ).toBe(true);
       }
     }
   });

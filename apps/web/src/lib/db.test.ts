@@ -100,6 +100,9 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0012_seed_required_drivers.sql",
       "0013_diagnostics_columns.sql",
       "0015_hardware_alias_kind_aware.sql",
+      "0016_capability_manifest.sql",
+      "0017_methodology_manifest.sql",
+      "0018_comparability_index.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
@@ -420,5 +423,79 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     };
     await insertRun(run, pool);
     expect((await readRun(run.id, pool))?.hardware.gpuVramTotalMb).toBe(12_288);
+  });
+
+  it("round-trips a capability + methodology manifest and mirrors comparability columns (§16a/§16c)", async () => {
+    const capabilityManifest = {
+      version: 1,
+      source: "presentmon" as const,
+      sensors: Object.fromEntries(
+        (["gpuLoadPct", "gpuClockMhz", "gpuPowerW", "vramUsedMb", "cpuLoadPct", "cpuBusyMs", "gpuBusyMs"] as const).map(
+          (field) => [field, { present: field.endsWith("BusyMs"), frameAligned: field.endsWith("BusyMs") }],
+        ),
+      ) as never,
+      presentationMode: "hardware-independent-flip" as const,
+      syncMode: "tearing" as const,
+      frameGenerationObserved: false,
+      vramCapacity: { totalMb: 12_288 },
+      caveats: ["GPU-execution timing is HAGS-affected"],
+    };
+    const methodologyManifest = {
+      version: 1,
+      sceneType: "benchmark-scene" as const,
+      resolution: "2560x1440",
+      upscaler: "dlss" as const,
+      rayTracing: "on" as const,
+      frameGeneration: "dlss3" as const,
+      framePacing: { capFps: 120, vsync: true, vrr: false },
+    };
+    const run = {
+      ...fixtureRunWithId("run_manifests"),
+      capabilityManifest,
+      methodologyManifest,
+    };
+    await insertRun(run, pool);
+
+    const readBack = await readRun(run.id, pool);
+    expect(readBack?.capabilityManifest).toEqual(capabilityManifest);
+    expect(readBack?.methodologyManifest).toEqual(methodologyManifest);
+
+    // The queryable comparability columns mirror the manifest (§16c.3).
+    const { rows } = await pool.query<{
+      upscaler: string;
+      ray_tracing: string;
+      frame_pacing_cap: number;
+      vsync: boolean;
+      vrr: boolean;
+      scene_type: string;
+      is_warmup: boolean;
+    }>(
+      `select upscaler, ray_tracing, frame_pacing_cap, vsync, vrr, scene_type, is_warmup
+         from runs where id = $1`,
+      [run.id],
+    );
+    expect(rows[0]).toEqual({
+      upscaler: "dlss",
+      ray_tracing: "on",
+      frame_pacing_cap: 120,
+      vsync: true,
+      vrr: false,
+      scene_type: "benchmark-scene",
+      is_warmup: false, // defaulted, never written by insertRun
+    });
+  });
+
+  it("extends runs_game_gpu_idx with the comparability columns (§16c.3)", async () => {
+    const { rows } = await pool.query<{ definition: string }>(
+      `select pg_get_indexdef(indexrelid) as definition
+         from pg_index where indexrelid = 'runs_game_gpu_idx'::regclass`,
+    );
+    const definition = rows[0]?.definition ?? "";
+    for (const column of ["resolution", "upscaler", "ray_tracing", "generated_frame_tech", "scene_type"]) {
+      expect(definition, `runs_game_gpu_idx includes ${column}`).toContain(column);
+    }
+    // The partial predicate is preserved from 0004.
+    expect(definition).toContain("validated");
+    expect(definition).toContain("public");
   });
 });

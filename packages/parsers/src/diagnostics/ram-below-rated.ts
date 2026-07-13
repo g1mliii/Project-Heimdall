@@ -12,6 +12,7 @@ import type { DiagnosticRule } from "./types";
 
 export const ramBelowRatedRule: DiagnosticRule = {
   code: "ram-below-rated",
+  version: "1.0.0",
   requiredSensors: [],
   evaluate({ input }) {
     const actual = input.hardware.ramSpeedMtps;

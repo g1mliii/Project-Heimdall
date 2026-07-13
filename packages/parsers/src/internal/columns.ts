@@ -9,16 +9,14 @@
  * confirmed against real exports as they land.
  */
 
-/** Optional per-frame sensor fields shared by the sources (§7.3). */
-export const SENSOR_COLUMN_FIELDS = [
-  "gpuLoadPct",
-  "gpuClockMhz",
-  "gpuPowerW",
-  "vramUsedMb",
-  "cpuLoadPct",
-  "cpuBusyMs",
-  "gpuBusyMs",
-] as const;
+import { CAPABILITY_SENSOR_FIELDS } from "@heimdall/shared";
+
+/**
+ * Optional per-frame sensor fields shared by the sources (§7.3). Re-exports the
+ * canonical set from `@heimdall/shared` so the parser column tables, the
+ * sensor-availability matrix, and the capability manifest cannot drift apart.
+ */
+export const SENSOR_COLUMN_FIELDS = CAPABILITY_SENSOR_FIELDS;
 
 export type SensorColumnField = (typeof SENSOR_COLUMN_FIELDS)[number];
 
@@ -53,19 +51,58 @@ export const PRESENTMON_V1_COLUMNS: SourceColumns = {
   },
 };
 
-/** PresentMon 2.x — detected via FrameTime; telemetry columns are opt-in. */
+/**
+ * PresentMon 2.x — detected via FrameTime; telemetry columns are opt-in. Busy-
+ * time aliases cover the current `CPUBusy`/`GPUBusy` names AND the intermediate
+ * `MsCPUBusy`/`MsGPUBusy` variants some 2.x builds emitted, so a tested profile
+ * is pinned rather than a generic version guess (§16a.2).
+ */
 export const PRESENTMON_V2_COLUMNS: SourceColumns = {
   frameTimeMs: ["frametime"],
   timeSeconds: ["cpustarttime", "timeinseconds"],
   sensors: {
-    cpuBusyMs: ["cpubusy"],
-    gpuBusyMs: ["gpubusy"],
-    gpuLoadPct: ["gpuutilization"],
-    gpuClockMhz: ["gpufrequency"],
+    cpuBusyMs: ["cpubusy", "mscpubusy"],
+    gpuBusyMs: ["gpubusy", "msgpubusy"],
+    gpuLoadPct: ["gpuutilization", "gpu%", "gpuusage"],
+    gpuClockMhz: ["gpufrequency", "gpuclock"],
     gpuPowerW: ["gpupower"],
-    vramUsedMb: ["gpumemused"],
+    vramUsedMb: ["gpumemused", "gpumemusage"],
   },
 };
+
+/**
+ * Pinned PresentMon capture profiles (§16a.2). We recognize exactly these
+ * tested generations rather than inferring a generic-version compatibility: the
+ * CSV can reveal the runtime/API and (v2+) presentation semantics, but the tool
+ * version and HAGS state must be DECLARED by the desktop client (Phase 9), so
+ * they live in the methodology manifest, not here.
+ */
+export const PRESENTMON_PROFILES = [
+  {
+    id: "presentmon-1.x",
+    detect: "MsBetweenPresents",
+    hasBusyTimes: false,
+    hasPresentationSemantics: false,
+  },
+  {
+    id: "presentmon-2.x",
+    detect: "FrameTime",
+    hasBusyTimes: true,
+    hasPresentationSemantics: true,
+  },
+] as const;
+
+/**
+ * Header columns that expose PresentMon capture *semantics* (not per-frame
+ * metrics): the graphics runtime, the swapchain present mode, and tearing/sync
+ * state. Pre-lowercased to match `buildHeaderMap`.
+ */
+export const PRESENTMON_SEMANTICS_COLUMNS = {
+  runtime: ["runtime"],
+  presentMode: ["presentmode"],
+  allowsTearing: ["allowstearing"],
+  syncInterval: ["syncinterval"],
+} as const;
 
 /**
  * MangoHud log rows. `frametime` is already ms; the row timestamp comes from

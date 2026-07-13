@@ -85,6 +85,26 @@ export const DIAGNOSTICS = {
   /** Curated game-ready driver requirements self-suppress after this age. */
   driverRequirementMaxAgeDays: 30,
   /**
+   * Confidence-graded bottleneck attribution (§16b), computed from VERIFIED
+   * per-frame busy times (PresentMon v2 CPUBusy/GPUBusy, CapFrameX MsGPUActive).
+   * These are deliberately separate from the utilization-based `cpuBottleneck*`
+   * thresholds above: those gate the cross-source fallback rule, these gate the
+   * likelihood-graded explanations. None of them are ever a hard integrity flag.
+   */
+  bottleneckMinPairedSamples: 30,
+  /** Paired CPU/GPU busy telemetry must cover this share of the capture. */
+  bottleneckMinCoverageFraction: 0.5,
+  /** A regime (cpu/gpu/capped) must claim this share of considered frames to be "dominant". */
+  bottleneckDominantFraction: 0.6,
+  /** One busy time must exceed the other by this fraction to attribute the frame. */
+  bottleneckDominanceMargin: 0.15,
+  /** A frame counts as capped/limited when its frame time exceeds the critical busy time by this much. */
+  bottleneckCapMarginFraction: 0.1,
+  /** Coverage at/above this grades the finding high-confidence. */
+  bottleneckHighConfidenceCoverage: 0.9,
+  /** Coverage at/above this grades it medium-confidence; below is low. */
+  bottleneckMediumConfidenceCoverage: 0.7,
+  /**
    * RAM-below-rated: fire only when actual MT/s trails rated by more than this
    * fraction, so SPD/XMP rounding (e.g. 5600 vs 5601) never trips it (§15.3).
    */
@@ -99,6 +119,38 @@ export const MIN_FRAME_TIME_MS = 0.01;
  * stored uploads can be reprocessed against the right shape (§2.2).
  */
 export const CURRENT_SCHEMA_VERSION = 1;
+
+/**
+ * The seven optional per-frame sensor fields (§7.3) — the canonical field set
+ * shared by the parser column tables, the sensor-availability matrix, and the
+ * capability manifest. Defined HERE so `@heimdall/shared` (which cannot import
+ * the parsers package) and `@heimdall/parsers` share one source of truth; the
+ * parsers' `SENSOR_COLUMN_FIELDS` re-exports this so the two can never drift.
+ */
+export const CAPABILITY_SENSOR_FIELDS = [
+  "gpuLoadPct",
+  "gpuClockMhz",
+  "gpuPowerW",
+  "vramUsedMb",
+  "cpuLoadPct",
+  "cpuBusyMs",
+  "gpuBusyMs",
+] as const;
+export type CapabilitySensorField = (typeof CAPABILITY_SENSOR_FIELDS)[number];
+
+/**
+ * Capability-manifest schema version (Phase 6.5 §16a.3). Bump when the manifest
+ * shape changes incompatibly, exactly as {@link CURRENT_SCHEMA_VERSION} governs
+ * the ingest DTO — a stored manifest records the version it was derived under.
+ */
+export const CAPABILITY_MANIFEST_VERSION = 1;
+
+/**
+ * Methodology-manifest schema version (Phase 6.5 §16c.1). The methodology
+ * manifest is quasi-identifying and versioned independently of the capability
+ * manifest so the two can evolve on their own cadence.
+ */
+export const METHODOLOGY_MANIFEST_VERSION = 1;
 
 /**
  * Placeholder hardware strings for captures whose log carries no hardware

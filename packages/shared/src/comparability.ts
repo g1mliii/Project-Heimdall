@@ -1,0 +1,102 @@
+/**
+ * Comparability key (§16c.3) — the single source of truth for "which runs may
+ * be pooled together." Phase 7 aggregate pages must group by this key so runs
+ * captured under different methodology or frame-pacing semantics never share a
+ * bucket. Modeled on `visibility.ts`'s `aggregateEligibilitySql`: the TypeScript
+ * function and the SQL expression compute the SAME key, so no query re-derives
+ * it and the two can't drift.
+ *
+ * The key intentionally spans: canonical game + canonical GPU (the hardware/
+ * title identity), resolution + upscaler + ray-tracing + frame-generation (the
+ * rendering pipeline), the frame-pacing ceiling (cap/VSync/VRR), and the scene
+ * type (a `benchmark-scene` never pools with `gameplay`, and `freeform` stays
+ * separately filterable per §17.5).
+ */
+
+import type {
+  GeneratedFrameTech,
+  RayTracingMode,
+  SceneType,
+  UpscalerMode,
+} from "./types";
+
+/** Everything the comparability key is derived from (canonical, server-resolved). */
+export interface ComparabilityInput {
+  /** Canonical game id (null when unresolved — such runs can't be pooled). */
+  gameId: string | null;
+  /** Canonical GPU hardware id (null when unresolved). */
+  gpuId: string | null;
+  resolution: string | null;
+  upscaler: UpscalerMode;
+  rayTracing: RayTracingMode;
+  frameGeneration: GeneratedFrameTech;
+  /** Applied FPS cap, or null for uncapped. */
+  frameCapFps: number | null;
+  vsync: boolean;
+  vrr: boolean;
+  sceneType: SceneType;
+}
+
+/** Field order — shared by the TS builder and {@link comparabilityKeySql}. */
+const KEY_FIELDS = [
+  "gameId",
+  "gpuId",
+  "resolution",
+  "upscaler",
+  "rayTracing",
+  "frameGeneration",
+  "frameCapFps",
+  "vsync",
+  "vrr",
+  "sceneType",
+] as const;
+
+/** A component that can't be resolved renders as this sentinel, never empty. */
+const MISSING = "~";
+
+function component(value: string | number | boolean | null): string {
+  if (value === null || value === undefined) return MISSING;
+  return String(value);
+}
+
+/**
+ * Deterministic pooling key. Two runs share a bucket iff every comparability
+ * component matches. Unresolved game/GPU render as a sentinel so they only ever
+ * pool with other equally-unresolved runs (Phase 7 excludes those from public
+ * aggregates via the eligibility guard, not here).
+ */
+export function comparabilityKey(input: ComparabilityInput): string {
+  return KEY_FIELDS.map((field) => component(input[field])).join("|");
+}
+
+/**
+ * The SQL expression that reproduces {@link comparabilityKey} from run columns,
+ * so a Phase 7 `GROUP BY` shares one definition with the TS path. `alias` is a
+ * trusted developer-supplied table alias (never user input); every value is a
+ * column reference, so there is no injection surface. Column↔field order is
+ * asserted against {@link KEY_FIELDS} in the tests.
+ */
+export function comparabilityKeySql(alias = "runs"): string {
+  // Booleans render as 'true'/'false' (matching JS String(boolean)), not the
+  // Postgres 't'/'f', so the SQL key is byte-identical to the TS key.
+  const boolText = (column: string): string =>
+    `case when ${column} is null then '${MISSING}' when ${column} then 'true' else 'false' end`;
+  const parts = [
+    `coalesce(${alias}.game_id::text, '${MISSING}')`,
+    `coalesce(${alias}.gpu_hardware_id::text, '${MISSING}')`,
+    `coalesce(${alias}.resolution, '${MISSING}')`,
+    `coalesce(${alias}.upscaler, '${MISSING}')`,
+    `coalesce(${alias}.ray_tracing, '${MISSING}')`,
+    `coalesce(${alias}.generated_frame_tech, '${MISSING}')`,
+    `coalesce(${alias}.frame_pacing_cap::text, '${MISSING}')`,
+    boolText(`${alias}.vsync`),
+    boolText(`${alias}.vrr`),
+    `coalesce(${alias}.scene_type, '${MISSING}')`,
+  ];
+  // Every part is already coalesced to the '~' sentinel, so concat_ws never
+  // skips a NULL and collapses distinct keys.
+  return `concat_ws('|', ${parts.join(", ")})`;
+}
+
+/** Field count, exported so the drift-guard test pins TS↔SQL column parity. */
+export const COMPARABILITY_KEY_FIELD_COUNT = KEY_FIELDS.length;

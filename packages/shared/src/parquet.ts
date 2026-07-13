@@ -44,8 +44,20 @@ export const FRAME_PARQUET_COLUMNS: readonly FrameParquetColumn[] = [
   { name: "gpu_busy_ms", type: "DOUBLE", nullable: true, field: "gpuBusyMs" },
 ] as const;
 
-/** Sensor fields retained by the Phase 6 diagnostics engine. */
-export const DIAGNOSTIC_FRAME_SENSOR_FIELDS = ["vramUsedMb", "gpuLoadPct", "cpuLoadPct"] as const;
+/**
+ * Sensor fields retained by the diagnostics engine. The Phase 6 rules use the
+ * utilization/VRAM trio; the Phase 6.5 confidence-graded rules add the verified
+ * busy-time columns (`cpuBusyMs`/`gpuBusyMs`), so the columnar diagnostics path
+ * must retain them too (§16b). These already exist in the v1 Parquet schema, so
+ * no schema bump is needed.
+ */
+export const DIAGNOSTIC_FRAME_SENSOR_FIELDS = [
+  "vramUsedMb",
+  "gpuLoadPct",
+  "cpuLoadPct",
+  "cpuBusyMs",
+  "gpuBusyMs",
+] as const;
 export type DiagnosticFrameSensorField = (typeof DIAGNOSTIC_FRAME_SENSOR_FIELDS)[number];
 
 /** The on-wire columns that back the diagnostics sensor contract. */

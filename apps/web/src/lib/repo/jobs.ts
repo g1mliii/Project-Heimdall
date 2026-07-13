@@ -8,7 +8,13 @@
  * `failVerificationJob(..., terminal)`).
  */
 
-import { GENERATED_FRAME_TECH, RUN_STATUS, type DiagnosticFinding, type RunSummary } from "@heimdall/shared";
+import {
+  GENERATED_FRAME_TECH,
+  RUN_STATUS,
+  type CapabilityManifest,
+  type DiagnosticFinding,
+  type RunSummary,
+} from "@heimdall/shared";
 import {
   query,
   getPool,
@@ -165,6 +171,7 @@ export async function applyVerificationResult(
   runStatus: "validated" | "flagged",
   signatureValid: boolean | null,
   diagnostics: readonly DiagnosticFinding[],
+  capabilityManifest: CapabilityManifest | null,
   claim: Pick<ClaimedJob, "id" | "attempts">,
   db: Queryable = getPool(),
 ): Promise<void> {
@@ -193,7 +200,9 @@ export async function applyVerificationResult(
                 when $9::double precision = 0 then $16
                 when generated_frame_tech in ($15, $16) then $15
                 else generated_frame_tech
-              end
+              end,
+              capability_manifest = $19::jsonb,
+              capability_manifest_version = ($19::jsonb ->> 'version')::integer
         where id = $1
           and status <> 'hidden'
           and exists (select 1 from job_claim)
@@ -211,7 +220,7 @@ export async function applyVerificationResult(
         where run_id = $1
           and exists (select 1 from run_update)
      )
-     ${diagnosticInsertSql(1, 19, "exists (select 1 from run_update)")}`,
+     ${diagnosticInsertSql(1, 20, "exists (select 1 from run_update)")}`,
     [
       runId,
       summary.avgFps,
@@ -231,6 +240,7 @@ export async function applyVerificationResult(
       GENERATED_FRAME_TECH.none,
       claim.id,
       claim.attempts,
+      capabilityManifest ? JSON.stringify(capabilityManifest) : null,
       ...diagnosticInsertColumns(diagnostics),
     ],
   );

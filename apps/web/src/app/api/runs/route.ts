@@ -49,6 +49,10 @@ export async function POST(request: Request): Promise<NextResponse> {
       schemaVersion: body.schemaVersion,
       parserVersion: body.parserVersion,
       createdAt: new Date().toISOString(),
+      // Provisional client manifest (§16a.3), recomputed canonically at verify.
+      ...(body.capabilityManifest ? { capabilityManifest: body.capabilityManifest } : {}),
+      // Declared methodology (§16c.1) — drives the Phase 7 comparability key.
+      ...(body.methodologyManifest ? { methodologyManifest: body.methodologyManifest } : {}),
       // framesObjectKey stays unset until finalize proves the object exists.
     };
     await insertRun(run);

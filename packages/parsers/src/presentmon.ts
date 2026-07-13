@@ -16,10 +16,23 @@
  * Bare PresentMon CSVs carry no hardware block, so `hardware` is never set.
  */
 
-import { failure, success, type ParsedCapture, type ParseResult, type ParseWarning } from "./errors";
+import type { PresentationMode, SyncMode } from "@heimdall/shared";
+
+import {
+  failure,
+  success,
+  type CaptureSemantics,
+  type ParsedCapture,
+  type ParseResult,
+  type ParseWarning,
+} from "./errors";
 import { decodeInput, splitLines } from "./internal/decode";
 import { findColumn, findCsvHeader, headerFailure, splitCsvLine, type FoundHeader } from "./internal/csv";
-import { PRESENTMON_V1_COLUMNS, PRESENTMON_V2_COLUMNS } from "./internal/columns";
+import {
+  PRESENTMON_SEMANTICS_COLUMNS,
+  PRESENTMON_V1_COLUMNS,
+  PRESENTMON_V2_COLUMNS,
+} from "./internal/columns";
 import { parseFrameRowsAt, type FrameRowsInput } from "./internal/frames";
 import { parserVersionString } from "./version";
 
@@ -48,10 +61,86 @@ export function parsePresentMon(input: string | Uint8Array): ParseResult<ParsedC
   });
   if (!rows.ok) return rows;
 
+  // v2 exposes presentation/sync semantics via PresentMode/AllowsTearing that
+  // the merged frame stream cannot reveal; v1 has none (§16a.2/§16a.3).
+  const captureSemantics = isV2 ? detectPresentMonSemantics(lines, found) : undefined;
+
   return success(
-    { source: SOURCE, frames: rows.value, parserVersion: parserVersionString(SOURCE) },
+    {
+      source: SOURCE,
+      frames: rows.value,
+      parserVersion: parserVersionString(SOURCE),
+      ...(captureSemantics ? { captureSemantics } : {}),
+    },
     [...rows.warnings, ...stream.warnings],
   );
+}
+
+/** Map a PresentMon `PresentMode` cell to a canonical presentation mode (§16a.3). */
+function toPresentationMode(raw: string): PresentationMode {
+  const value = raw.trim().toLowerCase();
+  if (value === "") return "unknown";
+  if (value.includes("hardware composed")) return "hardware-composed-flip";
+  if (value.includes("hardware")) return "hardware-independent-flip";
+  if (value.includes("composed")) return "composed";
+  if (value.includes("legacy")) return "legacy";
+  return "unknown";
+}
+
+/**
+ * Read presentation/sync semantics from the first data row's PresentMode /
+ * AllowsTearing / SyncInterval cells. These are per-frame columns but stable
+ * across a capture, so the first row is representative. Returns `undefined` when
+ * the capture exposes none of them.
+ */
+export function detectPresentMonSemantics(
+  lines: readonly string[],
+  found: FoundHeader,
+): CaptureSemantics | undefined {
+  const presentModeIndex = findColumn(found.header, PRESENTMON_SEMANTICS_COLUMNS.presentMode);
+  const tearingIndex = findColumn(found.header, PRESENTMON_SEMANTICS_COLUMNS.allowsTearing);
+  const syncIntervalIndex = findColumn(found.header, PRESENTMON_SEMANTICS_COLUMNS.syncInterval);
+  if (presentModeIndex === undefined && tearingIndex === undefined && syncIntervalIndex === undefined) {
+    return undefined;
+  }
+
+  let firstRow: readonly string[] | undefined;
+  for (let i = found.index + 1; i < lines.length; i++) {
+    if (lines[i]!.trim() === "") continue;
+    firstRow = splitCsvLine(lines[i]!, found.dialect.delimiter);
+    break;
+  }
+  if (firstRow === undefined) return undefined;
+
+  const semantics: CaptureSemantics = {};
+  if (presentModeIndex !== undefined) {
+    const mode = toPresentationMode(firstRow[presentModeIndex] ?? "");
+    if (mode !== "unknown") semantics.presentationMode = mode;
+  }
+
+  const syncMode = detectSyncMode(
+    tearingIndex === undefined ? undefined : firstRow[tearingIndex],
+    syncIntervalIndex === undefined ? undefined : firstRow[syncIntervalIndex],
+  );
+  if (syncMode !== undefined) semantics.syncMode = syncMode;
+
+  return semantics.presentationMode === undefined && semantics.syncMode === undefined
+    ? undefined
+    : semantics;
+}
+
+/**
+ * A tearing-allowed present is unsynced; a non-zero SyncInterval is VSync. VRR
+ * is not distinguishable from a bare PresentMon CSV, so it is never inferred
+ * here — it is declared by the desktop client (Phase 9).
+ */
+function detectSyncMode(tearingCell?: string, syncIntervalCell?: string): SyncMode | undefined {
+  if (tearingCell !== undefined && tearingCell.trim() === "1") return "tearing";
+  if (syncIntervalCell !== undefined) {
+    const interval = Number(syncIntervalCell.trim());
+    if (Number.isFinite(interval) && interval > 0) return "vsync";
+  }
+  return undefined;
 }
 
 /**

@@ -21,16 +21,32 @@ import { vramSaturationRule } from "./vram-saturation";
 import { cpuBottleneckRule } from "./cpu-bottleneck";
 import { ramBelowRatedRule } from "./ram-below-rated";
 import { gpuDriverOutdatedRule } from "./gpu-driver-outdated";
+import {
+  frameCappedOrDisplayLimitedRule,
+  likelyCpuBoundRule,
+  likelyGpuBoundRule,
+  telemetryInsufficientRule,
+} from "./bottleneck-attribution";
 
 export * from "./types";
 export { compareDriverVersions } from "./gpu-driver-outdated";
+export { analyzeBottleneck } from "./bottleneck-attribution";
 
-/** Registry order == render order for findings of equal salience. */
+/**
+ * Registry order == render order for findings of equal salience. The Phase 6.5
+ * confidence-graded attribution rules (§16b) follow the Phase 6 rules; they gate
+ * on verified busy-time telemetry and coexist with — never replace — the
+ * utilization-based `cpu-bottleneck` fallback (16b.1).
+ */
 export const DIAGNOSTIC_RULES: readonly DiagnosticRule[] = [
   vramSaturationRule,
   cpuBottleneckRule,
   ramBelowRatedRule,
   gpuDriverOutdatedRule,
+  likelyCpuBoundRule,
+  likelyGpuBoundRule,
+  frameCappedOrDisplayLimitedRule,
+  telemetryInsufficientRule,
 ];
 
 /**
@@ -68,12 +84,18 @@ export function runDiagnostics(input: DiagnosticsInput): DiagnosticFinding[] {
     if (!verdict) continue;
     // `requiredSensors` gates the rule above (§15.5) but is not part of the
     // emitted/persisted finding — it would be dead weight the storage layer drops.
-    findings.push({
+    // The rule version, and (for confidence-graded rules) the confidence label
+    // and the evidence it fired on, ride along per §16b.2.
+    const finding: DiagnosticFinding = {
       code: rule.code,
       severity: verdict.severity,
       title: verdict.title,
       detail: verdict.detail,
-    });
+      ruleVersion: rule.version,
+    };
+    if (verdict.confidence !== undefined) finding.confidence = verdict.confidence;
+    if (verdict.evidence !== undefined) finding.evidence = verdict.evidence;
+    findings.push(finding);
   }
 
   return findings;
@@ -92,6 +114,8 @@ export function framesToColumns(frames: readonly FrameSample[]): DiagnosticsFram
     vramUsedMb: false,
     gpuLoadPct: false,
     cpuLoadPct: false,
+    cpuBusyMs: false,
+    gpuBusyMs: false,
   };
   for (const frame of frames) {
     for (const field of DIAGNOSTIC_SENSOR_FIELDS) {

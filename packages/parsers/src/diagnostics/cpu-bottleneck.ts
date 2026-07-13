@@ -46,6 +46,7 @@ function hasStableCommonFrameCap(
 
 export const cpuBottleneckRule: DiagnosticRule = {
   code: "cpu-bottleneck",
+  version: "1.0.0",
   requiredSensors: ["cpuLoadPct", "gpuLoadPct"],
   evaluate({ input, frameCount }) {
     const cpu = input.frames.cpuLoadPct;

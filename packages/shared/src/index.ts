@@ -14,6 +14,7 @@ export * from "./fixtures-frames";
 export * from "./tokens";
 export * from "./parquet";
 export * from "./naming";
+export * from "./comparability";
 
 export { PHYSICS } from "./integrity";
 export {

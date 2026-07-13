@@ -7,7 +7,14 @@ import { createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { RUN_STATUS, RUN_VISIBILITY, validRun, validSummary } from "@heimdall/shared";
 import type { Run } from "@heimdall/shared";
-import { insertRun, readRun, readRunForVerification, readRunRequiredDriver } from "../db";
+import {
+  insertRun,
+  readDiagnostics,
+  readRun,
+  readRunForVerification,
+  readRunRequiredDriver,
+} from "../db";
+import type { CapabilityManifest, DiagnosticFinding } from "@heimdall/shared";
 import { framesUploadObjectKey, stagingCleanupNotBefore } from "../r2";
 import { createTestDb, testDbAvailable, type TestDb } from "../testing/test-db";
 import { consumeRateLimit, pruneRateLimits } from "./rate-limit";
@@ -292,13 +299,69 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       const corrected = { ...validSummary, avgFps: 100.5, stutterCount: 7 };
       const claimed = await claimNextVerificationJob({}, db.pool);
       expect(claimed?.runId).toBe("run_job_0005");
-      await applyVerificationResult("run_job_0005", corrected, "flagged", false, [], claimed!, db.pool);
+      await applyVerificationResult("run_job_0005", corrected, "flagged", false, [], null, claimed!, db.pool);
       await completeVerificationJob(claimed!.id, claimed!.attempts, db.pool);
       const run = await readRun("run_job_0005", db.pool);
       expect(run?.status).toBe(RUN_STATUS.flagged);
       expect(run?.summary.avgFps).toBe(100.5);
       expect(run?.summary.stutterCount).toBe(7);
       expect(run?.signatureValid).toBe(false);
+    });
+
+    it("persists the recomputed capability manifest + richer diagnostics, replacing on retry (§16a/§16b.2)", async () => {
+      await finalizeFixture(db.pool, "run_job_manifest");
+      const manifest: CapabilityManifest = {
+        version: 1,
+        source: "presentmon",
+        sensors: Object.fromEntries(
+          (["gpuLoadPct", "gpuClockMhz", "gpuPowerW", "vramUsedMb", "cpuLoadPct", "cpuBusyMs", "gpuBusyMs"] as const).map(
+            (field) => [field, { present: field.endsWith("BusyMs"), frameAligned: field.endsWith("BusyMs") }],
+          ),
+        ) as CapabilityManifest["sensors"],
+        presentationMode: "unknown",
+        syncMode: "unknown",
+        frameGenerationObserved: false,
+        vramCapacity: { state: "unknown" },
+        caveats: [],
+      };
+      const findings: DiagnosticFinding[] = [
+        {
+          code: "likely-gpu-bound",
+          severity: "info",
+          title: "Likely GPU-bound",
+          detail: "GPU work dominated on most frames.",
+          ruleVersion: "1.0.0",
+          confidence: "high",
+          evidence: { coverageFraction: 1, sensors: ["cpuBusyMs", "gpuBusyMs"], metrics: { gpuBoundFraction: 0.9 } },
+        },
+      ];
+
+      const first = await claimNextVerificationJob({}, db.pool);
+      expect(first?.runId).toBe("run_job_manifest");
+      await applyVerificationResult("run_job_manifest", validSummary, "validated", null, findings, manifest, first!, db.pool);
+      await completeVerificationJob(first!.id, first!.attempts, db.pool);
+
+      const run = await readRun("run_job_manifest", db.pool);
+      expect(run?.capabilityManifest).toEqual(manifest);
+      const diagnostics = await readDiagnostics("run_job_manifest", db.pool);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).toMatchObject({
+        code: "likely-gpu-bound",
+        ruleVersion: "1.0.0",
+        confidence: "high",
+        evidence: { coverageFraction: 1, sensors: ["cpuBusyMs", "gpuBusyMs"], metrics: { gpuBoundFraction: 0.9 } },
+      });
+
+      // A second verification pass (reclaim) must REPLACE, not duplicate.
+      await db.pool.query(
+        `update verification_jobs set status = 'pending', locked_at = null, not_before = now() where run_id = $1`,
+        ["run_job_manifest"],
+      );
+      const second = await claimNextVerificationJob({}, db.pool);
+      await applyVerificationResult("run_job_manifest", validSummary, "validated", null, [], null, second!, db.pool);
+      expect(await readDiagnostics("run_job_manifest", db.pool)).toEqual([]);
+      // A null manifest clears the stored one.
+      expect((await readRun("run_job_manifest", db.pool))?.capabilityManifest).toBeUndefined();
     });
 
     it("does not let a stale claim overwrite a newer completed verification", async () => {
@@ -321,6 +384,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
         "flagged",
         null,
         [],
+        null,
         first!,
         db.pool,
       );
@@ -334,6 +398,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
         "validated",
         null,
         [],
+        null,
         second!,
         db.pool,
       );
