@@ -7,10 +7,14 @@
 
 import pg from "pg";
 import { PostgreSqlContainer } from "@testcontainers/postgresql";
+import { hashManagementToken } from "@heimdall/shared";
 import { migrate } from "../../../infra/db/migrate.mjs";
 import { insertDiagnostics, insertRun } from "../src/lib/db";
 import { E2E_DB_HOST_PORT } from "./env";
 import {
+  e2eBenchmarkSetFixtureRun,
+  e2eBenchmarkSetPeerRuns,
+  E2E_BENCHMARK_SET_SECRET,
   e2eDiagnostics,
   e2eFixtureRun,
   e2eVramDiagnostics,
@@ -32,6 +36,11 @@ export default async function globalSetup() {
     await insertDiagnostics(e2eFixtureRun.id, e2eDiagnostics, pool);
     await insertRun(e2eVramFixtureRun, pool);
     await insertDiagnostics(e2eVramFixtureRun.id, e2eVramDiagnostics, pool);
+    const benchmarkSetSecretHash = await hashManagementToken(E2E_BENCHMARK_SET_SECRET);
+    await insertRun(e2eBenchmarkSetFixtureRun, pool, { benchmarkSetSecretHash });
+    await Promise.all(
+      e2eBenchmarkSetPeerRuns.map((run) => insertRun(run, pool, { benchmarkSetSecretHash })),
+    );
     setupComplete = true;
   } finally {
     await pool.end();

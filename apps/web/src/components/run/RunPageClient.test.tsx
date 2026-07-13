@@ -135,6 +135,52 @@ describe("RunPageClient states", () => {
     expect(await screen.findByText("4800 / 6000 MT/s")).toBeInTheDocument();
   });
 
+  it("renders benchmark-set repeatability and excludes the current warm-up pass", () => {
+    render(
+      <RunPageClient
+        run={{ ...run, isWarmup: true }}
+        benchmarkSet={{
+          warmupRunCount: 1,
+          sampleCount: 3,
+          meanAvgFps: 101,
+          stdDevAvgFps: 0.8,
+          coefficientOfVariation: 0.008,
+          confidence: "high",
+        }}
+        loadFrames={okLoader}
+      />,
+    );
+
+    expect(screen.getByLabelText("Benchmark set repeatability")).toBeInTheDocument();
+    expect(screen.getByText("3 measured runs · 1 warm-up pass excluded")).toBeInTheDocument();
+    expect(screen.getByText("High confidence")).toBeInTheDocument();
+    expect(screen.getByText("Mean avg FPS")).toBeInTheDocument();
+    expect(screen.getByText("Relative variation (CV)")).toBeInTheDocument();
+    expect(screen.getByText(/This run is marked as a warm-up/)).toBeInTheDocument();
+  });
+
+  it("does not imply repeatability from one measured pass", () => {
+    render(
+      <RunPageClient
+        run={run}
+        benchmarkSet={{
+          sampleCount: 1,
+          warmupRunCount: 0,
+          meanAvgFps: 101,
+          stdDevAvgFps: 0,
+          coefficientOfVariation: 0,
+          confidence: "low",
+        }}
+        loadFrames={okLoader}
+      />,
+    );
+
+    expect(screen.getByText("1 measured run · No warm-up passes recorded")).toBeInTheDocument();
+    expect(screen.getByText(/Add another measured run to estimate repeatability/)).toBeInTheDocument();
+    expect(screen.queryByText("Relative variation (CV)")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Standard deviation/)).not.toBeInTheDocument();
+  });
+
   it("renders real diagnostic findings with severity and a count badge", () => {
     const diagnosticRun: Run = {
       ...run,

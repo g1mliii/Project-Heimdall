@@ -11,6 +11,7 @@
 import * as React from "react";
 import { Card, Diagnostic, Button, Segmented, Spinner } from "@heimdall/ui";
 import { RUN_STATUS, type Run } from "@heimdall/shared";
+import type { BenchmarkSetStats } from "@heimdall/parsers";
 import { loadRunFrames, type ApiResult } from "@/lib/api/client";
 import type { FrameSeries } from "@/lib/run/frame-series";
 import { findStutterIndices, medianFrameTimeMs } from "@/lib/run/stutters";
@@ -21,6 +22,7 @@ import { RunStatTiles } from "./RunStatTiles";
 import { SmoothnessBars } from "./SmoothnessBars";
 import { DiagnosticsCard } from "./DiagnosticsCard";
 import { HardwareCard } from "./HardwareCard";
+import { BenchmarkSetCard } from "./BenchmarkSetCard";
 import styles from "./RunPageClient.module.css";
 
 export type FramesLoader = (id: string, signal?: AbortSignal) => Promise<ApiResult<FrameSeries>>;
@@ -36,9 +38,11 @@ const defaultFramesLoader: FramesLoader = (id, signal) => loadRunFrames(id, unde
 
 export function RunPageClient({
   run,
+  benchmarkSet,
   loadFrames = defaultFramesLoader,
 }: {
   run: Run;
+  benchmarkSet?: BenchmarkSetStats | null;
   loadFrames?: FramesLoader;
 }) {
   const [frames, setFrames] = React.useState<FramesState>({ kind: "loading" });
@@ -193,6 +197,12 @@ export function RunPageClient({
             hardware={run.hardware}
             series={frames.kind === "ready" ? frames.series : undefined}
           />
+          {benchmarkSet ? (
+            <BenchmarkSetCard
+              stats={benchmarkSet}
+              currentRunIsWarmup={run.isWarmup === true}
+            />
+          ) : null}
         </div>
       </div>
     </main>

@@ -327,12 +327,47 @@ function canonicalIdParam(value: string | undefined, label: string): string | nu
 }
 
 /**
- * Insert a run + its summary atomically. Both inserts live in one
- * data-modifying-CTE statement — implicitly transactional, and a single
- * network round trip on the app's primary write path (Neon is remote; an
- * explicit begin/insert/insert/commit would cost 4 RTTs).
+ * Thrown when a caller tries to join an existing benchmark set without its
+ * browser-held capability. Routes deliberately map this to a generic 409 so
+ * callers learn neither whether a set exists nor its stored secret hash.
  */
-export async function insertRun(run: Run, db: Queryable = getPool()): Promise<void> {
+export class BenchmarkSetSecretMismatchError extends Error {
+  constructor() {
+    super("benchmark set cannot be joined with this secret");
+    this.name = "BenchmarkSetSecretMismatchError";
+  }
+}
+
+export interface InsertRunOptions {
+  /** SHA-256 of the browser-held benchmark-set capability; never the plaintext. */
+  benchmarkSetSecretHash?: string;
+}
+
+/**
+ * Insert a run + its summary atomically. The optional benchmark set is
+ * registered or capability-checked in the SAME data-modifying CTE, so a group
+ * cannot be claimed by a separate request between check and insert. This
+ * remains one network round trip on the app's primary write path (Neon is
+ * remote; an explicit begin/insert/insert/commit would cost 4 RTTs).
+ */
+export async function insertRun(
+  run: Run,
+  db: Queryable = getPool(),
+  { benchmarkSetSecretHash }: InsertRunOptions = {},
+): Promise<void> {
+  if (run.benchmarkSetId === undefined && benchmarkSetSecretHash !== undefined) {
+    throw new Error("benchmarkSetSecretHash requires benchmarkSetId");
+  }
+  if (run.benchmarkSetId !== undefined && benchmarkSetSecretHash === undefined) {
+    throw new Error("benchmarkSetSecretHash is required for benchmarkSetId");
+  }
+  if (
+    benchmarkSetSecretHash !== undefined &&
+    !/^[0-9a-f]{64}$/i.test(benchmarkSetSecretHash)
+  ) {
+    throw new Error("benchmarkSetSecretHash must be a sha-256 hex digest");
+  }
+
   const { hardware: hw, summary } = run;
   const methodologyManifest = normalizeMethodologyManifest(
     run.methodologyManifest,
@@ -340,8 +375,16 @@ export async function insertRun(run: Run, db: Queryable = getPool()): Promise<vo
     run.generatedFrameTech,
   );
   const resolution = methodologyManifest?.resolution ?? hw.resolution ?? null;
-  await db.query(
-    `with run_row as (
+  const rows = await query<{ run_id: string }>(
+    `with benchmark_set as (
+       insert into benchmark_sets (id, secret_hash)
+       select $46::text, $48::text
+        where $46::text is not null
+       on conflict (id) do update
+         set secret_hash = excluded.secret_hash
+       where benchmark_sets.secret_hash = excluded.secret_hash
+       returning id
+     ), run_row as (
        insert into runs (
          id, user_id, game_raw, gpu_hardware_id, cpu_hardware_id,
          capture_source, visibility, status, signature_valid,
@@ -353,19 +396,22 @@ export async function insertRun(run: Run, db: Queryable = getPool()): Promise<vo
          settings_json, methodology_manifest_version,
          upscaler, ray_tracing, frame_pacing_cap, vsync, vrr, scene_type,
          benchmark_set_id, is_warmup
-       ) values (
+       ) select
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
          $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
          $36::jsonb, $37,
          $38::jsonb, $39, $40, $41, $42, $43, $44, $45, $46, $47
-       )
+       where $46::text is null or exists (select 1 from benchmark_set)
+       returning id
      )
      insert into run_summaries (
        run_id, avg_fps, p1_low_fps, p01_low_fps,
        frametime_p50_ms, frametime_p95_ms, frametime_p99_ms,
        stutter_count, generated_frame_pct, p01_low_confidence,
        sample_count, duration_seconds
-     ) values ($1, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35)`,
+     ) select $1, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35
+         from run_row
+       returning run_id`,
     [
       run.id, run.ownerId ?? null, run.game,
       canonicalIdParam(hw.canonicalGpuId, "canonicalGpuId"),
@@ -392,8 +438,16 @@ export async function insertRun(run: Run, db: Queryable = getPool()): Promise<vo
       methodologyManifest?.sceneType ?? null,
       run.benchmarkSetId ?? null,
       run.isWarmup ?? false,
+      benchmarkSetSecretHash ?? null,
     ],
+    db,
   );
+  if (rows.length !== 1) {
+    if (run.benchmarkSetId !== undefined) {
+      throw new BenchmarkSetSecretMismatchError();
+    }
+    throw new Error("run insert did not return a row");
+  }
 }
 
 /**

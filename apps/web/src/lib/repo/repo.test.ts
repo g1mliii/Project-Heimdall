@@ -21,6 +21,7 @@ import { consumeRateLimit, pruneRateLimits } from "./rate-limit";
 import {
   deleteRun,
   finalizeRun,
+  readVisibleBenchmarkSet,
   readRunFinalizeState,
   readRunManagementTokenHash,
   readStalePendingRuns,
@@ -478,6 +479,105 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       expect(stale).toContain("run_stale_0001");
       expect(stale).not.toContain("run_stale_fresh"); // too young
       expect(stale).not.toContain("run_stale_finalized"); // has an object key
+    });
+  });
+
+  describe("benchmark-set repeatability (§16c.2/§16c.3)", () => {
+    it("pools only the same scoped public profile and never leaks private members", async () => {
+      const benchmarkSetId = "3d9fb878-cb0d-4cc8-9ac8-e9ec97ea977a";
+      const benchmarkSetSecretHash = tokenHashFor("benchmark-set-repeatability");
+      const makeSetRun = (
+        id: string,
+        avgFps: number,
+        {
+          isWarmup = false,
+          visibility = RUN_VISIBILITY.public,
+          status = RUN_STATUS.validated,
+          vsync = false,
+          setId = benchmarkSetId,
+        }: {
+          isWarmup?: boolean;
+          visibility?: Run["visibility"];
+          status?: Run["status"];
+          vsync?: boolean;
+          setId?: string;
+        } = {},
+      ): Run => ({
+        ...validRun,
+        id,
+        visibility,
+        status,
+        summary: { ...validRun.summary, avgFps },
+        benchmarkSetId: setId,
+        ...(isWarmup ? { isWarmup: true } : {}),
+        methodologyManifest: {
+          version: 1,
+          sceneType: "benchmark-scene",
+          resolution: "2560x1440",
+          upscaler: "none",
+          rayTracing: "off",
+          frameGeneration: "none",
+          framePacing: { vsync, vrr: false },
+        },
+      });
+
+      const primary = makeSetRun("run_set_primary", 100);
+      await Promise.all([
+        insertRun(primary, db.pool, { benchmarkSetSecretHash }),
+        insertRun(makeSetRun("run_set_peer", 101), db.pool, { benchmarkSetSecretHash }),
+        insertRun(makeSetRun("run_set_warmup", 250, { isWarmup: true }), db.pool, {
+          benchmarkSetSecretHash,
+        }),
+        insertRun(makeSetRun("run_set_other_profile", 40, { vsync: true }), db.pool, {
+          benchmarkSetSecretHash,
+        }),
+        insertRun(makeSetRun("run_set_private", 40, { visibility: RUN_VISIBILITY.private }), db.pool, {
+          benchmarkSetSecretHash,
+        }),
+        insertRun(makeSetRun("run_set_unlisted", 40, { visibility: RUN_VISIBILITY.unlisted }), db.pool, {
+          benchmarkSetSecretHash,
+        }),
+        insertRun(makeSetRun("run_set_flagged", 40, { status: RUN_STATUS.flagged }), db.pool, {
+          benchmarkSetSecretHash,
+        }),
+        // The user-visible label is intentionally not server data. A different
+        // browser that chooses the same words receives another opaque id and
+        // cannot pollute this set.
+        insertRun(
+          makeSetRun("run_set_same_label_other_scope", 999, {
+            setId: "8b4f4a96-84f1-45c3-8c1d-ecb4fdd6316b",
+          }),
+          db.pool,
+          { benchmarkSetSecretHash: tokenHashFor("same-display-label-other-browser") },
+        ),
+      ]);
+
+      const summary = await readVisibleBenchmarkSet(primary, db.pool);
+      expect(summary).toMatchObject({
+        sampleCount: 2,
+        warmupRunCount: 1,
+        meanAvgFps: 100.5,
+        confidence: "medium",
+      });
+      expect(summary?.stdDevAvgFps).toBeCloseTo(0.5, 8);
+      expect(summary?.coefficientOfVariation).toBeCloseTo(0.5 / 100.5, 8);
+
+      // Direct-link visibility alone is insufficient for cross-run data. Until
+      // Phase 8 adds owner authorization, an unlisted source run gets no set
+      // summary even if its label happens to match public runs.
+      expect(
+        await readVisibleBenchmarkSet(
+          { ...primary, visibility: RUN_VISIBILITY.unlisted },
+          db.pool,
+        ),
+      ).toBeNull();
+
+      const profileless = {
+        ...makeSetRun("run_set_profileless", 100),
+        methodologyManifest: undefined,
+      };
+      await insertRun(profileless, db.pool, { benchmarkSetSecretHash });
+      expect(await readVisibleBenchmarkSet(profileless, db.pool)).toBeNull();
     });
   });
 

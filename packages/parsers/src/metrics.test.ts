@@ -173,6 +173,7 @@ describe("computeBenchmarkSetStats (§16c.2)", () => {
       member(101),
     ]);
     expect(stats.sampleCount).toBe(3);
+    expect(stats.warmupRunCount).toBe(1);
     expect(stats.meanAvgFps).toBeCloseTo(101, 5);
     expect(stats.coefficientOfVariation).toBeLessThan(0.03);
     expect(stats.confidence).toBe("high");
@@ -189,6 +190,24 @@ describe("computeBenchmarkSetStats (§16c.2)", () => {
     expect(computeBenchmarkSetStats([member(100)]).confidence).toBe("low");
     const empty = computeBenchmarkSetStats([member(100, true), member(101, true)]);
     expect(empty.sampleCount).toBe(0);
+    expect(empty.warmupRunCount).toBe(2);
     expect(empty.meanAvgFps).toBe(0);
+  });
+
+  it("never lets arbitrary warm-up values affect a measured set (seeded property)", () => {
+    const rand = makeLcg(0x27d4eb2d);
+
+    for (let iteration = 0; iteration < 200; iteration++) {
+      const measured = Array.from({ length: 1 + Math.floor(rand() * 12) }, () =>
+        member(30 + rand() * 270),
+      );
+      const warmups = Array.from({ length: Math.floor(rand() * 8) }, () =>
+        member(1 + rand() * 999, true),
+      );
+
+      const withWarmups = computeBenchmarkSetStats([...warmups, ...measured]);
+      expect({ ...withWarmups, warmupRunCount: 0 }).toEqual(computeBenchmarkSetStats(measured));
+      expect(withWarmups.warmupRunCount).toBe(warmups.length);
+    }
   });
 });

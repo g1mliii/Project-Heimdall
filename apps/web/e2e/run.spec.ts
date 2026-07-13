@@ -8,6 +8,7 @@
 
 import { expect, test, type Page, type Route } from "@playwright/test";
 import {
+  E2E_BENCHMARK_SET_RUN_ID,
   E2E_RUN_ID,
   E2E_VRAM_RUN_ID,
   e2eDiagnostics,
@@ -19,6 +20,7 @@ import {
 
 const RUN_URL = `/runs/${E2E_RUN_ID}`;
 const VRAM_RUN_URL = `/runs/${E2E_VRAM_RUN_ID}`;
+const BENCHMARK_SET_RUN_URL = `/runs/${E2E_BENCHMARK_SET_RUN_ID}`;
 const FRAMES_OBJECT_URL = "https://r2.invalid/frames.parquet";
 
 const R2_CORS = { "access-control-allow-origin": "http://localhost:3000" };
@@ -102,6 +104,17 @@ test("VRAM-stutter fixture surfaces its warning on the run page (§15.1, §16)",
     page.getByText("Lower texture quality or resolution to free up VRAM headroom."),
   ).toBeVisible();
   await expect(page.getByText(`${e2eVramDiagnostics.length} issue`)).toBeVisible();
+});
+
+test("public benchmark sets show repeatability without promoting warm-ups (§16c.2)", async ({ page }) => {
+  await mockFramesFlow(page, E2E_BENCHMARK_SET_RUN_ID);
+  await page.goto(BENCHMARK_SET_RUN_URL);
+
+  await expect(page.getByLabel("Benchmark set repeatability")).toBeVisible();
+  await expect(page.getByText("3 measured runs · 1 warm-up pass excluded")).toBeVisible();
+  await expect(page.getByText("High confidence")).toBeVisible();
+  await expect(page.getByText("Mean avg FPS")).toBeVisible();
+  await expect(page.getByText("Relative variation (CV)")).toBeVisible();
 });
 
 test("ms/FPS toggle re-labels the y axis through the same scale (§13.1)", async ({ page }) => {

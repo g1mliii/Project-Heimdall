@@ -27,6 +27,8 @@ const FIXTURES = path.resolve(
   import.meta.dirname,
   "../../../../../packages/parsers/fixtures",
 );
+const BENCHMARK_SET_ID = "57ba4bd4-8b3e-4a2b-a0d0-92fb48367d5d";
+const BENCHMARK_SET_SECRET = "a".repeat(43);
 
 function fixtureFile(relative: string): File {
   const bytes = readFileSync(path.join(FIXTURES, relative));
@@ -182,7 +184,8 @@ describe("uploadCapture engine", () => {
         framePacing: { vsync: false, vrr: true },
         hags: "unknown",
       },
-      benchmarkSetId: "dogtown-ultra-1440p",
+      benchmarkSetId: BENCHMARK_SET_ID,
+      benchmarkSetSecret: BENCHMARK_SET_SECRET,
       isWarmup: true,
       transport: mockTransport(log),
     });
@@ -202,7 +205,8 @@ describe("uploadCapture engine", () => {
       hags: "unknown",
     });
     expect(createBody).toMatchObject({
-      benchmarkSetId: "dogtown-ultra-1440p",
+      benchmarkSetId: BENCHMARK_SET_ID,
+      benchmarkSetSecret: BENCHMARK_SET_SECRET,
       isWarmup: true,
     });
   });

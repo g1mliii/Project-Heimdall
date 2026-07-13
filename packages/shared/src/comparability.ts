@@ -98,5 +98,28 @@ export function comparabilityKeySql(alias = "runs"): string {
   return `concat_ws('|', ${parts.join(", ")})`;
 }
 
+/**
+ * SQL predicate for a declared, complete-enough methodology profile.
+ *
+ * A sentinel comparability key is useful for deterministic diagnostics, but it
+ * is deliberately NOT permission to pool undeclared runs.  A run without this
+ * profile stays individually visible and retains its raw data; it simply has
+ * no public aggregate/repeatability bucket (§16c.1/§16c.3).
+ *
+ * `alias` is a trusted developer-supplied table alias, just like
+ * {@link comparabilityKeySql}.
+ */
+export function comparabilityProfileSql(alias = "runs"): string {
+  return [
+    `${alias}.methodology_manifest_version is not null`,
+    `${alias}.resolution is not null`,
+    `${alias}.upscaler is not null`,
+    `${alias}.ray_tracing is not null`,
+    `${alias}.vsync is not null`,
+    `${alias}.vrr is not null`,
+    `${alias}.scene_type is not null`,
+  ].join(" and ");
+}
+
 /** Field count, exported so the drift-guard test pins TS↔SQL column parity. */
 export const COMPARABILITY_KEY_FIELD_COUNT = KEY_FIELDS.length;

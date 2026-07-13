@@ -24,6 +24,7 @@ import {
   Switch,
 } from "@heimdall/ui";
 import { uploadCapture } from "@/lib/upload/upload-run";
+import { getOrCreateBrowserBenchmarkSet } from "@/lib/upload/benchmark-set";
 import type {
   UploadFailure,
   UploadOptions,
@@ -141,7 +142,7 @@ export function UploadClient() {
   const [refreshHz, setRefreshHz] = React.useState("");
   const [captureTool, setCaptureTool] = React.useState("");
   const [warmupPolicy, setWarmupPolicy] = React.useState("");
-  const [benchmarkSetId, setBenchmarkSetId] = React.useState("");
+  const [benchmarkSetLabel, setBenchmarkSetLabel] = React.useState("");
   const [isWarmup, setIsWarmup] = React.useState(false);
   const [hags, setHags] = React.useState<NonNullable<MethodologyManifest["hags"]>>("unknown");
   const [dragOver, setDragOver] = React.useState(false);
@@ -176,9 +177,18 @@ export function UploadClient() {
     };
   }
 
-  function declaredBenchmarkSet(): Pick<UploadOptions, "benchmarkSetId" | "isWarmup"> {
-    const id = benchmarkSetId.trim();
-    return id === "" ? {} : { benchmarkSetId: id, isWarmup };
+  function declaredBenchmarkSet(): Pick<
+    UploadOptions,
+    "benchmarkSetId" | "benchmarkSetSecret" | "isWarmup"
+  > {
+    const benchmarkSet = getOrCreateBrowserBenchmarkSet(benchmarkSetLabel);
+    return benchmarkSet === undefined
+      ? {}
+      : {
+          benchmarkSetId: benchmarkSet.id,
+          benchmarkSetSecret: benchmarkSet.secret,
+          isWarmup,
+        };
   }
 
   async function startSingle(file: File) {
@@ -417,10 +427,10 @@ export function UploadClient() {
               />
               <Input
                 label="Benchmark set"
-                hint="Use the same label for each repeat of this benchmark."
+                hint="Use the same label on this browser for each repeat. Its private set key stays local."
                 placeholder="dogtown-ultra-1440p"
-                value={benchmarkSetId}
-                onChange={(event) => setBenchmarkSetId(event.target.value)}
+                value={benchmarkSetLabel}
+                onChange={(event) => setBenchmarkSetLabel(event.target.value)}
                 disabled={busy}
               />
               <Select
@@ -451,7 +461,7 @@ export function UploadClient() {
                   checked={isWarmup}
                   onChange={(event) => setIsWarmup(event.target.checked)}
                   label="Warm-up pass"
-                  disabled={busy || benchmarkSetId.trim() === ""}
+                  disabled={busy || benchmarkSetLabel.trim() === ""}
                 />
               </div>
             </div>

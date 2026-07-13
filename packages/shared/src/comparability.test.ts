@@ -4,6 +4,7 @@ import {
   COMPARABILITY_KEY_FIELD_COUNT,
   comparabilityKey,
   comparabilityKeySql,
+  comparabilityProfileSql,
   type ComparabilityInput,
 } from "./comparability";
 
@@ -102,5 +103,22 @@ describe("comparabilityKeySql", () => {
     const sql = comparabilityKeySql();
     expect(sql).toContain("'true'");
     expect(sql).toContain("'false'");
+  });
+});
+
+describe("comparabilityProfileSql", () => {
+  it("requires a declared methodology profile rather than pooling sentinel values", () => {
+    const sql = comparabilityProfileSql("r");
+    for (const column of [
+      "r.methodology_manifest_version",
+      "r.resolution",
+      "r.upscaler",
+      "r.ray_tracing",
+      "r.vsync",
+      "r.vrr",
+      "r.scene_type",
+    ]) {
+      expect(sql).toContain(`${column} is not null`);
+    }
   });
 });

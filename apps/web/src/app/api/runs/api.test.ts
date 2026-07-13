@@ -49,6 +49,8 @@ import { POST as finalizeRun } from "./[id]/finalize/route";
 import { GET as getFrames } from "./[id]/frames/route";
 
 const canRun = testDbAvailable("api.test");
+const BENCHMARK_SET_ID = "f1dca0e4-2bba-4b47-81dc-a928cec52058";
+const BENCHMARK_SET_SECRET = "a".repeat(43);
 
 function jsonRequest(url: string, method: string, body: unknown, headers?: Record<string, string>) {
   return new Request(url, {
@@ -162,21 +164,54 @@ describe.skipIf(!canRun)("ingest API routes (§11)", () => {
     expect(rows.rows[0]?.generated_frame_tech).toBe(GENERATED_FRAME_TECH.unknown);
   });
 
-  it("POST /api/runs: retains benchmark-set membership and an intentional warm-up", async () => {
+  it("POST /api/runs: retains opaque benchmark-set membership and only its hash", async () => {
     const response = await createRun(
       jsonRequest("http://test/api/runs", "POST", {
         ...validCreateRunRequest,
-        benchmarkSetId: "dogtown-ultra-1440p",
+        benchmarkSetId: BENCHMARK_SET_ID,
+        benchmarkSetSecret: BENCHMARK_SET_SECRET,
         isWarmup: true,
       }),
     );
     expect(response.status).toBe(201);
     const { id } = (await response.json()) as { id: string };
     const rows = await db.pool.query(
-      "select benchmark_set_id, is_warmup from runs where id = $1",
+      `select r.benchmark_set_id, r.is_warmup, b.secret_hash
+         from runs r join benchmark_sets b on b.id = r.benchmark_set_id
+        where r.id = $1`,
       [id],
     );
-    expect(rows.rows[0]).toEqual({ benchmark_set_id: "dogtown-ultra-1440p", is_warmup: true });
+    expect(rows.rows[0]).toEqual({
+      benchmark_set_id: BENCHMARK_SET_ID,
+      is_warmup: true,
+      secret_hash: await hashManagementToken(BENCHMARK_SET_SECRET),
+    });
+  });
+
+  it("POST /api/runs: refuses a colliding benchmark-set id with another browser key", async () => {
+    const setId = "c90ef4a9-3d8d-4216-b48b-9080bdaa58d3";
+    const first = await createRun(
+      jsonRequest("http://test/api/runs", "POST", {
+        ...validCreateRunRequest,
+        benchmarkSetId: setId,
+        benchmarkSetSecret: "b".repeat(43),
+      }),
+    );
+    expect(first.status).toBe(201);
+
+    vi.mocked(r2.presignPut).mockClear();
+    const conflict = await createRun(
+      jsonRequest("http://test/api/runs", "POST", {
+        ...validCreateRunRequest,
+        benchmarkSetId: setId,
+        benchmarkSetSecret: "c".repeat(43),
+      }),
+    );
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toMatchObject({
+      error: { code: "benchmark-set-secret-mismatch" },
+    });
+    expect(r2.presignPut).not.toHaveBeenCalled();
   });
 
   it("POST /api/runs: rejects malformed payloads with 400 BEFORE presigning (12.1, §11.10)", async () => {

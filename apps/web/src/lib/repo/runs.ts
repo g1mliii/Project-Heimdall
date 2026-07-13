@@ -4,7 +4,15 @@
  * token hash and signature never ride the general read path (`readRun`).
  */
 
-import { RUN_STATUS, RUN_VISIBILITY } from "@heimdall/shared";
+import { benchmarkSetConfidence } from "@heimdall/parsers";
+import type { BenchmarkSetStats } from "@heimdall/parsers";
+import {
+  aggregateEligibilitySql,
+  comparabilityProfileSql,
+  isAggregateEligible,
+  RUN_STATUS,
+  RUN_VISIBILITY,
+} from "@heimdall/shared";
 import type { Run } from "@heimdall/shared";
 import { query, getPool, readDiagnostics, readRun, type Queryable } from "../db";
 
@@ -57,6 +65,86 @@ export async function readVisibleFramesState(
     return null;
   }
   return { framesObjectKey: row.frames_object_key };
+}
+
+interface BenchmarkSetAggregateRow {
+  sample_count: number | string;
+  warmup_run_count: number | string;
+  mean_avg_fps: number | string;
+  stddev_avg_fps: number | string;
+}
+
+/**
+ * Read the repeatability summary for a public report's benchmark set (§16c.2).
+ *
+ * This is deliberately stricter than the direct-link run gate: benchmark-set
+ * membership can reveal another run's performance, so only public + validated
+ * members in the exact same declared methodology/comparability bucket
+ * participate. The database returns aggregate counts/statistics only — never a
+ * member id or individual FPS value. Owner-aware private-set views arrive with
+ * Phase 8 authorization.
+ */
+export async function readVisibleBenchmarkSet(
+  run: Run,
+  db: Queryable = getPool(),
+): Promise<BenchmarkSetStats | null> {
+  if (!run.benchmarkSetId || !isAggregateEligible(run)) {
+    return null;
+  }
+
+  const rows = await query<BenchmarkSetAggregateRow>(
+    `with base as (
+       select game_id, gpu_hardware_id, resolution, upscaler, ray_tracing,
+              generated_frame_tech, frame_pacing_cap, vsync, vrr, scene_type
+         from runs base
+        where base.id = $2
+          and base.benchmark_set_id = $1
+          and ${aggregateEligibilitySql("base")}
+          and ${comparabilityProfileSql("base")}
+     )
+     select count(*) filter (where not r.is_warmup) as sample_count,
+            count(*) filter (where r.is_warmup) as warmup_run_count,
+            coalesce(avg(s.avg_fps) filter (where not r.is_warmup), 0)::double precision
+              as mean_avg_fps,
+            coalesce(stddev_pop(s.avg_fps) filter (where not r.is_warmup), 0)::double precision
+              as stddev_avg_fps
+       from base
+       join runs r on r.benchmark_set_id = $1
+         and r.game_id is not distinct from base.game_id
+         and r.gpu_hardware_id is not distinct from base.gpu_hardware_id
+         and r.resolution is not distinct from base.resolution
+         and r.upscaler is not distinct from base.upscaler
+         and r.ray_tracing is not distinct from base.ray_tracing
+         and r.generated_frame_tech is not distinct from base.generated_frame_tech
+         and r.frame_pacing_cap is not distinct from base.frame_pacing_cap
+         and r.vsync is not distinct from base.vsync
+         and r.vrr is not distinct from base.vrr
+         and r.scene_type is not distinct from base.scene_type
+       join run_summaries s on s.run_id = r.id
+      where ${aggregateEligibilitySql("r")}
+        and ${comparabilityProfileSql("r")}`,
+    [run.benchmarkSetId, run.id],
+    db,
+  );
+  const row = rows[0];
+  if (!row) {
+    return null;
+  }
+  const sampleCount = Number(row.sample_count);
+  const warmupRunCount = Number(row.warmup_run_count);
+  if (sampleCount + warmupRunCount === 0) return null;
+
+  const meanAvgFps = Number(row.mean_avg_fps);
+  const stdDevAvgFps = Number(row.stddev_avg_fps);
+  const coefficientOfVariation = sampleCount > 0 && meanAvgFps > 0 ? stdDevAvgFps / meanAvgFps : 0;
+  return {
+    sampleCount,
+    warmupRunCount,
+    meanAvgFps,
+    stdDevAvgFps,
+    coefficientOfVariation,
+    confidence: benchmarkSetConfidence(sampleCount, coefficientOfVariation),
+  };
 }
 
 export interface FinalizeRunParams {

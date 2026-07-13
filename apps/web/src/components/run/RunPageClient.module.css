@@ -32,6 +32,24 @@
   gap: var(--space-3);
 }
 
+.benchmarkSetBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.benchmarkSetSummary,
+.benchmarkSetNote {
+  color: var(--fg-3);
+  font: var(--type-body-sm);
+}
+
+.benchmarkSetStats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
 .statTiles {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -48,5 +66,9 @@
 @container (max-width: 36rem) {
   .statTiles {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .benchmarkSetStats {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

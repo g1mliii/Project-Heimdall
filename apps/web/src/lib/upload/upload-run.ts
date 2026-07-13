@@ -88,6 +88,8 @@ export interface UploadOptions {
   methodology?: Omit<MethodologyManifest, "version" | "resolution" | "frameGeneration">;
   /** Optional repeatable-run group; warm-ups are retained but excluded from its stats. */
   benchmarkSetId?: string;
+  /** Browser-held capability authorizing membership of the opaque set id. */
+  benchmarkSetSecret?: string;
   isWarmup?: boolean;
   onProgress?: (progress: UploadProgress) => void;
   transport?: UploadTransport;
@@ -122,7 +124,17 @@ async function failureFromResponse(response: Response, fallback: string): Promis
 export async function uploadCapture(file: File, options: UploadOptions): Promise<UploadResult> {
   const transport = options.transport ?? defaultTransport();
   const emit = options.onProgress ?? (() => {});
+  const benchmarkSetId = options.benchmarkSetId?.trim() || undefined;
+  const benchmarkSetSecret = options.benchmarkSetSecret?.trim() || undefined;
   let finalizeRecovery: UploadRecovery | undefined;
+
+  if ((benchmarkSetId === undefined) !== (benchmarkSetSecret === undefined)) {
+    return {
+      ok: false,
+      code: "benchmark-set-secret-required",
+      message: "A benchmark set needs both its id and browser-held key.",
+    };
+  }
 
   try {
     emit({ stage: "parsing" });
@@ -208,8 +220,6 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
             ...(hardware.gpuDriver === undefined ? {} : { gpuDriver: hardware.gpuDriver }),
             captureDurationSeconds: summary.durationSeconds,
           };
-    const benchmarkSetId = options.benchmarkSetId?.trim();
-
     emit({ stage: "creating" });
     const createRequest: CreateRunRequest = {
       game: options.game.trim(),
@@ -223,8 +233,8 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
       parquetByteLength: parquet.byteLength,
       capabilityManifest,
       ...(methodologyManifest === undefined ? {} : { methodologyManifest }),
-      ...(benchmarkSetId === undefined || benchmarkSetId === "" ? {} : { benchmarkSetId }),
-      isWarmup: benchmarkSetId === undefined || benchmarkSetId === "" ? false : (options.isWarmup ?? false),
+      ...(benchmarkSetId === undefined ? {} : { benchmarkSetId, benchmarkSetSecret }),
+      isWarmup: benchmarkSetId === undefined ? false : (options.isWarmup ?? false),
       schemaVersion: CURRENT_SCHEMA_VERSION,
       parserVersion,
     };

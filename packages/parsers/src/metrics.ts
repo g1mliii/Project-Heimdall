@@ -112,7 +112,8 @@ export function computeRunSummaryFromFrameTimes(
 
 /** One run's role within a benchmark set (§16c.2). */
 export interface BenchmarkSetMember {
-  summary: RunSummary;
+  /** Only average FPS is needed for set-level repeatability statistics. */
+  summary: Pick<RunSummary, "avgFps">;
   /** Warm-up passes are retained but excluded from the set's statistics. */
   isWarmup: boolean;
 }
@@ -127,6 +128,8 @@ export interface BenchmarkSetMember {
 export interface BenchmarkSetStats {
   /** Non-warm-up runs counted. */
   sampleCount: number;
+  /** Retained warm-up passes excluded from every statistic below. */
+  warmupRunCount: number;
   meanAvgFps: number;
   /** Population standard deviation of avg FPS across the set. */
   stdDevAvgFps: number;
@@ -144,10 +147,25 @@ const BENCHMARK_SET_CV = { tight: 0.03, loose: 0.08 } as const;
  * non-warm-up runs (nothing to pool). Pure and total.
  */
 export function computeBenchmarkSetStats(members: readonly BenchmarkSetMember[]): BenchmarkSetStats {
-  const measured = members.filter((member) => !member.isWarmup).map((member) => member.summary.avgFps);
+  const measured: number[] = [];
+  let warmupRunCount = 0;
+  for (const member of members) {
+    if (member.isWarmup) {
+      warmupRunCount++;
+    } else {
+      measured.push(member.summary.avgFps);
+    }
+  }
   const n = measured.length;
   if (n === 0) {
-    return { sampleCount: 0, meanAvgFps: 0, stdDevAvgFps: 0, coefficientOfVariation: 0, confidence: "low" };
+    return {
+      sampleCount: 0,
+      warmupRunCount,
+      meanAvgFps: 0,
+      stdDevAvgFps: 0,
+      coefficientOfVariation: 0,
+      confidence: "low",
+    };
   }
 
   const mean = measured.reduce((sum, fps) => sum + fps, 0) / n;
@@ -157,6 +175,7 @@ export function computeBenchmarkSetStats(members: readonly BenchmarkSetMember[])
 
   return {
     sampleCount: n,
+    warmupRunCount,
     meanAvgFps: mean,
     stdDevAvgFps: stdDev,
     coefficientOfVariation: cv,
@@ -165,7 +184,7 @@ export function computeBenchmarkSetStats(members: readonly BenchmarkSetMember[])
 }
 
 /** ≥3 tight runs is high confidence; a loose spread or a lone run is low. */
-function benchmarkSetConfidence(n: number, cv: number): ConfidenceLevel {
+export function benchmarkSetConfidence(n: number, cv: number): ConfidenceLevel {
   if (n >= 3 && cv <= BENCHMARK_SET_CV.tight) return "high";
   if (n >= 2 && cv <= BENCHMARK_SET_CV.loose) return "medium";
   return "low";

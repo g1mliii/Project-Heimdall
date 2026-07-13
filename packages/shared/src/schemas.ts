@@ -52,6 +52,10 @@ const MAX_METADATA_TEXT_LENGTH = 512;
 const MAX_MANIFEST_CAVEATS = 16;
 const MAX_EVIDENCE_METRICS = 16;
 const metadataTextSchema = z.string().trim().min(1).max(MAX_METADATA_TEXT_LENGTH);
+/** Opaque client-generated identity; unlike the local display label, it is never human-chosen. */
+const benchmarkSetIdSchema = z.string().uuid();
+/** URL-safe 256-bit browser-held capability used only to join an existing set. */
+const benchmarkSetSecretSchema = z.string().regex(/^[A-Za-z0-9_-]{43,128}$/);
 const evidenceMetricNameSchema = z.string().trim().min(1).max(64);
 
 export const hardwareSnapshotSchema = z.object({
@@ -248,8 +252,10 @@ export const createRunRequestSchema = z
     capabilityManifest: capabilityManifestSchema.optional(),
     /** Declared reproducible methodology (§16c.1), optional. Quasi-identifying. */
     methodologyManifest: methodologyManifestSchema.optional(),
-    /** Optional repeatable-run group; a warm-up must belong to one (§16c.2). */
-    benchmarkSetId: metadataTextSchema.optional(),
+    /** Opaque repeatable-run identity; the human display label stays local (§16c.2). */
+    benchmarkSetId: benchmarkSetIdSchema.optional(),
+    /** Browser-held capability authorizing membership of the opaque set id. */
+    benchmarkSetSecret: benchmarkSetSecretSchema.optional(),
     isWarmup: z.boolean().default(false),
     ...provenance,
   })
@@ -267,6 +273,13 @@ export const createRunRequestSchema = z
     {
       path: ["isWarmup"],
       message: "a warm-up run must name its benchmark set",
+    },
+  )
+  .refine(
+    (req) => (req.benchmarkSetId === undefined) === (req.benchmarkSetSecret === undefined),
+    {
+      path: ["benchmarkSetSecret"],
+      message: "a benchmark set id and secret must be provided together",
     },
   );
 export type CreateRunRequest = z.infer<typeof createRunRequestSchema>;

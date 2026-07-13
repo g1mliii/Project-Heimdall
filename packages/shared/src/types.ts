@@ -290,8 +290,10 @@ export interface Run {
    */
   methodologyManifest?: MethodologyManifest;
   /**
-   * Optional repeatable-run group (§16c.2). Raw members remain individually
-   * addressable; this only associates them for variance calculations.
+   * Optional opaque repeatable-run group (§16c.2). Raw members remain
+   * individually addressable; this only associates them for variance
+   * calculations. New ids are random UUIDs; legacy display-label ids remain
+   * readable during the migration but cannot be joined by new uploads.
    */
   benchmarkSetId?: string;
   /** True only for an intentionally retained warm-up pass (§16c.2). */

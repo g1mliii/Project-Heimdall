@@ -26,6 +26,8 @@ import { migrate } from "../../../../infra/db/migrate.mjs";
 import { insertRun, readRun } from "./db";
 
 const testDbUrl = process.env.TEST_DATABASE_URL;
+const BENCHMARK_SET_ID = "57ba4bd4-8b3e-4a2b-a0d0-92fb48367d5d";
+const BENCHMARK_SET_SECRET_HASH = "a".repeat(64);
 
 function fixtureRunWithId(id: string): typeof validRun {
   return {
@@ -104,6 +106,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0017_methodology_manifest.sql",
       "0018_comparability_index.sql",
       "0019_comparability_frame_pacing_index.sql",
+      "0020_benchmark_set_scope.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
@@ -111,6 +114,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     );
     expect(rows.map((r) => r.table_name).sort()).toEqual(
       [
+        "benchmark_sets",
         "comparisons",
         "diagnostics",
         "game_aliases",
@@ -167,6 +171,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "verification_jobs_active_claim_idx",
       "staging_cleanup_jobs_not_before_idx",
       "runs_pending_unfinalized_created_at_idx",
+      "runs_public_benchmark_set_profile_idx",
     ]) {
       expect(names).toContain(expected);
     }
@@ -232,7 +237,8 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
           'runs_status_visibility_idx',
           'runs_user_id_idx',
           'verification_jobs_active_claim_idx',
-          'runs_pending_unfinalized_created_at_idx'
+          'runs_pending_unfinalized_created_at_idx',
+          'runs_public_benchmark_set_profile_idx'
         )`,
     );
     const byName = new Map(rows.map((row) => [row.name, row]));
@@ -257,6 +263,22 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     const reaperPredicate = byName.get("runs_pending_unfinalized_created_at_idx")?.predicate ?? "";
     expect(reaperPredicate).toContain("status = 'pending'::text");
     expect(reaperPredicate).toContain("frames_object_key IS NULL");
+    const benchmarkSetIndex = byName.get("runs_public_benchmark_set_profile_idx");
+    expect(benchmarkSetIndex?.definition).toContain("benchmark_set_id");
+    const benchmarkPredicate = benchmarkSetIndex?.predicate ?? "";
+    for (const required of [
+      "status = 'validated'::text",
+      "visibility = 'public'::text",
+      "methodology_manifest_version IS NOT NULL",
+      "resolution IS NOT NULL",
+      "upscaler IS NOT NULL",
+      "ray_tracing IS NOT NULL",
+      "vsync IS NOT NULL",
+      "vrr IS NOT NULL",
+      "scene_type IS NOT NULL",
+    ]) {
+      expect(benchmarkPredicate).toContain(required);
+    }
   });
 
   it("CHECK constraints stay in lockstep with the shared enum constants", async () => {
@@ -455,15 +477,15 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       generatedFrameTech: "dlss3" as const,
       capabilityManifest,
       methodologyManifest,
-      benchmarkSetId: "dogtown-ultra-1440p",
+      benchmarkSetId: BENCHMARK_SET_ID,
       isWarmup: true,
     };
-    await insertRun(run, pool);
+    await insertRun(run, pool, { benchmarkSetSecretHash: BENCHMARK_SET_SECRET_HASH });
 
     const readBack = await readRun(run.id, pool);
     expect(readBack?.capabilityManifest).toEqual(capabilityManifest);
     expect(readBack?.methodologyManifest).toEqual(methodologyManifest);
-    expect(readBack).toMatchObject({ benchmarkSetId: "dogtown-ultra-1440p", isWarmup: true });
+    expect(readBack).toMatchObject({ benchmarkSetId: BENCHMARK_SET_ID, isWarmup: true });
 
     // The queryable comparability columns mirror the manifest (§16c.3).
     const { rows } = await pool.query<{
@@ -487,7 +509,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       vsync: true,
       vrr: false,
       scene_type: "benchmark-scene",
-      benchmark_set_id: "dogtown-ultra-1440p",
+      benchmark_set_id: BENCHMARK_SET_ID,
       is_warmup: true,
     });
   });

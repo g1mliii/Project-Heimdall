@@ -157,14 +157,30 @@ describe("DTO round-trip stability (§3.2)", () => {
     ).toBe(false);
   });
 
-  it("requires a benchmark-set label for an intentional warm-up", () => {
+  it("requires an opaque benchmark-set id and browser-held key for intentional warm-ups", () => {
+    const benchmarkSetId = "57ba4bd4-8b3e-4a2b-a0d0-92fb48367d5d";
+    const benchmarkSetSecret = "a".repeat(43);
     expect(
       createRunRequestSchema.safeParse({ ...validCreateRunRequest, isWarmup: true }).success,
     ).toBe(false);
     expect(
       createRunRequestSchema.safeParse({
         ...validCreateRunRequest,
-        benchmarkSetId: "dogtown-ultra-1440p",
+        benchmarkSetId,
+        isWarmup: true,
+      }).success,
+    ).toBe(false);
+    expect(
+      createRunRequestSchema.safeParse({
+        ...validCreateRunRequest,
+        benchmarkSetSecret,
+      }).success,
+    ).toBe(false);
+    expect(
+      createRunRequestSchema.safeParse({
+        ...validCreateRunRequest,
+        benchmarkSetId,
+        benchmarkSetSecret,
         isWarmup: true,
       }).success,
     ).toBe(true);
