@@ -2,8 +2,8 @@
 -- semantics, not display-only notes. Mirror them into queryable columns so
 -- public aggregates and benchmark-set repeatability never mix different runs.
 
-alter table runs add column scene text;
-alter table runs add column settings_preset text;
+alter table runs add column if not exists scene text;
+alter table runs add column if not exists settings_preset text;
 
 -- Older manifests accepted 512-character descriptive values. Keep legacy
 -- outliers distinct without exceeding the comparability B-tree tuple limit.
