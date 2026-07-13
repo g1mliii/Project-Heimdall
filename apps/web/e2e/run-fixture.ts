@@ -54,6 +54,8 @@ export const e2eBenchmarkSetFixtureRun: Run = {
   methodologyManifest: {
     version: 1,
     sceneType: "benchmark-scene",
+    scene: "Dogtown route",
+    settingsPreset: "Ultra",
     resolution: e2eFixtureRun.hardware.resolution,
     upscaler: "none",
     rayTracing: "off",
