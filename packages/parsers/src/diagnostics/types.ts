@@ -11,6 +11,9 @@
 import {
   DIAGNOSTIC_FRAME_SENSOR_FIELDS,
   type CaptureSource,
+  type CapabilityManifest,
+  type ConfidenceLevel,
+  type DiagnosticEvidence,
   type DiagnosticFinding,
   type DiagnosticSeverity,
   type DiagnosticFrameSensorField,
@@ -38,6 +41,10 @@ export interface DiagnosticsFrameColumns {
   vramUsedMb?: FrameColumn;
   gpuLoadPct?: FrameColumn;
   cpuLoadPct?: FrameColumn;
+  /** PresentMon v2 CPUBusy — verified per-frame CPU work time (§16b). */
+  cpuBusyMs?: FrameColumn;
+  /** PresentMon v2 GPUBusy / CapFrameX MsGPUActive — verified per-frame GPU work (§16b). */
+  gpuBusyMs?: FrameColumn;
 }
 
 /** Curated per-game facts the engine consults (seeded in the DB, §15.4). */
@@ -54,15 +61,27 @@ export interface DiagnosticsInput {
   vendor: GpuVendor;
   game?: DiagnosticsGame;
   frames: DiagnosticsFrameColumns;
+  /**
+   * Per-run capability manifest (§16a.3) — lets a confidence-graded rule read
+   * capture semantics + source caveats instead of re-sniffing frames. Optional
+   * so Phase 6 rules (which ignore it) behave identically when it is absent.
+   */
+  capabilityManifest?: CapabilityManifest;
 }
 
 export type { DiagnosticFinding };
 
-/** What a rule returns when it fires; the engine stamps on the `code`. */
+/**
+ * What a rule returns when it fires; the engine stamps on the `code` and the
+ * rule's `version`. Confidence-graded rules (§16b) also return `confidence` and
+ * the concrete `evidence` they fired on; Phase 6 rules omit both.
+ */
 export interface RuleVerdict {
   severity: DiagnosticSeverity;
   title: string;
   detail: string;
+  confidence?: ConfidenceLevel;
+  evidence?: DiagnosticEvidence;
 }
 
 /** Context handed to every rule. */
@@ -78,6 +97,8 @@ export interface DiagnosticRuleContext {
  */
 export interface DiagnosticRule {
   code: string;
+  /** Rule version stamped onto every finding it produces (§16b.2). */
+  version: string;
   requiredSensors: readonly DiagnosticSensorField[];
   evaluate(ctx: DiagnosticRuleContext): RuleVerdict | null;
 }

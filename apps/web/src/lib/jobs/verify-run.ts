@@ -8,9 +8,9 @@
  */
 
 import { createPublicKey, verify as cryptoVerify } from "node:crypto";
-import { RUN_STATUS } from "@heimdall/shared";
-import type { DiagnosticFinding, RunSummary } from "@heimdall/shared";
-import { runDiagnostics } from "@heimdall/parsers";
+import { GENERATED_FRAME_TECH, RUN_STATUS, normalizeMethodologyManifest } from "@heimdall/shared";
+import type { CapabilityManifest, DiagnosticFinding, GeneratedFrameTech, RunSummary } from "@heimdall/shared";
+import { buildCapabilityManifest, runDiagnostics } from "@heimdall/parsers";
 import { readRunForVerification, type Queryable } from "../db";
 import { applyVerificationResult, type ClaimedJob } from "../repo/jobs";
 import { computeFrameParquetSummary } from "../parquet/frame-metadata";
@@ -100,6 +100,7 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
   let recomputed: RunSummary;
   let signatureValid: boolean | null;
   let findings: DiagnosticFinding[];
+  let capabilityManifest: CapabilityManifest;
   {
     let bytes: Uint8Array;
     try {
@@ -118,6 +119,27 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
       const parquet = await computeFrameParquetSummary(bytes);
       recomputed = parquet.summary;
 
+      // Recompute the capability manifest canonically from the stored Parquet —
+      // the client-derived manifest (written at insertRun) was provisional, the
+      // same way the summary is. Cheap: presence booleans + hardware, no frame
+      // arrays retained. Declared capture semantics (presentation/sync mode) that
+      // the Parquet can't reveal are preserved from the stored client manifest.
+      capabilityManifest = buildCapabilityManifest({
+        source: run.captureSource,
+        presentSensors: parquet.presentSensors,
+        frameGenerationObserved: parquet.frameGenerationObserved,
+        hardware: run.hardware,
+        ...(run.capabilityManifest
+          ? {
+              declared: {
+                presentationMode: run.capabilityManifest.presentationMode,
+                syncMode: run.capabilityManifest.syncMode,
+                vramCapacity: run.capabilityManifest.vramCapacity,
+              },
+            }
+          : {}),
+      });
+
       // Keep the per-frame typed arrays scoped to this block. At 500k frames
       // they can hold up to 16 MiB; only compact findings need to survive the
       // subsequent awaited database write.
@@ -128,6 +150,7 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
         vendor: run.hardware.gpuVendor ?? "unknown",
         ...(requiredDriver !== null ? { game: { requiredDriver } } : {}),
         frames: parquet.diagnosticsColumns,
+        capabilityManifest,
       });
     } catch (error) {
       return { kind: "failed", error: `unreadable parquet: ${String(error)}` };
@@ -144,11 +167,36 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
 
   const mismatch = summaryMismatch(run.summary, recomputed);
   const status = mismatch === null && run.status !== RUN_STATUS.flagged ? "validated" : "flagged";
+  const generatedFrameTech: GeneratedFrameTech =
+    recomputed.generatedFramePct === 0
+      ? GENERATED_FRAME_TECH.none
+      : run.generatedFrameTech === GENERATED_FRAME_TECH.none ||
+          run.generatedFrameTech === GENERATED_FRAME_TECH.unknown
+        ? GENERATED_FRAME_TECH.unknown
+        : run.generatedFrameTech;
+  const methodologyManifest = normalizeMethodologyManifest(
+    run.methodologyManifest,
+    run.hardware,
+    generatedFrameTech,
+  );
 
   // Either way the recompute becomes the stored truth — "corrected and
   // flagged" (§12.4) is exactly the flagged arm of this write. Findings land in
   // the same atomic write.
-  await applyVerificationResult(job.runId, recomputed, status, signatureValid, findings, job, db);
+  await applyVerificationResult(
+    job.runId,
+    {
+      summary: recomputed,
+      runStatus: status,
+      signatureValid,
+      diagnostics: findings,
+      capabilityManifest,
+      methodologyManifest: methodologyManifest ?? null,
+      generatedFrameTech,
+    },
+    job,
+    db,
+  );
 
   return status === "validated"
     ? { kind: "validated" }

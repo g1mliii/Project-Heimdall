@@ -11,11 +11,13 @@
  */
 
 import pg from "pg";
-import { DIAGNOSTICS } from "@heimdall/shared";
+import { DIAGNOSTICS, normalizeMethodologyManifest } from "@heimdall/shared";
 import type {
+  CapabilityManifest,
   Diagnostic,
   DiagnosticFinding,
   HardwareSnapshot,
+  MethodologyManifest,
   Run,
   RunSummary,
 } from "@heimdall/shared";
@@ -111,6 +113,10 @@ interface RunRow extends pg.QueryResultRow {
   resolution: string | null;
   generated_frame_tech: Run["generatedFrameTech"];
   frames_object_key: string | null;
+  capability_manifest: CapabilityManifest | null;
+  settings_json: MethodologyManifest | null;
+  benchmark_set_id: string | null;
+  is_warmup: boolean;
   schema_version: number;
   parser_version: string;
   created_at: Date;
@@ -132,7 +138,8 @@ const RUN_WITH_SUMMARY_SELECT = `select r.id, r.user_id, r.game_raw, r.gpu_hardw
         r.capture_source, r.visibility, r.status, r.signature_valid,
         r.cpu_model, r.gpu_model, r.gpu_vendor, r.gpu_driver, r.gpu_vram_total_mb,
         r.ram_gb, r.ram_rated_mtps, r.ram_actual_mtps, r.os_build, r.resolution,
-        r.generated_frame_tech, r.frames_object_key,
+        r.generated_frame_tech, r.frames_object_key, r.capability_manifest, r.settings_json,
+        r.benchmark_set_id, r.is_warmup,
         r.schema_version, r.parser_version, r.created_at,
         s.avg_fps, s.p1_low_fps, s.p01_low_fps,
         s.frametime_p50_ms, s.frametime_p95_ms, s.frametime_p99_ms,
@@ -184,6 +191,12 @@ function rowToRun(row: RunRow, diagnostics: Diagnostic[]): Run {
     framesObjectKey: row.frames_object_key ?? undefined,
     ownerId: row.user_id ?? undefined,
     signatureValid: row.signature_valid ?? undefined,
+    // jsonb comes back already parsed; it was written by our own derive path.
+    capabilityManifest: row.capability_manifest ?? undefined,
+    // settings_json holds the declared methodology manifest (§16c.1).
+    methodologyManifest: row.settings_json ?? undefined,
+    ...(row.benchmark_set_id === null ? {} : { benchmarkSetId: row.benchmark_set_id }),
+    ...(row.is_warmup ? { isWarmup: true } : {}),
   };
 }
 
@@ -193,27 +206,44 @@ interface DiagnosticRow extends pg.QueryResultRow {
   severity: Diagnostic["severity"];
   title: string;
   detail: string;
+  evidence: Diagnostic["evidence"] | null;
+  rule_version: string | null;
+  confidence: Diagnostic["confidence"] | null;
 }
 
 /**
- * Transpose findings into the four positional `text[]` arrays a diagnostics
- * multi-row insert unnests (code, severity, title, detail).
+ * Transpose findings into the seven positional arrays a diagnostics multi-row
+ * insert unnests (code, severity, title, detail, evidence, rule_version,
+ * confidence). Evidence is JSON-encoded per row (or null) and cast back to jsonb
+ * in the insert; rule_version/confidence are null for Phase 6 findings.
  */
 export function diagnosticInsertColumns(
   diagnostics: readonly DiagnosticFinding[],
-): [string[], string[], string[], string[]] {
+): [
+  string[],
+  string[],
+  string[],
+  string[],
+  (string | null)[],
+  (string | null)[],
+  (string | null)[],
+] {
   return [
     diagnostics.map((d) => d.code),
     diagnostics.map((d) => d.severity),
     diagnostics.map((d) => d.title),
     diagnostics.map((d) => d.detail),
+    diagnostics.map((d) => (d.evidence ? JSON.stringify(d.evidence) : null)),
+    diagnostics.map((d) => d.ruleVersion ?? null),
+    diagnostics.map((d) => d.confidence ?? null),
   ];
 }
 
 /**
  * The complete diagnostics insert/unnest shape. `runIdParameter` and
  * `firstFindingParameter` make it usable in both a standalone write and a
- * larger CTE without duplicating column order, aliases, or casts.
+ * larger CTE without duplicating column order, aliases, or casts. The evidence
+ * text[] is cast to jsonb per row so a null element stays a SQL null.
  */
 export function diagnosticInsertSql(
   runIdParameter: number,
@@ -224,10 +254,13 @@ export function diagnosticInsertSql(
   const severityParameter = codeParameter + 1;
   const titleParameter = codeParameter + 2;
   const detailParameter = codeParameter + 3;
-  return `insert into diagnostics (run_id, code, severity, title, detail)
-     select $${runIdParameter}, code, severity, title, detail
-       from unnest($${codeParameter}::text[], $${severityParameter}::text[], $${titleParameter}::text[], $${detailParameter}::text[])
-         as finding(code, severity, title, detail)${guardSql ? `\n      where ${guardSql}` : ""}`;
+  const evidenceParameter = codeParameter + 4;
+  const ruleVersionParameter = codeParameter + 5;
+  const confidenceParameter = codeParameter + 6;
+  return `insert into diagnostics (run_id, code, severity, title, detail, evidence, rule_version, confidence)
+     select $${runIdParameter}, code, severity, title, detail, evidence::jsonb, rule_version, confidence
+       from unnest($${codeParameter}::text[], $${severityParameter}::text[], $${titleParameter}::text[], $${detailParameter}::text[], $${evidenceParameter}::text[], $${ruleVersionParameter}::text[], $${confidenceParameter}::text[])
+         as finding(code, severity, title, detail, evidence, rule_version, confidence)${guardSql ? `\n      where ${guardSql}` : ""}`;
 }
 
 /**
@@ -254,20 +287,28 @@ export async function readDiagnostics(
   db: Queryable = getPool(),
 ): Promise<Diagnostic[]> {
   const rows = await query<DiagnosticRow>(
-    `select id, code, severity, title, detail
+    `select id, code, severity, title, detail, evidence, rule_version, confidence
        from diagnostics
       where run_id = $1
       order by id`,
     [runId],
     db,
   );
-  return rows.map((row) => ({
-    id: row.id,
-    code: row.code,
-    severity: row.severity,
-    title: row.title,
-    detail: row.detail,
-  }));
+  return rows.map((row) => {
+    // Attach the Phase 6.5 fields only when present so a Phase 6 finding
+    // (all-null) round-trips to exactly the pre-6.5 shape.
+    const diagnostic: Diagnostic = {
+      id: row.id,
+      code: row.code,
+      severity: row.severity,
+      title: row.title,
+      detail: row.detail,
+    };
+    if (row.evidence !== null) diagnostic.evidence = row.evidence;
+    if (row.rule_version !== null) diagnostic.ruleVersion = row.rule_version;
+    if (row.confidence !== null) diagnostic.confidence = row.confidence;
+    return diagnostic;
+  });
 }
 
 /**
@@ -286,33 +327,91 @@ function canonicalIdParam(value: string | undefined, label: string): string | nu
 }
 
 /**
- * Insert a run + its summary atomically. Both inserts live in one
- * data-modifying-CTE statement — implicitly transactional, and a single
- * network round trip on the app's primary write path (Neon is remote; an
- * explicit begin/insert/insert/commit would cost 4 RTTs).
+ * Thrown when a caller tries to join an existing benchmark set without its
+ * browser-held capability. Routes deliberately map this to a generic 409 so
+ * callers learn neither whether a set exists nor its stored secret hash.
  */
-export async function insertRun(run: Run, db: Queryable = getPool()): Promise<void> {
+export class BenchmarkSetSecretMismatchError extends Error {
+  constructor() {
+    super("benchmark set cannot be joined with this secret");
+    this.name = "BenchmarkSetSecretMismatchError";
+  }
+}
+
+export interface InsertRunOptions {
+  /** SHA-256 of the browser-held benchmark-set capability; never the plaintext. */
+  benchmarkSetSecretHash?: string;
+}
+
+/**
+ * Insert a run + its summary atomically. The optional benchmark set is
+ * registered or capability-checked in the SAME data-modifying CTE, so a group
+ * cannot be claimed by a separate request between check and insert. This
+ * remains one network round trip on the app's primary write path (Neon is
+ * remote; an explicit begin/insert/insert/commit would cost 4 RTTs).
+ */
+export async function insertRun(
+  run: Run,
+  db: Queryable = getPool(),
+  { benchmarkSetSecretHash }: InsertRunOptions = {},
+): Promise<void> {
+  if (run.benchmarkSetId === undefined && benchmarkSetSecretHash !== undefined) {
+    throw new Error("benchmarkSetSecretHash requires benchmarkSetId");
+  }
+  if (run.benchmarkSetId !== undefined && benchmarkSetSecretHash === undefined) {
+    throw new Error("benchmarkSetSecretHash is required for benchmarkSetId");
+  }
+  if (
+    benchmarkSetSecretHash !== undefined &&
+    !/^[0-9a-f]{64}$/i.test(benchmarkSetSecretHash)
+  ) {
+    throw new Error("benchmarkSetSecretHash must be a sha-256 hex digest");
+  }
+
   const { hardware: hw, summary } = run;
-  await db.query(
-    `with run_row as (
+  const methodologyManifest = normalizeMethodologyManifest(
+    run.methodologyManifest,
+    hw,
+    run.generatedFrameTech,
+  );
+  const resolution = methodologyManifest?.resolution ?? hw.resolution ?? null;
+  const rows = await query<{ run_id: string }>(
+    `with benchmark_set as (
+       insert into benchmark_sets (id, secret_hash)
+       select $46::text, $48::text
+        where $46::text is not null
+       on conflict (id) do update
+         set secret_hash = excluded.secret_hash
+       where benchmark_sets.secret_hash = excluded.secret_hash
+       returning id
+     ), run_row as (
        insert into runs (
          id, user_id, game_raw, gpu_hardware_id, cpu_hardware_id,
          capture_source, visibility, status, signature_valid,
          cpu_model, gpu_model, gpu_vendor, gpu_driver,
          ram_gb, ram_rated_mtps, ram_actual_mtps, os_build, resolution,
          generated_frame_tech, frames_object_key,
-         schema_version, parser_version, created_at, gpu_vram_total_mb
-       ) values (
+         schema_version, parser_version, created_at, gpu_vram_total_mb,
+         capability_manifest, capability_manifest_version,
+         settings_json, methodology_manifest_version,
+         upscaler, ray_tracing, frame_pacing_cap, vsync, vrr, scene_type,
+         benchmark_set_id, is_warmup, graphics_api, scene, settings_preset
+       ) select
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-         $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
-       )
+         $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
+         $36::jsonb, $37,
+         $38::jsonb, $39, $40, $41, $42, $43, $44, $45, $46, $47, $49, $50, $51
+       where $46::text is null or exists (select 1 from benchmark_set)
+       returning id
      )
      insert into run_summaries (
        run_id, avg_fps, p1_low_fps, p01_low_fps,
        frametime_p50_ms, frametime_p95_ms, frametime_p99_ms,
        stutter_count, generated_frame_pct, p01_low_confidence,
        sample_count, duration_seconds
-     ) values ($1, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35)`,
+     ) select $1, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35
+         from run_row
+       returning run_id`,
     [
       run.id, run.ownerId ?? null, run.game,
       canonicalIdParam(hw.canonicalGpuId, "canonicalGpuId"),
@@ -320,15 +419,38 @@ export async function insertRun(run: Run, db: Queryable = getPool()): Promise<vo
       run.captureSource, run.visibility, run.status, run.signatureValid ?? null,
       hw.cpu, hw.gpu, hw.gpuVendor ?? null, hw.gpuDriver ?? null,
       hw.ramGb ?? null, hw.ramRatedSpeedMtps ?? null, hw.ramSpeedMtps ?? null,
-      hw.os ?? null, hw.resolution ?? null,
+      hw.os ?? null, resolution,
       run.generatedFrameTech, run.framesObjectKey ?? null,
       run.schemaVersion, run.parserVersion, run.createdAt, hw.gpuVramTotalMb ?? null,
       summary.avgFps, summary.onePercentLowFps, summary.pointOnePercentLowFps,
       summary.frameTimeP50Ms, summary.frameTimeP95Ms, summary.frameTimeP99Ms,
       summary.stutterCount, summary.generatedFramePct, summary.pointOnePercentLowConfidence,
       summary.sampleCount, summary.durationSeconds,
+      run.capabilityManifest ? JSON.stringify(run.capabilityManifest) : null,
+      run.capabilityManifest?.version ?? null,
+      methodologyManifest ? JSON.stringify(methodologyManifest) : null,
+      methodologyManifest?.version ?? null,
+      methodologyManifest?.upscaler ?? null,
+      methodologyManifest?.rayTracing ?? null,
+      methodologyManifest?.framePacing.capFps ?? null,
+      methodologyManifest?.framePacing.vsync ?? null,
+      methodologyManifest?.framePacing.vrr ?? null,
+      methodologyManifest?.sceneType ?? null,
+      run.benchmarkSetId ?? null,
+      run.isWarmup ?? false,
+      benchmarkSetSecretHash ?? null,
+      methodologyManifest?.graphicsApi ?? null,
+      methodologyManifest?.scene ?? null,
+      methodologyManifest?.settingsPreset ?? null,
     ],
+    db,
   );
+  if (rows.length !== 1) {
+    if (run.benchmarkSetId !== undefined) {
+      throw new BenchmarkSetSecretMismatchError();
+    }
+    throw new Error("run insert did not return a row");
+  }
 }
 
 /**

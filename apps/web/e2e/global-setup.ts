@@ -7,10 +7,16 @@
 
 import pg from "pg";
 import { PostgreSqlContainer } from "@testcontainers/postgresql";
+import { hashManagementToken } from "@heimdall/shared";
 import { migrate } from "../../../infra/db/migrate.mjs";
 import { insertDiagnostics, insertRun } from "../src/lib/db";
+import { resolveGameId, resolveHardwareId } from "../src/lib/repo/catalog";
 import { E2E_DB_HOST_PORT } from "./env";
 import {
+  e2eBenchmarkSetFixtureRun,
+  e2eBenchmarkSetPeerRuns,
+  E2E_BENCHMARK_SET_ID,
+  E2E_BENCHMARK_SET_SECRET,
   e2eDiagnostics,
   e2eFixtureRun,
   e2eVramDiagnostics,
@@ -32,6 +38,36 @@ export default async function globalSetup() {
     await insertDiagnostics(e2eFixtureRun.id, e2eDiagnostics, pool);
     await insertRun(e2eVramFixtureRun, pool);
     await insertDiagnostics(e2eVramFixtureRun.id, e2eVramDiagnostics, pool);
+    const benchmarkSetSecretHash = await hashManagementToken(E2E_BENCHMARK_SET_SECRET);
+    const gameId = await resolveGameId(
+      e2eBenchmarkSetFixtureRun.captureSource,
+      e2eBenchmarkSetFixtureRun.game,
+      pool,
+    );
+    const gpuId = await resolveHardwareId(
+      "gpu",
+      e2eBenchmarkSetFixtureRun.captureSource,
+      e2eBenchmarkSetFixtureRun.hardware.gpu,
+      e2eBenchmarkSetFixtureRun.hardware.gpuVendor ?? null,
+      pool,
+    );
+    if (!gameId || !gpuId) throw new Error("could not resolve benchmark e2e fixture ids");
+    const canonicalizeBenchmarkRun = (run: typeof e2eBenchmarkSetFixtureRun) => ({
+      ...run,
+      hardware: { ...run.hardware, canonicalGpuId: gpuId },
+    });
+    await insertRun(canonicalizeBenchmarkRun(e2eBenchmarkSetFixtureRun), pool, {
+      benchmarkSetSecretHash,
+    });
+    await Promise.all(
+      e2eBenchmarkSetPeerRuns.map((run) =>
+        insertRun(canonicalizeBenchmarkRun(run), pool, { benchmarkSetSecretHash }),
+      ),
+    );
+    await pool.query("update runs set game_id = $1 where benchmark_set_id = $2", [
+      gameId,
+      E2E_BENCHMARK_SET_ID,
+    ]);
     setupComplete = true;
   } finally {
     await pool.end();

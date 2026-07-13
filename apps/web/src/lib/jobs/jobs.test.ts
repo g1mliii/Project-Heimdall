@@ -8,7 +8,7 @@
 import { generateKeyPairSync, sign as cryptoSign } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { parquetWriteBuffer } from "hyparquet-writer";
-import { computeRunSummary } from "@heimdall/parsers";
+import { computeRunSummary, deriveCapabilityManifest } from "@heimdall/parsers";
 import {
   RUN_STATUS,
   RUN_VISIBILITY,
@@ -18,7 +18,7 @@ import {
   validFrames,
   validRun,
 } from "@heimdall/shared";
-import type { FrameSample, Run } from "@heimdall/shared";
+import type { FrameSample, MethodologyManifest, Run } from "@heimdall/shared";
 import { insertRun, readRun } from "../db";
 import { framesUploadObjectKey, stagingCleanupNotBefore } from "../r2";
 import { createTestDb, testDbAvailable, type TestDb } from "../testing/test-db";
@@ -116,9 +116,16 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     expect(run?.status).toBe(RUN_STATUS.validated);
     // The recompute over DOUBLE columns is bit-identical to the client's.
     expect(run?.summary).toEqual(honestSummary);
-    // Clean, GPU-bound run with healthy RAM and no curated driver: no findings
-    // (§16.2 — no false positives, verified end-to-end).
-    expect(run?.diagnostics).toEqual([]);
+    // The compact fixture has verified busy-time columns but fewer paired
+    // samples than attribution permits. That yields an explanatory info
+    // finding, never a hard bottleneck verdict (§16b / §16d.2).
+    expect(run?.diagnostics).toMatchObject([
+      {
+        code: "telemetry-insufficient",
+        severity: "info",
+        confidence: "low",
+      },
+    ]);
 
     // Idempotent: nothing left to drain.
     const again = await drainJobs({}, realDeps(async () => parquetBytes));
@@ -139,7 +146,10 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     await drainJobs({}, realDeps(async () => parquetBytes));
     const run = await readRun(id, db.pool);
     expect(run?.status).toBe(RUN_STATUS.validated);
-    expect(run?.diagnostics.map((d) => d.code)).toEqual(["ram-below-rated"]);
+    expect(run?.diagnostics.map((d) => d.code)).toEqual([
+      "ram-below-rated",
+      "telemetry-insufficient",
+    ]);
     const finding = run!.diagnostics[0]!;
     expect(finding.severity).toBe("warn");
     expect(finding.detail).toContain("4800");
@@ -151,7 +161,7 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
           [id],
         )
       ).rows[0]!.n;
-    expect(await countRows()).toBe(1);
+    expect(await countRows()).toBe(2);
 
     // Model a worker that stored findings then died before marking its job done;
     // the expired lease is reclaimed and the run re-verified.
@@ -165,10 +175,13 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     );
     await drainJobs({}, realDeps(async () => parquetBytes));
 
-    // Delete-then-insert keeps it at exactly one row across the retry.
-    expect(await countRows()).toBe(1);
+    // Delete-then-insert keeps the two distinct findings stable across the retry.
+    expect(await countRows()).toBe(2);
     const rerun = await readRun(id, db.pool);
-    expect(rerun?.diagnostics.map((d) => d.code)).toEqual(["ram-below-rated"]);
+    expect(rerun?.diagnostics.map((d) => d.code)).toEqual([
+      "ram-below-rated",
+      "telemetry-insufficient",
+    ]);
   });
 
   it("tampered client summary is corrected AND flagged (12.4)", async () => {
@@ -245,6 +258,55 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
 
     expect(result).toMatchObject({ claimed: 1, validated: 1 });
     expect((await readRun(id, db.pool))?.generatedFrameTech).toBe(GENERATED_FRAME_TECH.none);
+  });
+
+  it("keeps persisted methodology aligned with canonical resolution and frame generation", async () => {
+    const id = "run_wk_methodology";
+    const methodologyManifest: MethodologyManifest = {
+      version: 1,
+      sceneType: "benchmark-scene",
+      resolution: "1920x1080", // stale declaration; parsed hardware says 1440p.
+      upscaler: "dlss",
+      rayTracing: "on",
+      frameGeneration: GENERATED_FRAME_TECH.dlss3,
+      framePacing: { vsync: false, vrr: true },
+    };
+    await setupFinalizedRun(
+      id,
+      runFixture(id, {
+        generatedFrameTech: GENERATED_FRAME_TECH.dlss3,
+        methodologyManifest,
+      }),
+    );
+
+    expect(await drainJobs({}, realDeps(async () => parquetBytes))).toMatchObject({ validated: 1 });
+    expect((await readRun(id, db.pool))?.methodologyManifest).toEqual({
+      ...methodologyManifest,
+      resolution: validRun.hardware.resolution,
+      frameGeneration: GENERATED_FRAME_TECH.none,
+    });
+  });
+
+  it("retains declared unified-memory VRAM state through verification", async () => {
+    const id = "run_wk_unified_memory";
+    const capabilityManifest = deriveCapabilityManifest(
+      frames,
+      "capframex",
+      { ...validRun.hardware, gpuVramTotalMb: undefined },
+    );
+    capabilityManifest.vramCapacity = { state: "unified-memory" };
+    await setupFinalizedRun(
+      id,
+      runFixture(id, {
+        hardware: { ...validRun.hardware, gpuVramTotalMb: undefined },
+        capabilityManifest,
+      }),
+    );
+
+    expect(await drainJobs({}, realDeps(async () => parquetBytes))).toMatchObject({ validated: 1 });
+    expect((await readRun(id, db.pool))?.capabilityManifest?.vramCapacity).toEqual({
+      state: "unified-memory",
+    });
   });
 
   it("transient storage error retries; the attempts cap terminalizes (12.5)", async () => {

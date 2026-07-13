@@ -14,6 +14,9 @@ import { buildFramesParquet } from "../src/lib/upload/build-parquet";
 
 export const E2E_RUN_ID = "run_e2e_fixture1";
 export const E2E_VRAM_RUN_ID = "run_e2e_vram_fixture";
+export const E2E_BENCHMARK_SET_RUN_ID = "run_e2e_benchmark_set";
+export const E2E_BENCHMARK_SET_ID = "d2f822bc-b02d-4b90-8f45-997d7c3d66c9";
+export const E2E_BENCHMARK_SET_SECRET = "a".repeat(43);
 
 export const e2eFrames = makeSyntheticFrames({ seed: 7, count: 7200 });
 
@@ -42,6 +45,47 @@ export const e2eFixtureRun: Run = {
   diagnostics: e2eDiagnostics.map((finding, index) => ({ id: `diag_e2e_${index}`, ...finding })),
   framesObjectKey: `runs/${E2E_RUN_ID}/${"c".repeat(32)}.parquet`,
 };
+
+/** Public repeatable passes for the run-page variance card (§16c.2). */
+export const e2eBenchmarkSetFixtureRun: Run = {
+  ...e2eFixtureRun,
+  id: E2E_BENCHMARK_SET_RUN_ID,
+  benchmarkSetId: E2E_BENCHMARK_SET_ID,
+  methodologyManifest: {
+    version: 1,
+    sceneType: "benchmark-scene",
+    scene: "Dogtown route",
+    settingsPreset: "Ultra",
+    resolution: e2eFixtureRun.hardware.resolution,
+    upscaler: "none",
+    rayTracing: "off",
+    frameGeneration: e2eFixtureRun.generatedFrameTech,
+    framePacing: { vsync: false, vrr: false },
+  },
+  framesObjectKey: `runs/${E2E_BENCHMARK_SET_RUN_ID}/${"b".repeat(32)}.parquet`,
+};
+
+export const e2eBenchmarkSetPeerRuns: Run[] = [
+  {
+    ...e2eBenchmarkSetFixtureRun,
+    id: "run_e2e_benchmark_set_peer_1",
+    summary: { ...e2eSummary, avgFps: e2eSummary.avgFps + 0.5 },
+    framesObjectKey: `runs/run_e2e_benchmark_set_peer_1/${"d".repeat(32)}.parquet`,
+  },
+  {
+    ...e2eBenchmarkSetFixtureRun,
+    id: "run_e2e_benchmark_set_peer_2",
+    summary: { ...e2eSummary, avgFps: e2eSummary.avgFps - 0.5 },
+    framesObjectKey: `runs/run_e2e_benchmark_set_peer_2/${"e".repeat(32)}.parquet`,
+  },
+  {
+    ...e2eBenchmarkSetFixtureRun,
+    id: "run_e2e_benchmark_set_warmup",
+    summary: { ...e2eSummary, avgFps: e2eSummary.avgFps + 50 },
+    isWarmup: true,
+    framesObjectKey: `runs/run_e2e_benchmark_set_warmup/${"f".repeat(32)}.parquet`,
+  },
+];
 
 // Keep the ordinary fixture clean of VRAM findings so its visual baseline stays
 // focused on the Phase 5 run page. This second fixture turns only the known
@@ -75,6 +119,18 @@ export const e2eVramFixtureRun: Run = {
   framesObjectKey: `runs/${E2E_VRAM_RUN_ID}/${"v".repeat(32)}.parquet`,
 };
 
-export async function e2eParquetBytes(frames = e2eFrames): Promise<Buffer> {
-  return Buffer.from(await buildFramesParquet(frames));
+let defaultParquetBytes: Promise<Buffer> | undefined;
+let vramParquetBytes: Promise<Buffer> | undefined;
+
+/** Cache immutable fixture bytes; each mocked browser route can safely reuse them. */
+export function e2eParquetBytes(frames = e2eFrames): Promise<Buffer> {
+  if (frames === e2eFrames) {
+    defaultParquetBytes ??= buildFramesParquet(e2eFrames).then((bytes) => Buffer.from(bytes));
+    return defaultParquetBytes;
+  }
+  if (frames === e2eVramFrames) {
+    vramParquetBytes ??= buildFramesParquet(e2eVramFrames).then((bytes) => Buffer.from(bytes));
+    return vramParquetBytes;
+  }
+  return buildFramesParquet(frames).then((bytes) => Buffer.from(bytes));
 }

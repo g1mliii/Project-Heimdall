@@ -7,13 +7,21 @@ import { createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { RUN_STATUS, RUN_VISIBILITY, validRun, validSummary } from "@heimdall/shared";
 import type { Run } from "@heimdall/shared";
-import { insertRun, readRun, readRunForVerification, readRunRequiredDriver } from "../db";
+import {
+  insertRun,
+  readDiagnostics,
+  readRun,
+  readRunForVerification,
+  readRunRequiredDriver,
+} from "../db";
+import type { CapabilityManifest, DiagnosticFinding } from "@heimdall/shared";
 import { framesUploadObjectKey, stagingCleanupNotBefore } from "../r2";
 import { createTestDb, testDbAvailable, type TestDb } from "../testing/test-db";
 import { consumeRateLimit, pruneRateLimits } from "./rate-limit";
 import {
   deleteRun,
   finalizeRun,
+  readVisibleBenchmarkSet,
   readRunFinalizeState,
   readRunManagementTokenHash,
   readStalePendingRuns,
@@ -292,13 +300,108 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       const corrected = { ...validSummary, avgFps: 100.5, stutterCount: 7 };
       const claimed = await claimNextVerificationJob({}, db.pool);
       expect(claimed?.runId).toBe("run_job_0005");
-      await applyVerificationResult("run_job_0005", corrected, "flagged", false, [], claimed!, db.pool);
+      await applyVerificationResult(
+        "run_job_0005",
+        {
+          summary: corrected,
+          runStatus: "flagged",
+          signatureValid: false,
+          diagnostics: [],
+          capabilityManifest: null,
+          methodologyManifest: null,
+          generatedFrameTech: "none",
+        },
+        claimed!,
+        db.pool,
+      );
       await completeVerificationJob(claimed!.id, claimed!.attempts, db.pool);
       const run = await readRun("run_job_0005", db.pool);
       expect(run?.status).toBe(RUN_STATUS.flagged);
       expect(run?.summary.avgFps).toBe(100.5);
       expect(run?.summary.stutterCount).toBe(7);
       expect(run?.signatureValid).toBe(false);
+    });
+
+    it("persists the recomputed capability manifest + richer diagnostics, replacing on retry (§16a/§16b.2)", async () => {
+      await finalizeFixture(db.pool, "run_job_manifest");
+      const manifest: CapabilityManifest = {
+        version: 1,
+        source: "presentmon",
+        sensors: Object.fromEntries(
+          (["gpuLoadPct", "gpuClockMhz", "gpuPowerW", "vramUsedMb", "cpuLoadPct", "cpuBusyMs", "gpuBusyMs"] as const).map(
+            (field) => [field, { present: field.endsWith("BusyMs"), frameAligned: field.endsWith("BusyMs") }],
+          ),
+        ) as CapabilityManifest["sensors"],
+        presentationMode: "unknown",
+        syncMode: "unknown",
+        frameGenerationObserved: false,
+        vramCapacity: { state: "unknown" },
+        caveats: [],
+      };
+      const findings: DiagnosticFinding[] = [
+        {
+          code: "likely-gpu-bound",
+          severity: "info",
+          title: "Likely GPU-bound",
+          detail: "GPU work dominated on most frames.",
+          ruleVersion: "1.0.0",
+          confidence: "high",
+          evidence: { coverageFraction: 1, sensors: ["cpuBusyMs", "gpuBusyMs"], metrics: { gpuBoundFraction: 0.9 } },
+        },
+      ];
+
+      const first = await claimNextVerificationJob({}, db.pool);
+      expect(first?.runId).toBe("run_job_manifest");
+      await applyVerificationResult(
+        "run_job_manifest",
+        {
+          summary: validSummary,
+          runStatus: "validated",
+          signatureValid: null,
+          diagnostics: findings,
+          capabilityManifest: manifest,
+          methodologyManifest: null,
+          generatedFrameTech: "none",
+        },
+        first!,
+        db.pool,
+      );
+      await completeVerificationJob(first!.id, first!.attempts, db.pool);
+
+      const run = await readRun("run_job_manifest", db.pool);
+      expect(run?.capabilityManifest).toEqual(manifest);
+      const diagnostics = await readDiagnostics("run_job_manifest", db.pool);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).toMatchObject({
+        code: "likely-gpu-bound",
+        ruleVersion: "1.0.0",
+        confidence: "high",
+        evidence: { coverageFraction: 1, sensors: ["cpuBusyMs", "gpuBusyMs"], metrics: { gpuBoundFraction: 0.9 } },
+      });
+
+      // A second verification pass (reclaim) must REPLACE, not duplicate.
+      await db.pool.query(
+        `update verification_jobs set status = 'pending', locked_at = null, not_before = now() where run_id = $1`,
+        ["run_job_manifest"],
+      );
+      const second = await claimNextVerificationJob({}, db.pool);
+      await applyVerificationResult(
+        "run_job_manifest",
+        {
+          summary: validSummary,
+          runStatus: "validated",
+          signatureValid: null,
+          diagnostics: [],
+          capabilityManifest: null,
+          methodologyManifest: null,
+          generatedFrameTech: "none",
+        },
+        second!,
+        db.pool,
+      );
+      expect(await readDiagnostics("run_job_manifest", db.pool)).toEqual([]);
+      // A null manifest clears the stored one.
+      expect((await readRun("run_job_manifest", db.pool))?.capabilityManifest).toBeUndefined();
     });
 
     it("does not let a stale claim overwrite a newer completed verification", async () => {
@@ -317,10 +420,15 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
 
       await applyVerificationResult(
         "run_job_stale_claim",
-        { ...validSummary, avgFps: 333 },
-        "flagged",
-        null,
-        [],
+        {
+          summary: { ...validSummary, avgFps: 333 },
+          runStatus: "flagged",
+          signatureValid: null,
+          diagnostics: [],
+          capabilityManifest: null,
+          methodologyManifest: null,
+          generatedFrameTech: "none",
+        },
         first!,
         db.pool,
       );
@@ -330,10 +438,15 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
 
       await applyVerificationResult(
         "run_job_stale_claim",
-        validSummary,
-        "validated",
-        null,
-        [],
+        {
+          summary: validSummary,
+          runStatus: "validated",
+          signatureValid: null,
+          diagnostics: [],
+          capabilityManifest: null,
+          methodologyManifest: null,
+          generatedFrameTech: "none",
+        },
         second!,
         db.pool,
       );
@@ -366,6 +479,156 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       expect(stale).toContain("run_stale_0001");
       expect(stale).not.toContain("run_stale_fresh"); // too young
       expect(stale).not.toContain("run_stale_finalized"); // has an object key
+    });
+  });
+
+  describe("benchmark-set repeatability (§16c.2/§16c.3)", () => {
+    it("pools only the same scoped public profile and never leaks private members", async () => {
+      const benchmarkSetId = "3d9fb878-cb0d-4cc8-9ac8-e9ec97ea977a";
+      const benchmarkSetSecretHash = tokenHashFor("benchmark-set-repeatability");
+      const gameId = await resolveGameId("capframex", validRun.game, db.pool);
+      const gpuId = await resolveHardwareId(
+        "gpu",
+        "capframex",
+        validRun.hardware.gpu,
+        validRun.hardware.gpuVendor ?? null,
+        db.pool,
+      );
+      if (!gameId || !gpuId) throw new Error("expected canonical benchmark fixture ids");
+      const makeSetRun = (
+        id: string,
+        avgFps: number,
+        {
+          isWarmup = false,
+          visibility = RUN_VISIBILITY.public,
+          status = RUN_STATUS.validated,
+          vsync = false,
+          graphicsApi = "dx12",
+          scene = "Dogtown route",
+          settingsPreset = "Ultra",
+          setId = benchmarkSetId,
+        }: {
+          isWarmup?: boolean;
+          visibility?: Run["visibility"];
+          status?: Run["status"];
+          vsync?: boolean;
+          graphicsApi?: string;
+          scene?: string;
+          settingsPreset?: string;
+          setId?: string;
+        } = {},
+      ): Run => ({
+        ...validRun,
+        id,
+        visibility,
+        status,
+        summary: { ...validRun.summary, avgFps },
+        framesObjectKey: `runs/${id}.parquet`,
+        benchmarkSetId: setId,
+        hardware: { ...validRun.hardware, canonicalGpuId: gpuId },
+        ...(isWarmup ? { isWarmup: true } : {}),
+        methodologyManifest: {
+          version: 1,
+          sceneType: "benchmark-scene",
+          scene,
+          settingsPreset,
+          resolution: "2560x1440",
+          upscaler: "none",
+          rayTracing: "off",
+          frameGeneration: "none",
+          graphicsApi,
+          framePacing: { vsync, vrr: false },
+        },
+      });
+
+      const primary = makeSetRun("run_set_primary", 100);
+      await Promise.all([
+        insertRun(primary, db.pool, { benchmarkSetSecretHash }),
+        insertRun(makeSetRun("run_set_peer", 101), db.pool, { benchmarkSetSecretHash }),
+        insertRun(makeSetRun("run_set_warmup", 250, { isWarmup: true }), db.pool, {
+          benchmarkSetSecretHash,
+        }),
+        insertRun(makeSetRun("run_set_other_profile", 40, { vsync: true }), db.pool, {
+          benchmarkSetSecretHash,
+        }),
+        insertRun(makeSetRun("run_set_other_api", 40, { graphicsApi: "vulkan" }), db.pool, {
+          benchmarkSetSecretHash,
+        }),
+        insertRun(makeSetRun("run_set_other_scene", 40, { scene: "Different route" }), db.pool, {
+          benchmarkSetSecretHash,
+        }),
+        insertRun(makeSetRun("run_set_other_preset", 40, { settingsPreset: "Low" }), db.pool, {
+          benchmarkSetSecretHash,
+        }),
+        insertRun(makeSetRun("run_set_private", 40, { visibility: RUN_VISIBILITY.private }), db.pool, {
+          benchmarkSetSecretHash,
+        }),
+        insertRun(makeSetRun("run_set_unlisted", 40, { visibility: RUN_VISIBILITY.unlisted }), db.pool, {
+          benchmarkSetSecretHash,
+        }),
+        insertRun(makeSetRun("run_set_flagged", 40, { status: RUN_STATUS.flagged }), db.pool, {
+          benchmarkSetSecretHash,
+        }),
+        // The user-visible label is intentionally not server data. A different
+        // browser that chooses the same words receives another opaque id and
+        // cannot pollute this set.
+        insertRun(
+          makeSetRun("run_set_same_label_other_scope", 999, {
+            setId: "8b4f4a96-84f1-45c3-8c1d-ecb4fdd6316b",
+          }),
+          db.pool,
+          { benchmarkSetSecretHash: tokenHashFor("same-display-label-other-browser") },
+        ),
+      ]);
+      await db.pool.query("update runs set game_id = $1 where benchmark_set_id = $2", [
+        gameId,
+        benchmarkSetId,
+      ]);
+
+      const summary = await readVisibleBenchmarkSet(primary, db.pool);
+      expect(summary).toMatchObject({
+        sampleCount: 2,
+        warmupRunCount: 1,
+        meanAvgFps: 100.5,
+        confidence: "medium",
+      });
+      expect(summary?.stdDevAvgFps).toBeCloseTo(0.5, 8);
+      expect(summary?.coefficientOfVariation).toBeCloseTo(0.5 / 100.5, 8);
+
+      await db.pool.query("update runs set game_id = null, gpu_hardware_id = null where id = $1", [
+        primary.id,
+      ]);
+      expect(await readVisibleBenchmarkSet(primary, db.pool)).toBeNull();
+      await db.pool.query("update runs set game_id = $1, gpu_hardware_id = $2 where id = $3", [
+        gameId,
+        gpuId,
+        primary.id,
+      ]);
+
+      // Direct-link visibility alone is insufficient for cross-run data. Until
+      // Phase 8 adds owner authorization, an unlisted source run gets no set
+      // summary even if its label happens to match public runs.
+      expect(
+        await readVisibleBenchmarkSet(
+          { ...primary, visibility: RUN_VISIBILITY.unlisted },
+          db.pool,
+        ),
+      ).toBeNull();
+
+      const profileless = {
+        ...makeSetRun("run_set_profileless", 100),
+        methodologyManifest: undefined,
+      };
+      await insertRun(profileless, db.pool, { benchmarkSetSecretHash });
+      expect(await readVisibleBenchmarkSet(profileless, db.pool)).toBeNull();
+
+      const routeUndeclared = makeSetRun("run_set_route_undeclared", 100);
+      routeUndeclared.methodologyManifest = {
+        ...routeUndeclared.methodologyManifest!,
+        scene: undefined,
+      };
+      await insertRun(routeUndeclared, db.pool, { benchmarkSetSecretHash });
+      expect(await readVisibleBenchmarkSet(routeUndeclared, db.pool)).toBeNull();
     });
   });
 

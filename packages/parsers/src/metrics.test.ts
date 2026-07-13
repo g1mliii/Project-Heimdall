@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { runSummarySchema, STUTTER, type FrameSample } from "@heimdall/shared";
+import { runSummarySchema, STUTTER, type FrameSample, type RunSummary } from "@heimdall/shared";
 
-import { computeRunSummary, computeRunSummaryFromFrameTimes } from "./metrics";
+import {
+  computeBenchmarkSetStats,
+  computeRunSummary,
+  computeRunSummaryFromFrameTimes,
+} from "./metrics";
 import { makeLcg } from "./testing/rng";
 
 /** Bare frames from a frame-time list, timestamped by cumulative sum. */
@@ -141,6 +145,69 @@ describe("generative invariants (seeded LCG, §10.2)", () => {
           generatedFrameCount,
         ),
       ).toEqual(computeRunSummary(stream));
+    }
+  });
+});
+
+describe("computeBenchmarkSetStats (§16c.2)", () => {
+  const summaryWith = (avgFps: number): RunSummary => ({
+    avgFps,
+    onePercentLowFps: avgFps * 0.8,
+    pointOnePercentLowFps: avgFps * 0.7,
+    frameTimeP50Ms: 1000 / avgFps,
+    frameTimeP95Ms: 1000 / (avgFps * 0.8),
+    frameTimeP99Ms: 1000 / (avgFps * 0.7),
+    stutterCount: 0,
+    generatedFramePct: 0,
+    pointOnePercentLowConfidence: "high",
+    sampleCount: 5000,
+    durationSeconds: 60,
+  });
+  const member = (avgFps: number, isWarmup = false) => ({ summary: summaryWith(avgFps), isWarmup });
+
+  it("excludes warm-up runs and reports the spread", () => {
+    const stats = computeBenchmarkSetStats([
+      member(200, true), // warm-up — ignored
+      member(100),
+      member(102),
+      member(101),
+    ]);
+    expect(stats.sampleCount).toBe(3);
+    expect(stats.warmupRunCount).toBe(1);
+    expect(stats.meanAvgFps).toBeCloseTo(101, 5);
+    expect(stats.coefficientOfVariation).toBeLessThan(0.03);
+    expect(stats.confidence).toBe("high");
+  });
+
+  it("grades a wide spread as low confidence", () => {
+    const stats = computeBenchmarkSetStats([member(80), member(120), member(100)]);
+    expect(stats.sampleCount).toBe(3);
+    expect(stats.coefficientOfVariation).toBeGreaterThan(0.08);
+    expect(stats.confidence).toBe("low");
+  });
+
+  it("never promotes a lone run and returns zeroed stats for an all-warm-up set", () => {
+    expect(computeBenchmarkSetStats([member(100)]).confidence).toBe("low");
+    const empty = computeBenchmarkSetStats([member(100, true), member(101, true)]);
+    expect(empty.sampleCount).toBe(0);
+    expect(empty.warmupRunCount).toBe(2);
+    expect(empty.meanAvgFps).toBe(0);
+  });
+
+  it("never lets arbitrary warm-up values affect a measured set (seeded property)", () => {
+    const rand = makeLcg(0x27d4eb2d);
+
+    for (let iteration = 0; iteration < 200; iteration++) {
+      const measured = Array.from({ length: 1 + Math.floor(rand() * 12) }, () =>
+        member(30 + rand() * 270),
+      );
+      const warmups = Array.from({ length: Math.floor(rand() * 8) }, () =>
+        member(1 + rand() * 999, true),
+      );
+
+      const withWarmups = computeBenchmarkSetStats([...warmups, ...measured]);
+      expect({ ...withWarmups, warmupRunCount: 0 }).toEqual(computeBenchmarkSetStats(measured));
+      expect(withWarmups.warmupRunCount).toBe(warmups.length);
     }
   });
 });

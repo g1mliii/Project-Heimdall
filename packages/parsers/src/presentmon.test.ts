@@ -79,6 +79,49 @@ describe("parsePresentMon — stream selection & frame generation (§8)", () => 
     );
   });
 
+  it("reads semantics from the dominant stream rather than the file's first stream", () => {
+    const semanticHeader =
+      "Application,ProcessID,SwapChainAddress,FrameType,CPUStartTime,FrameTime,Runtime,PresentMode,AllowsTearing,SyncInterval";
+    const semanticRow = (
+      app: string,
+      pid: string,
+      swap: string,
+      t: number,
+      runtime: string,
+      mode: string,
+      allowsTearing: number,
+      syncInterval: number,
+    ) =>
+      `${app},${pid},${swap},Application,${t.toFixed(3)},10,${runtime},${mode},${allowsTearing},${syncInterval}`;
+    const lines = [semanticHeader];
+    // The shorter overlay stream comes first, which used to determine the
+    // persisted semantics even though its frame rows were discarded.
+    for (let i = 0; i < 4; i++) {
+      lines.push(semanticRow("overlay.exe", "888", "0xBBBB", 3.5 + i * 0.016, "D3D11", "Composed", 1, 0));
+    }
+    for (let i = 0; i < 10; i++) {
+      lines.push(
+        semanticRow(
+          "game.exe",
+          "1234",
+          "0xAAAA",
+          3.5 + i * 0.01,
+          "D3D12",
+          "Hardware Composed: Independent Flip",
+          0,
+          1,
+        ),
+      );
+    }
+
+    const { value } = unwrapOk(parsePresentMon(lines.join("\n")));
+    expect(value.captureSemantics).toMatchObject({
+      graphicsApi: "dx12",
+      presentationMode: "hardware-composed-flip",
+      syncMode: "vsync",
+    });
+  });
+
   it("does not warn when a single stream is present", () => {
     const { warnings } = parseOk("presentmon/v2-basic.csv");
     expect(warnings.find((w) => w.code === "multiple-streams")).toBeUndefined();

@@ -11,41 +11,11 @@
 
 import { DIAGNOSTICS } from "@heimdall/shared";
 import type { DiagnosticRule } from "./types";
-
-function hasStableCommonFrameCap(
-  frameTimes: ArrayLike<number>,
-  medianFrameTimeMs: number,
-): boolean {
-  if (!Number.isFinite(medianFrameTimeMs) || medianFrameTimeMs <= 0) return false;
-
-  const capFps = DIAGNOSTICS.commonFrameCapFps.find((fps) => {
-    const capFrameTimeMs = 1000 / fps;
-    return (
-      Math.abs(medianFrameTimeMs - capFrameTimeMs) <=
-      capFrameTimeMs * DIAGNOSTICS.frameCapToleranceFraction
-    );
-  });
-  if (capFps === undefined) return false;
-
-  const capFrameTimeMs = 1000 / capFps;
-  let observed = 0;
-  let atCap = 0;
-  for (let i = 0; i < frameTimes.length; i++) {
-    const frameTimeMs = frameTimes[i];
-    if (frameTimeMs === undefined || !Number.isFinite(frameTimeMs)) continue;
-    observed++;
-    if (
-      Math.abs(frameTimeMs - capFrameTimeMs) <=
-      capFrameTimeMs * DIAGNOSTICS.frameCapToleranceFraction
-    ) {
-      atCap++;
-    }
-  }
-  return observed > 0 && atCap / observed >= DIAGNOSTICS.frameCapMinStableFraction;
-}
+import { hasStableCommonFrameCap } from "./frame-cap";
 
 export const cpuBottleneckRule: DiagnosticRule = {
   code: "cpu-bottleneck",
+  version: "1.0.0",
   requiredSensors: ["cpuLoadPct", "gpuLoadPct"],
   evaluate({ input, frameCount }) {
     const cpu = input.frames.cpuLoadPct;

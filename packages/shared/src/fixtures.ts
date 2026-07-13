@@ -87,6 +87,7 @@ export const validCreateRunRequest: CreateRunRequest = {
   summary: validSummary,
   generatedFrameTech: "none",
   parquetByteLength: 2_400_000,
+  isWarmup: false,
   schemaVersion: CURRENT_SCHEMA_VERSION,
   parserVersion: PARSER_VERSION,
 };

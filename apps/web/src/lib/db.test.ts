@@ -26,6 +26,8 @@ import { migrate } from "../../../../infra/db/migrate.mjs";
 import { insertRun, readRun } from "./db";
 
 const testDbUrl = process.env.TEST_DATABASE_URL;
+const BENCHMARK_SET_ID = "57ba4bd4-8b3e-4a2b-a0d0-92fb48367d5d";
+const BENCHMARK_SET_SECRET_HASH = "a".repeat(64);
 
 function fixtureRunWithId(id: string): typeof validRun {
   return {
@@ -100,6 +102,13 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0012_seed_required_drivers.sql",
       "0013_diagnostics_columns.sql",
       "0015_hardware_alias_kind_aware.sql",
+      "0016_capability_manifest.sql",
+      "0017_methodology_manifest.sql",
+      "0018_comparability_index.sql",
+      "0019_comparability_frame_pacing_index.sql",
+      "0020_benchmark_set_scope.sql",
+      "0021_graphics_api_comparability.sql",
+      "0022_scene_preset_comparability.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
@@ -107,6 +116,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     );
     expect(rows.map((r) => r.table_name).sort()).toEqual(
       [
+        "benchmark_sets",
         "comparisons",
         "diagnostics",
         "game_aliases",
@@ -163,6 +173,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "verification_jobs_active_claim_idx",
       "staging_cleanup_jobs_not_before_idx",
       "runs_pending_unfinalized_created_at_idx",
+      "runs_public_benchmark_set_profile_idx",
     ]) {
       expect(names).toContain(expected);
     }
@@ -228,7 +239,8 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
           'runs_status_visibility_idx',
           'runs_user_id_idx',
           'verification_jobs_active_claim_idx',
-          'runs_pending_unfinalized_created_at_idx'
+          'runs_pending_unfinalized_created_at_idx',
+          'runs_public_benchmark_set_profile_idx'
         )`,
     );
     const byName = new Map(rows.map((row) => [row.name, row]));
@@ -253,6 +265,26 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     const reaperPredicate = byName.get("runs_pending_unfinalized_created_at_idx")?.predicate ?? "";
     expect(reaperPredicate).toContain("status = 'pending'::text");
     expect(reaperPredicate).toContain("frames_object_key IS NULL");
+    const benchmarkSetIndex = byName.get("runs_public_benchmark_set_profile_idx");
+    for (const column of ["benchmark_set_id", "scene", "settings_preset"]) {
+      expect(benchmarkSetIndex?.definition).toContain(column);
+    }
+    const benchmarkPredicate = benchmarkSetIndex?.predicate ?? "";
+    for (const required of [
+      "status = 'validated'::text",
+      "visibility = 'public'::text",
+      "methodology_manifest_version IS NOT NULL",
+      "resolution IS NOT NULL",
+      "scene IS NOT NULL",
+      "settings_preset IS NOT NULL",
+      "upscaler IS NOT NULL",
+      "ray_tracing IS NOT NULL",
+      "vsync IS NOT NULL",
+      "vrr IS NOT NULL",
+      "scene_type IS NOT NULL",
+    ]) {
+      expect(benchmarkPredicate).toContain(required);
+    }
   });
 
   it("CHECK constraints stay in lockstep with the shared enum constants", async () => {
@@ -420,5 +452,159 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     };
     await insertRun(run, pool);
     expect((await readRun(run.id, pool))?.hardware.gpuVramTotalMb).toBe(12_288);
+  });
+
+  it("round-trips a capability + methodology manifest and mirrors comparability columns (§16a/§16c)", async () => {
+    const capabilityManifest = {
+      version: 1,
+      source: "presentmon" as const,
+      sensors: Object.fromEntries(
+        (["gpuLoadPct", "gpuClockMhz", "gpuPowerW", "vramUsedMb", "cpuLoadPct", "cpuBusyMs", "gpuBusyMs"] as const).map(
+          (field) => [field, { present: field.endsWith("BusyMs"), frameAligned: field.endsWith("BusyMs") }],
+        ),
+      ) as never,
+      presentationMode: "hardware-independent-flip" as const,
+      syncMode: "tearing" as const,
+      frameGenerationObserved: false,
+      vramCapacity: { totalMb: 12_288 },
+      caveats: ["GPU-execution timing is HAGS-affected"],
+    };
+    const methodologyManifest = {
+      version: 1,
+      sceneType: "benchmark-scene" as const,
+      scene: "Dogtown route",
+      settingsPreset: "Ultra",
+      resolution: "2560x1440",
+      upscaler: "dlss" as const,
+      rayTracing: "on" as const,
+      frameGeneration: "dlss3" as const,
+      graphicsApi: "dx12",
+      framePacing: { capFps: 120, vsync: true, vrr: false },
+    };
+    const run = {
+      ...fixtureRunWithId("run_manifests"),
+      generatedFrameTech: "dlss3" as const,
+      capabilityManifest,
+      methodologyManifest,
+      benchmarkSetId: BENCHMARK_SET_ID,
+      isWarmup: true,
+    };
+    await insertRun(run, pool, { benchmarkSetSecretHash: BENCHMARK_SET_SECRET_HASH });
+
+    const readBack = await readRun(run.id, pool);
+    expect(readBack?.capabilityManifest).toEqual(capabilityManifest);
+    expect(readBack?.methodologyManifest).toEqual(methodologyManifest);
+    expect(readBack).toMatchObject({ benchmarkSetId: BENCHMARK_SET_ID, isWarmup: true });
+
+    // The queryable comparability columns mirror the manifest (§16c.3).
+    const { rows } = await pool.query<{
+      upscaler: string;
+      ray_tracing: string;
+      graphics_api: string;
+      scene: string;
+      settings_preset: string;
+      frame_pacing_cap: number;
+      vsync: boolean;
+      vrr: boolean;
+      scene_type: string;
+      benchmark_set_id: string;
+      is_warmup: boolean;
+    }>(
+      `select upscaler, ray_tracing, graphics_api, scene, settings_preset, frame_pacing_cap, vsync, vrr, scene_type, benchmark_set_id, is_warmup
+         from runs where id = $1`,
+      [run.id],
+    );
+    expect(rows[0]).toEqual({
+      upscaler: "dlss",
+      ray_tracing: "on",
+      graphics_api: "dx12",
+      scene: "Dogtown route",
+      settings_preset: "Ultra",
+      frame_pacing_cap: 120,
+      vsync: true,
+      vrr: false,
+      scene_type: "benchmark-scene",
+      benchmark_set_id: BENCHMARK_SET_ID,
+      is_warmup: true,
+    });
+  });
+
+  it("extends runs_game_gpu_idx with the comparability columns (§16c.3)", async () => {
+    const { rows } = await pool.query<{ definition: string }>(
+      `select pg_get_indexdef(indexrelid) as definition
+         from pg_index where indexrelid = 'runs_game_gpu_idx'::regclass`,
+    );
+    const definition = rows[0]?.definition ?? "";
+    for (const column of [
+      "resolution",
+      "scene",
+      "settings_preset",
+      "upscaler",
+      "ray_tracing",
+      "generated_frame_tech",
+      "graphics_api",
+      "frame_pacing_cap",
+      "vsync",
+      "vrr",
+      "scene_type",
+    ]) {
+      expect(definition, `runs_game_gpu_idx includes ${column}`).toContain(column);
+    }
+    // The partial predicate is preserved from 0004.
+    expect(definition).toContain("validated");
+    expect(definition).toContain("public");
+  });
+
+  it("backfills indexed methodology fields from pre-0022 rows", async () => {
+    const run = {
+      ...fixtureRunWithId("run_graphics_api_backfill"),
+      methodologyManifest: {
+        version: 1,
+        sceneType: "benchmark-scene" as const,
+        scene: "Dogtown route",
+        settingsPreset: "Ultra",
+        upscaler: "none" as const,
+        rayTracing: "off" as const,
+        frameGeneration: "none" as const,
+        graphicsApi: "dx12",
+        framePacing: { vsync: false, vrr: false },
+      },
+    };
+    await insertRun(run, pool);
+    await pool.query(
+      `update runs
+          set graphics_api = null,
+              scene = null,
+              settings_preset = null,
+              settings_json = jsonb_set(
+                jsonb_set(
+                  jsonb_set(settings_json, '{graphicsApi}', to_jsonb($2::text)),
+                  '{scene}', to_jsonb($3::text)
+                ),
+                '{settingsPreset}', to_jsonb($4::text)
+              )
+        where id = $1`,
+      [run.id, "x".repeat(65), "y".repeat(65), "z".repeat(65)],
+    );
+    await pool.query(
+      "delete from schema_migrations where version = any($1::text[])",
+      [["0021_graphics_api_comparability.sql", "0022_scene_preset_comparability.sql"]],
+    );
+
+    expect(await migrate(pool)).toEqual([
+      "0021_graphics_api_comparability.sql",
+      "0022_scene_preset_comparability.sql",
+    ]);
+    const { rows } = await pool.query<{
+      graphics_api: string | null;
+      scene: string | null;
+      settings_preset: string | null;
+    }>(
+      "select graphics_api, scene, settings_preset from runs where id = $1",
+      [run.id],
+    );
+    expect(rows[0]?.graphics_api).toMatch(/^legacy:[0-9a-f]{32}$/);
+    expect(rows[0]?.scene).toMatch(/^legacy:[0-9a-f]{32}$/);
+    expect(rows[0]?.settings_preset).toMatch(/^legacy:[0-9a-f]{32}$/);
   });
 });

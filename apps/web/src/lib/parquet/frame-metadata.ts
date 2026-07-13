@@ -5,6 +5,7 @@
 
 import type { FileMetaData } from "hyparquet";
 import {
+  CAPABILITY_SENSOR_FIELDS,
   DIAGNOSTIC_FRAME_PARQUET_COLUMNS,
   DIAGNOSTIC_FRAME_SENSOR_FIELDS,
   FRAME_PARQUET_COLUMNS,
@@ -15,7 +16,7 @@ import {
   parseOptionalFrameParquetGenerated,
   parseOptionalFrameParquetNumber,
 } from "@heimdall/shared";
-import type { RunSummary } from "@heimdall/shared";
+import type { CapabilitySensorField, RunSummary } from "@heimdall/shared";
 import type { DiagnosticFrameSensorField } from "@heimdall/shared";
 import type { DiagnosticsFrameColumns } from "@heimdall/parsers";
 import { buildFrameSeriesFromColumns, type FrameSeries } from "../run/frame-series";
@@ -174,6 +175,15 @@ const DIAGNOSTICS_SENSOR_COLUMNS = new Map<string, DiagnosticFrameSensorField>(
   DIAGNOSTIC_FRAME_PARQUET_COLUMNS.map(({ name, field }) => [name, field]),
 );
 
+/** All 7 sensor columns → field, so the capability manifest can record presence (§16a.3). */
+const CAPABILITY_SENSOR_COLUMNS = new Map<string, CapabilitySensorField>(
+  FRAME_PARQUET_COLUMNS.flatMap((column) =>
+    (CAPABILITY_SENSOR_FIELDS as readonly string[]).includes(column.field)
+      ? [[column.name, column.field as CapabilitySensorField] as const]
+      : [],
+  ),
+);
+
 /**
  * Compact per-frame view for the diagnostics engine, retained alongside the
  * canonical summary during the single Parquet pass. `frameTimeMs` is always
@@ -187,6 +197,10 @@ export type FrameParquetDiagnosticsColumns = DiagnosticsFrameColumns &
 export interface FrameParquetSummary {
   summary: RunSummary;
   diagnosticsColumns: FrameParquetDiagnosticsColumns;
+  /** Which of the 7 sensor fields carried ≥1 real value (§16a.3 manifest input). */
+  presentSensors: CapabilitySensorField[];
+  /** True when any frame was marked engine-generated (§16a.3). */
+  frameGenerationObserved: boolean;
 }
 
 /**
@@ -213,6 +227,10 @@ export async function computeFrameParquetSummary(
   // unused 500k-frame buffers.
   const sensorArrays: Partial<Record<DiagnosticFrameSensorField, Float64Array>> = {};
 
+  // Presence bitmap for the capability manifest — booleans only, never arrays,
+  // so tracking all 7 sensors stays free even for sensor-rich 500k captures.
+  const presentSensors = new Set<CapabilitySensorField>();
+
   for (const expectedColumnName of FRAME_PARQUET_COLUMN_NAMES) {
     await readFrameParquetColumn(
       parquetRead,
@@ -234,8 +252,11 @@ export async function computeFrameParquetSummary(
           return;
         }
         const parsed = parseOptionalFrameParquetNumber(expectedColumnName, value, row);
+        if (parsed === undefined) return;
+        const capabilityField = CAPABILITY_SENSOR_COLUMNS.get(expectedColumnName);
+        if (capabilityField !== undefined) presentSensors.add(capabilityField);
         const field = DIAGNOSTICS_SENSOR_COLUMNS.get(expectedColumnName);
-        if (field !== undefined && parsed !== undefined) {
+        if (field !== undefined) {
           let sensorArray = sensorArrays[field];
           if (!sensorArray) {
             sensorArray = new Float64Array(frameCount).fill(NaN);
@@ -270,7 +291,12 @@ export async function computeFrameParquetSummary(
     if (sensorArray) diagnosticsColumns[field] = sensorArray;
   }
 
-  return { summary, diagnosticsColumns };
+  return {
+    summary,
+    diagnosticsColumns,
+    presentSensors: [...presentSensors],
+    frameGenerationObserved: generatedFrameCount > 0,
+  };
 }
 
 /**

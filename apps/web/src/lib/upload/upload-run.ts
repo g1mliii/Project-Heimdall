@@ -8,23 +8,26 @@
  * injectable so tests run it in Node.
  */
 
-import { computeRunSummary, parseAnyCapture } from "@heimdall/parsers";
+import { computeRunSummary, deriveCapabilityManifest, parseAnyCapture } from "@heimdall/parsers";
 import type { ParseWarning } from "@heimdall/parsers";
 import {
   CURRENT_SCHEMA_VERSION,
   GENERATED_FRAME_TECH,
   INGEST_LIMITS,
+  METHODOLOGY_MANIFEST_VERSION,
   PARQUET_CONTENT_TYPE,
   UNKNOWN_HARDWARE,
   createRunResponseSchema,
   generateManagementToken,
   hashManagementToken,
+  normalizeMethodologyManifest,
 } from "@heimdall/shared";
 import type {
   CaptureSource,
   CreateRunRequest,
   FinalizeRunRequest,
   HardwareSnapshot,
+  MethodologyManifest,
   RunSummary,
 } from "@heimdall/shared";
 import { readApiFailure } from "../api/errors";
@@ -82,6 +85,13 @@ export interface UploadOptions {
   visibility: "unlisted" | "public";
   /** Overrides/completes hardware when the log carries none (PresentMon CSV). */
   hardware?: Partial<HardwareSnapshot>;
+  /** Optional declared setup details for reproducibility/comparability (§16c). */
+  methodology?: Omit<MethodologyManifest, "version" | "frameGeneration">;
+  /** Optional repeatable-run group; warm-ups are retained but excluded from its stats. */
+  benchmarkSetId?: string;
+  /** Browser-held capability authorizing membership of the opaque set id. */
+  benchmarkSetSecret?: string;
+  isWarmup?: boolean;
   onProgress?: (progress: UploadProgress) => void;
   transport?: UploadTransport;
 }
@@ -115,7 +125,17 @@ async function failureFromResponse(response: Response, fallback: string): Promis
 export async function uploadCapture(file: File, options: UploadOptions): Promise<UploadResult> {
   const transport = options.transport ?? defaultTransport();
   const emit = options.onProgress ?? (() => {});
+  const benchmarkSetId = options.benchmarkSetId?.trim() || undefined;
+  const benchmarkSetSecret = options.benchmarkSetSecret?.trim() || undefined;
   let finalizeRecovery: UploadRecovery | undefined;
+
+  if ((benchmarkSetId === undefined) !== (benchmarkSetSecret === undefined)) {
+    return {
+      ok: false,
+      code: "benchmark-set-secret-required",
+      message: "A benchmark set needs both its id and browser-held key.",
+    };
+  }
 
   try {
     emit({ stage: "parsing" });
@@ -124,7 +144,13 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
     if (!parsed.ok) {
       return { ok: false, code: parsed.error.code, message: parsed.error.message };
     }
-    const { frames, hardware: parsedHardware, parserVersion } = parsed.capture;
+    const {
+      frames,
+      hardware: parsedHardware,
+      parserVersion,
+      captureSemantics,
+      captureProfile,
+    } = parsed.capture;
 
     // Fast local feedback for the same limits the server enforces (§11.10).
     if (frames.length > INGEST_LIMITS.maxFramesPerRun) {
@@ -164,6 +190,54 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
       cpu: options.hardware?.cpu ?? parsedHardware?.cpu ?? UNKNOWN_HARDWARE.cpu,
     };
 
+    const generatedFrameTech =
+      summary.generatedFramePct > 0
+        ? GENERATED_FRAME_TECH.unknown
+        : GENERATED_FRAME_TECH.none;
+    const capabilityManifest = deriveCapabilityManifest(
+      frames,
+      parsed.source,
+      hardware,
+      captureSemantics,
+    );
+    // Parser-detected details win over a declaration: unlike a user's text
+    // entry, the source header/profile is direct capture evidence. Everything
+    // else remains explicitly declared and therefore optional.
+    const detectedVsync =
+      captureSemantics?.syncMode === "vsync"
+        ? true
+        : captureSemantics?.syncMode === "tearing"
+          ? false
+          : undefined;
+    const normalizedMethodology = normalizeMethodologyManifest(
+      options.methodology === undefined
+        ? undefined
+        : {
+            version: METHODOLOGY_MANIFEST_VERSION,
+            ...options.methodology,
+            frameGeneration: generatedFrameTech,
+          },
+      hardware,
+      generatedFrameTech,
+    );
+    const methodologyManifest: MethodologyManifest | undefined =
+      normalizedMethodology === undefined
+        ? undefined
+        : {
+            ...normalizedMethodology,
+            ...(detectedVsync === undefined
+              ? {}
+              : { framePacing: { ...normalizedMethodology.framePacing, vsync: detectedVsync } }),
+            ...(captureSemantics?.graphicsApi === undefined
+              ? {}
+              : { graphicsApi: captureSemantics.graphicsApi }),
+            ...(captureProfile === undefined
+              ? {}
+              : { captureProfile }),
+            ...(hardware.os === undefined ? {} : { os: hardware.os }),
+            ...(hardware.gpuDriver === undefined ? {} : { gpuDriver: hardware.gpuDriver }),
+            captureDurationSeconds: summary.durationSeconds,
+          };
     emit({ stage: "creating" });
     const createRequest: CreateRunRequest = {
       game: options.game.trim(),
@@ -173,11 +247,12 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
       summary,
       // Capture formats expose whether a frame was generated, but not which
       // vendor technology produced it. Preserve that distinction explicitly.
-      generatedFrameTech:
-        summary.generatedFramePct > 0
-          ? GENERATED_FRAME_TECH.unknown
-          : GENERATED_FRAME_TECH.none,
+      generatedFrameTech,
       parquetByteLength: parquet.byteLength,
+      capabilityManifest,
+      ...(methodologyManifest === undefined ? {} : { methodologyManifest }),
+      ...(benchmarkSetId === undefined ? {} : { benchmarkSetId, benchmarkSetSecret }),
+      isWarmup: benchmarkSetId === undefined ? false : (options.isWarmup ?? false),
       schemaVersion: CURRENT_SCHEMA_VERSION,
       parserVersion,
     };

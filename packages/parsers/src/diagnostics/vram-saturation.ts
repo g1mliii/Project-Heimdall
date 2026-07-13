@@ -14,6 +14,7 @@ import type { DiagnosticRule } from "./types";
 
 export const vramSaturationRule: DiagnosticRule = {
   code: "vram-saturation-stutter",
+  version: "1.0.0",
   requiredSensors: ["vramUsedMb"],
   evaluate({ input, frameCount }) {
     const totalMb = input.hardware.gpuVramTotalMb;

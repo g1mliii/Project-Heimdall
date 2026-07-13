@@ -27,6 +27,8 @@ const FIXTURES = path.resolve(
   import.meta.dirname,
   "../../../../../packages/parsers/fixtures",
 );
+const BENCHMARK_SET_ID = "57ba4bd4-8b3e-4a2b-a0d0-92fb48367d5d";
+const BENCHMARK_SET_SECRET = "a".repeat(43);
 
 function fixtureFile(relative: string): File {
   const bytes = readFileSync(path.join(FIXTURES, relative));
@@ -43,6 +45,24 @@ function generatedPresentMonFile(): File {
     );
   }
   return new File([lines.join("\n")], "presentmon-generated.csv");
+}
+
+function vsyncPresentMonFile(): File {
+  const [header, ...rows] = readFileSync(path.join(FIXTURES, "presentmon/v2-basic.csv"), "utf8")
+    .trim()
+    .split("\n");
+  const columns = header!.split(",");
+  const syncInterval = columns.indexOf("SyncInterval");
+  const allowsTearing = columns.indexOf("AllowsTearing");
+  if (syncInterval < 0 || allowsTearing < 0) throw new Error("v2 fixture is missing PresentMon sync columns");
+
+  const vsyncRows = rows.map((row) => {
+    const values = row.split(",");
+    values[syncInterval] = "1";
+    values[allowsTearing] = "0";
+    return values.join(",");
+  });
+  return new File([[header, ...vsyncRows].join("\n")], "presentmon-vsync.csv");
 }
 
 interface TransportLog {
@@ -148,6 +168,10 @@ describe("uploadCapture engine", () => {
     expect(createBody.game).toBe("Cyberpunk 2077");
     expect(createBody.parquetByteLength).toBe(log.putBytes!.byteLength);
     expect(createBody.summary).toEqual(result.summary);
+    expect(createBody.capabilityManifest?.sensors.gpuLoadPct).toEqual({
+      present: true,
+      frameAligned: true,
+    });
 
     // Raw file never transits the API: the PUT carries Parquet, not CSV.
     expect(log.putUrl).toBe("https://r2.example.test/put");
@@ -163,6 +187,87 @@ describe("uploadCapture engine", () => {
       await hashManagementToken(result.managementToken),
     );
     expect(JSON.stringify(log.finalizeBody)).not.toContain(result.managementToken);
+  });
+
+  it("sends parser-derived capability semantics and normalized methodology metadata (§16a/§16c)", async () => {
+    const log: TransportLog = {};
+    const result = await uploadCapture(fixtureFile("presentmon/v2-basic.csv"), {
+      game: "Test Game",
+      visibility: "unlisted",
+      hardware: { resolution: "2560x1440" },
+      methodology: {
+        sceneType: "benchmark-scene",
+        upscaler: "none",
+        rayTracing: "off",
+        framePacing: { vsync: false, vrr: true },
+        hags: "unknown",
+      },
+      benchmarkSetId: BENCHMARK_SET_ID,
+      benchmarkSetSecret: BENCHMARK_SET_SECRET,
+      isWarmup: true,
+      transport: mockTransport(log),
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    const createBody = createRunRequestSchema.parse(log.createBody);
+    expect(createBody.capabilityManifest).toMatchObject({
+      source: "presentmon",
+      presentationMode: "hardware-independent-flip",
+      syncMode: "tearing",
+    });
+    expect(createBody.methodologyManifest).toMatchObject({
+      resolution: "2560x1440",
+      graphicsApi: "dxgi",
+      captureProfile: "presentmon-2.x",
+      frameGeneration: "none",
+      hags: "unknown",
+    });
+    expect(createBody).toMatchObject({
+      benchmarkSetId: BENCHMARK_SET_ID,
+      benchmarkSetSecret: BENCHMARK_SET_SECRET,
+      isWarmup: true,
+    });
+  });
+
+  it("keeps a declared resolution when PresentMon has no hardware inventory", async () => {
+    const log: TransportLog = {};
+    const result = await uploadCapture(fixtureFile("presentmon/v2-basic.csv"), {
+      game: "Test Game",
+      visibility: "unlisted",
+      methodology: {
+        sceneType: "benchmark-scene",
+        resolution: "2560x1440",
+        upscaler: "none",
+        rayTracing: "off",
+        framePacing: { vsync: false, vrr: false },
+      },
+      transport: mockTransport(log),
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(createRunRequestSchema.parse(log.createBody).methodologyManifest?.resolution).toBe(
+      "2560x1440",
+    );
+  });
+
+  it("uses PresentMon's detected VSync state over a stale declaration", async () => {
+    const log: TransportLog = {};
+    const result = await uploadCapture(vsyncPresentMonFile(), {
+      game: "Test Game",
+      visibility: "unlisted",
+      methodology: {
+        sceneType: "benchmark-scene",
+        upscaler: "none",
+        rayTracing: "off",
+        framePacing: { vsync: false, vrr: false },
+      },
+      transport: mockTransport(log),
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    const body = createRunRequestSchema.parse(log.createBody);
+    expect(body.capabilityManifest?.syncMode).toBe("vsync");
+    expect(body.methodologyManifest?.framePacing.vsync).toBe(true);
   });
 
   it("round trip: the uploaded parquet recomputes to the exact client summary (§11.5 basis)", async () => {

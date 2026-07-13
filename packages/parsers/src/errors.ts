@@ -5,7 +5,24 @@
  * ever throws on malformed input.
  */
 
-import type { CaptureSource, FrameSample, HardwareSnapshot } from "@heimdall/shared";
+import type {
+  CaptureSource,
+  FrameSample,
+  HardwareSnapshot,
+  PresentationMode,
+  SyncMode,
+} from "@heimdall/shared";
+
+/**
+ * Capture semantics a source can reveal from its headers but the merged frame
+ * stream cannot (§16a.3) — fed into the capability manifest as declared values.
+ */
+export interface CaptureSemantics {
+  presentationMode?: PresentationMode;
+  syncMode?: SyncMode;
+  /** Graphics runtime recorded by a source header, e.g. `dxgi` or `vulkan`. */
+  graphicsApi?: string;
+}
 
 /** The common output shape every source parser produces. */
 export interface ParsedCapture {
@@ -14,6 +31,10 @@ export interface ParsedCapture {
   frames: FrameSample[];
   /** Only when gpu+cpu are recoverable (CapFrameX JSON, MangoHud). */
   hardware?: HardwareSnapshot;
+  /** Detected presentation/sync semantics (PresentMon v2+); absent otherwise. */
+  captureSemantics?: CaptureSemantics;
+  /** Pinned parser-recognized capture profile, e.g. `presentmon-2.x`. */
+  captureProfile?: string;
   /** e.g. `"capframex@1.0.0"` — stored for reprocessing provenance (§2.2). */
   parserVersion: string;
 }

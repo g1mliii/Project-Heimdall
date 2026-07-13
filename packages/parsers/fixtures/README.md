@@ -58,14 +58,27 @@ completes the §7.3 spike for that cell. Wanted, in priority order:
    confirmed column name exists yet, so the `generated` flag is never set and
    `generatedFramePct` is always 0 — verifying this needs a real export.
 
-### Drop-in guide
+### Provenance-flip procedure (canonical — 16a.1)
 
-1. Anonymize if needed (the `Application`/process columns and hardware strings
-   are the only identifying fields).
-2. Put the file under its source directory; add a `*.expected.json` next to it
-   (run the parser + `computeRunSummary`, then **verify the numbers by hand**
-   before committing them as golden).
-3. Update the provenance table above and flip the matching
-   `SENSOR_AVAILABILITY` cell to `verified-real`.
-4. `golden.test.ts` picks the file up automatically — a parseable fixture
-   without an expected file fails the suite.
+Flipping a `SENSOR_AVAILABILITY` cell from `synthetic` to `verified-real` is a
+single, self-contained PR that lands the export and its proof together. The
+flip-honesty test (`sensor-availability.test.ts`) **fails** if a cell claims
+`verified-real` without a matching golden fixture on disk, so these steps are
+not optional bookkeeping — they are enforced.
+
+1. **Anonymize.** The `Application`/process columns and hardware strings are the
+   only identifying fields; scrub anything else machine-specific.
+2. **Drop the fixture.** Put the file under its source directory and add a
+   colocated `*.expected.json` (run the parser + `computeRunSummary`, then
+   **verify the numbers by hand** before committing them as golden).
+   `golden.test.ts` picks it up automatically — a parseable fixture without an
+   expected file fails the suite.
+3. **Flip the cell.** Replace the cell's `cell(...)` with `verifiedCell(...)`,
+   passing a `SensorMatrixCellEvidence` that records the real export's `source`,
+   `gpuVendor`, `driver`, `toolVersion`, verbatim `headers`, per-field `units`
+   and `frameAligned` flags, and the repo-relative `fixture` path from step 2.
+4. **Update the provenance table** above so the human-readable matrix matches.
+
+The launch-wedge priority is the **CapFrameX CSV — NVIDIA** cell (item 1 of the
+wanted-list); PresentMon and MangoHud get their live-client confirmation in
+Phase 9 §22.

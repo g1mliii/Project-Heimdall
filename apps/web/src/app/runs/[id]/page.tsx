@@ -9,7 +9,7 @@ import { cache } from "react";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import { RUN_VISIBILITY } from "@heimdall/shared";
-import { readVisibleRun } from "@/lib/repo/runs";
+import { readVisibleBenchmarkSet, readVisibleRun } from "@/lib/repo/runs";
 import { RunPageClient } from "@/components/run/RunPageClient";
 
 export const runtime = "nodejs";
@@ -39,5 +39,6 @@ export default async function RunPage({ params }: RunPageProps) {
   const { id } = await params;
   const run = await getVisibleRun(id);
   if (!run) notFound();
-  return <RunPageClient run={run} />;
+  const benchmarkSet = await readVisibleBenchmarkSet(run);
+  return <RunPageClient run={run} benchmarkSet={benchmarkSet} />;
 }

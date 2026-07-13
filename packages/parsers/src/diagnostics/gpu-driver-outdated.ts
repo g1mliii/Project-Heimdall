@@ -46,6 +46,7 @@ export function compareDriverVersions(a: string, b: string): number {
 
 export const gpuDriverOutdatedRule: DiagnosticRule = {
   code: "gpu-driver-outdated",
+  version: "1.0.0",
   requiredSensors: [],
   evaluate({ input }) {
     const driver = input.hardware.gpuDriver;

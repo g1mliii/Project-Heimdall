@@ -51,6 +51,7 @@ export function DiagnosticsCard({
           ) : (
             diagnostics.map((diagnostic) => (
               <Diagnostic key={diagnostic.id} severity={diagnostic.severity} title={diagnostic.title}>
+                {diagnostic.confidence ? `${diagnostic.confidence} confidence — ` : ""}
                 {diagnostic.detail}
               </Diagnostic>
             ))

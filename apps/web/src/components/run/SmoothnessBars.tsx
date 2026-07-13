@@ -9,13 +9,8 @@
 
 import { Badge, Meter } from "@heimdall/ui";
 import { POINT_ONE_PERCENT_LOW_CONFIDENCE_FRAMES } from "@heimdall/shared";
-import type { ConfidenceLevel, RunSummary } from "@heimdall/shared";
-
-const CONFIDENCE_TONE: Record<ConfidenceLevel, "warn" | "info" | "good"> = {
-  low: "warn",
-  medium: "info",
-  high: "good",
-};
+import type { RunSummary } from "@heimdall/shared";
+import { CONFIDENCE_TONE } from "./confidence";
 
 function confidenceTitle(summary: RunSummary): string {
   const { high } = POINT_ONE_PERCENT_LOW_CONFIDENCE_FRAMES;
