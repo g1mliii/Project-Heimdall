@@ -248,6 +248,9 @@ export const createRunRequestSchema = z
     capabilityManifest: capabilityManifestSchema.optional(),
     /** Declared reproducible methodology (§16c.1), optional. Quasi-identifying. */
     methodologyManifest: methodologyManifestSchema.optional(),
+    /** Optional repeatable-run group; a warm-up must belong to one (§16c.2). */
+    benchmarkSetId: metadataTextSchema.optional(),
+    isWarmup: z.boolean().default(false),
     ...provenance,
   })
   .refine(
@@ -257,6 +260,13 @@ export const createRunRequestSchema = z
     {
       path: ["summary", "sampleCount"],
       message: `sampleCount must be between ${INGEST_LIMITS.minFramesPerRun} and ${INGEST_LIMITS.maxFramesPerRun}`,
+    },
+  )
+  .refine(
+    (req) => !req.isWarmup || req.benchmarkSetId !== undefined,
+    {
+      path: ["isWarmup"],
+      message: "a warm-up run must name its benchmark set",
     },
   );
 export type CreateRunRequest = z.infer<typeof createRunRequestSchema>;
@@ -335,6 +345,8 @@ export const runResponseSchema = z.object({
   signatureValid: z.boolean().optional(),
   capabilityManifest: capabilityManifestSchema.optional(),
   methodologyManifest: methodologyManifestSchema.optional(),
+  benchmarkSetId: metadataTextSchema.optional(),
+  isWarmup: z.boolean().optional(),
 });
 export type RunResponse = z.infer<typeof runResponseSchema>;
 

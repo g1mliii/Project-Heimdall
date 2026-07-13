@@ -157,6 +157,19 @@ describe("DTO round-trip stability (§3.2)", () => {
     ).toBe(false);
   });
 
+  it("requires a benchmark-set label for an intentional warm-up", () => {
+    expect(
+      createRunRequestSchema.safeParse({ ...validCreateRunRequest, isWarmup: true }).success,
+    ).toBe(false);
+    expect(
+      createRunRequestSchema.safeParse({
+        ...validCreateRunRequest,
+        benchmarkSetId: "dogtown-ultra-1440p",
+        isWarmup: true,
+      }).success,
+    ).toBe(true);
+  });
+
   it("round-trips a generated spread of summaries (property-style)", () => {
     // Lightweight generative property check without pulling in a PBT dependency:
     // a deterministic LCG drives the inputs, so failures reproduce exactly.

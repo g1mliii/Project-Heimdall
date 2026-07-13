@@ -289,6 +289,13 @@ export interface Run {
    * drives the Phase 7 comparability key. Quasi-identifying (privacy §5).
    */
   methodologyManifest?: MethodologyManifest;
+  /**
+   * Optional repeatable-run group (§16c.2). Raw members remain individually
+   * addressable; this only associates them for variance calculations.
+   */
+  benchmarkSetId?: string;
+  /** True only for an intentionally retained warm-up pass (§16c.2). */
+  isWarmup?: boolean;
 }
 
 /** Severity of an auto-diagnostic, matching the `Diagnostic` UI primitive. */

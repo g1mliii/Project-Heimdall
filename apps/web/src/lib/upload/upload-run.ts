@@ -86,6 +86,9 @@ export interface UploadOptions {
   hardware?: Partial<HardwareSnapshot>;
   /** Optional declared setup details for reproducibility/comparability (§16c). */
   methodology?: Omit<MethodologyManifest, "version" | "resolution" | "frameGeneration">;
+  /** Optional repeatable-run group; warm-ups are retained but excluded from its stats. */
+  benchmarkSetId?: string;
+  isWarmup?: boolean;
   onProgress?: (progress: UploadProgress) => void;
   transport?: UploadTransport;
 }
@@ -205,6 +208,7 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
             ...(hardware.gpuDriver === undefined ? {} : { gpuDriver: hardware.gpuDriver }),
             captureDurationSeconds: summary.durationSeconds,
           };
+    const benchmarkSetId = options.benchmarkSetId?.trim();
 
     emit({ stage: "creating" });
     const createRequest: CreateRunRequest = {
@@ -219,6 +223,8 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
       parquetByteLength: parquet.byteLength,
       capabilityManifest,
       ...(methodologyManifest === undefined ? {} : { methodologyManifest }),
+      ...(benchmarkSetId === undefined || benchmarkSetId === "" ? {} : { benchmarkSetId }),
+      isWarmup: benchmarkSetId === undefined || benchmarkSetId === "" ? false : (options.isWarmup ?? false),
       schemaVersion: CURRENT_SCHEMA_VERSION,
       parserVersion,
     };

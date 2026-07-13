@@ -182,6 +182,8 @@ describe("uploadCapture engine", () => {
         framePacing: { vsync: false, vrr: true },
         hags: "unknown",
       },
+      benchmarkSetId: "dogtown-ultra-1440p",
+      isWarmup: true,
       transport: mockTransport(log),
     });
 
@@ -198,6 +200,10 @@ describe("uploadCapture engine", () => {
       captureProfile: "presentmon-2.x",
       frameGeneration: "none",
       hags: "unknown",
+    });
+    expect(createBody).toMatchObject({
+      benchmarkSetId: "dogtown-ultra-1440p",
+      isWarmup: true,
     });
   });
 

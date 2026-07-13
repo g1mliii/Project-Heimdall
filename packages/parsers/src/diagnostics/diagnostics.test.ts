@@ -259,6 +259,29 @@ describe("runDiagnostics — confidence-graded bottleneck attribution (§16b / 1
     expect(findings[0]!.severity).toBe("info");
   });
 
+  it("keeps HAGS-caveated GPU timing informational, never a hard integrity finding", () => {
+    const frames = busyFrames(60, () => ({ cpuBusyMs: 5, gpuBusyMs: 12 }));
+    const finding = runDiagnostics(inputFor(frames)).find((item) => item.code === "likely-gpu-bound");
+    expect(finding).toMatchObject({ severity: "info", confidence: "high" });
+    expect(finding?.evidence?.caveats).toEqual(
+      expect.arrayContaining([expect.stringContaining("HAGS")]),
+    );
+    expect(finding?.severity).not.toBe("bad");
+  });
+
+  it("does not treat unified-memory capacity as dedicated-VRAM saturation", () => {
+    const frames = framesWithStutters(30, [7, 14, 21], () => ({ vramUsedMb: 11_900 }));
+    const capabilityManifest = deriveCapabilityManifest(frames, "capframex", baseHardware);
+    capabilityManifest.vramCapacity = { state: "unified-memory" };
+    const findings = runDiagnostics(
+      inputFor(frames, {
+        hardware: { ...baseHardware, gpuVramTotalMb: undefined },
+        capabilityManifest,
+      }),
+    );
+    expect(findings.map((finding) => finding.code)).not.toContain("vram-saturation-stutter");
+  });
+
   it("adds NO new finding when the run lacks busy/wait sensors (regression invariant)", () => {
     // frameTimeMs only — no cpuBusyMs/gpuBusyMs columns → every attribution rule
     // is gated out, exactly as Phase 6 behaved.

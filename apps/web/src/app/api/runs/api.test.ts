@@ -162,6 +162,23 @@ describe.skipIf(!canRun)("ingest API routes (§11)", () => {
     expect(rows.rows[0]?.generated_frame_tech).toBe(GENERATED_FRAME_TECH.unknown);
   });
 
+  it("POST /api/runs: retains benchmark-set membership and an intentional warm-up", async () => {
+    const response = await createRun(
+      jsonRequest("http://test/api/runs", "POST", {
+        ...validCreateRunRequest,
+        benchmarkSetId: "dogtown-ultra-1440p",
+        isWarmup: true,
+      }),
+    );
+    expect(response.status).toBe(201);
+    const { id } = (await response.json()) as { id: string };
+    const rows = await db.pool.query(
+      "select benchmark_set_id, is_warmup from runs where id = $1",
+      [id],
+    );
+    expect(rows.rows[0]).toEqual({ benchmark_set_id: "dogtown-ultra-1440p", is_warmup: true });
+  });
+
   it("POST /api/runs: rejects malformed payloads with 400 BEFORE presigning (12.1, §11.10)", async () => {
     vi.mocked(r2.presignPut).mockClear();
     for (const [name, payload] of Object.entries(malformedCreateRequests)) {

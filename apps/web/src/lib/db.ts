@@ -115,6 +115,8 @@ interface RunRow extends pg.QueryResultRow {
   frames_object_key: string | null;
   capability_manifest: CapabilityManifest | null;
   settings_json: MethodologyManifest | null;
+  benchmark_set_id: string | null;
+  is_warmup: boolean;
   schema_version: number;
   parser_version: string;
   created_at: Date;
@@ -137,6 +139,7 @@ const RUN_WITH_SUMMARY_SELECT = `select r.id, r.user_id, r.game_raw, r.gpu_hardw
         r.cpu_model, r.gpu_model, r.gpu_vendor, r.gpu_driver, r.gpu_vram_total_mb,
         r.ram_gb, r.ram_rated_mtps, r.ram_actual_mtps, r.os_build, r.resolution,
         r.generated_frame_tech, r.frames_object_key, r.capability_manifest, r.settings_json,
+        r.benchmark_set_id, r.is_warmup,
         r.schema_version, r.parser_version, r.created_at,
         s.avg_fps, s.p1_low_fps, s.p01_low_fps,
         s.frametime_p50_ms, s.frametime_p95_ms, s.frametime_p99_ms,
@@ -192,6 +195,8 @@ function rowToRun(row: RunRow, diagnostics: Diagnostic[]): Run {
     capabilityManifest: row.capability_manifest ?? undefined,
     // settings_json holds the declared methodology manifest (§16c.1).
     methodologyManifest: row.settings_json ?? undefined,
+    ...(row.benchmark_set_id === null ? {} : { benchmarkSetId: row.benchmark_set_id }),
+    ...(row.is_warmup ? { isWarmup: true } : {}),
   };
 }
 
@@ -346,12 +351,13 @@ export async function insertRun(run: Run, db: Queryable = getPool()): Promise<vo
          schema_version, parser_version, created_at, gpu_vram_total_mb,
          capability_manifest, capability_manifest_version,
          settings_json, methodology_manifest_version,
-         upscaler, ray_tracing, frame_pacing_cap, vsync, vrr, scene_type
+         upscaler, ray_tracing, frame_pacing_cap, vsync, vrr, scene_type,
+         benchmark_set_id, is_warmup
        ) values (
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
          $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
          $36::jsonb, $37,
-         $38::jsonb, $39, $40, $41, $42, $43, $44, $45
+         $38::jsonb, $39, $40, $41, $42, $43, $44, $45, $46, $47
        )
      )
      insert into run_summaries (
@@ -384,6 +390,8 @@ export async function insertRun(run: Run, db: Queryable = getPool()): Promise<vo
       methodologyManifest?.framePacing.vsync ?? null,
       methodologyManifest?.framePacing.vrr ?? null,
       methodologyManifest?.sceneType ?? null,
+      run.benchmarkSetId ?? null,
+      run.isWarmup ?? false,
     ],
   );
 }

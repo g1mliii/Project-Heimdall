@@ -141,6 +141,8 @@ export function UploadClient() {
   const [refreshHz, setRefreshHz] = React.useState("");
   const [captureTool, setCaptureTool] = React.useState("");
   const [warmupPolicy, setWarmupPolicy] = React.useState("");
+  const [benchmarkSetId, setBenchmarkSetId] = React.useState("");
+  const [isWarmup, setIsWarmup] = React.useState(false);
   const [hags, setHags] = React.useState<NonNullable<MethodologyManifest["hags"]>>("unknown");
   const [dragOver, setDragOver] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
@@ -174,13 +176,20 @@ export function UploadClient() {
     };
   }
 
+  function declaredBenchmarkSet(): Pick<UploadOptions, "benchmarkSetId" | "isWarmup"> {
+    const id = benchmarkSetId.trim();
+    return id === "" ? {} : { benchmarkSetId: id, isWarmup };
+  }
+
   async function startSingle(file: File) {
     setMode({ kind: "single", fileName: file.name, progress: { stage: "parsing" } });
     const methodology = declaredMethodology();
+    const benchmarkSet = declaredBenchmarkSet();
     const result: UploadResult = await uploadCapture(file, {
       game,
       visibility,
       ...(methodology === undefined ? {} : { methodology }),
+      ...benchmarkSet,
       onProgress: (progress) =>
         setMode((prev) =>
           prev.kind === "single" ? { ...prev, progress } : prev,
@@ -202,6 +211,7 @@ export function UploadClient() {
     };
 
     const methodology = declaredMethodology();
+    const benchmarkSet = declaredBenchmarkSet();
     const queue = files.map((_, index) => index);
     await Promise.all(
       Array.from({ length: Math.min(BATCH_CONCURRENCY, queue.length) }, async () => {
@@ -211,6 +221,7 @@ export function UploadClient() {
             game,
             visibility,
             ...(methodology === undefined ? {} : { methodology }),
+            ...benchmarkSet,
           });
           if (result.ok) {
             update(index, {
@@ -404,6 +415,14 @@ export function UploadClient() {
                 onChange={(event) => setWarmupPolicy(event.target.value)}
                 disabled={busy}
               />
+              <Input
+                label="Benchmark set"
+                hint="Use the same label for each repeat of this benchmark."
+                placeholder="dogtown-ultra-1440p"
+                value={benchmarkSetId}
+                onChange={(event) => setBenchmarkSetId(event.target.value)}
+                disabled={busy}
+              />
               <Select
                 label="HAGS state"
                 value={hags}
@@ -427,6 +446,12 @@ export function UploadClient() {
                   onChange={(event) => setVrr(event.target.checked)}
                   label="VRR enabled"
                   disabled={busy}
+                />
+                <Switch
+                  checked={isWarmup}
+                  onChange={(event) => setIsWarmup(event.target.checked)}
+                  label="Warm-up pass"
+                  disabled={busy || benchmarkSetId.trim() === ""}
                 />
               </div>
             </div>

@@ -53,6 +53,8 @@ export async function POST(request: Request): Promise<NextResponse> {
       ...(body.capabilityManifest ? { capabilityManifest: body.capabilityManifest } : {}),
       // Declared methodology (§16c.1) — drives the Phase 7 comparability key.
       ...(body.methodologyManifest ? { methodologyManifest: body.methodologyManifest } : {}),
+      ...(body.benchmarkSetId ? { benchmarkSetId: body.benchmarkSetId } : {}),
+      ...(body.isWarmup ? { isWarmup: true } : {}),
       // framesObjectKey stays unset until finalize proves the object exists.
     };
     await insertRun(run);

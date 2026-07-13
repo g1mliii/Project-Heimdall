@@ -455,12 +455,15 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       generatedFrameTech: "dlss3" as const,
       capabilityManifest,
       methodologyManifest,
+      benchmarkSetId: "dogtown-ultra-1440p",
+      isWarmup: true,
     };
     await insertRun(run, pool);
 
     const readBack = await readRun(run.id, pool);
     expect(readBack?.capabilityManifest).toEqual(capabilityManifest);
     expect(readBack?.methodologyManifest).toEqual(methodologyManifest);
+    expect(readBack).toMatchObject({ benchmarkSetId: "dogtown-ultra-1440p", isWarmup: true });
 
     // The queryable comparability columns mirror the manifest (§16c.3).
     const { rows } = await pool.query<{
@@ -470,9 +473,10 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       vsync: boolean;
       vrr: boolean;
       scene_type: string;
+      benchmark_set_id: string;
       is_warmup: boolean;
     }>(
-      `select upscaler, ray_tracing, frame_pacing_cap, vsync, vrr, scene_type, is_warmup
+      `select upscaler, ray_tracing, frame_pacing_cap, vsync, vrr, scene_type, benchmark_set_id, is_warmup
          from runs where id = $1`,
       [run.id],
     );
@@ -483,7 +487,8 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       vsync: true,
       vrr: false,
       scene_type: "benchmark-scene",
-      is_warmup: false, // defaulted, never written by insertRun
+      benchmark_set_id: "dogtown-ultra-1440p",
+      is_warmup: true,
     });
   });
 
