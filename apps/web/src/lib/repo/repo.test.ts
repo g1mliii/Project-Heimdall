@@ -508,6 +508,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
         visibility,
         status,
         summary: { ...validRun.summary, avgFps },
+        framesObjectKey: `runs/${id}.parquet`,
         benchmarkSetId: setId,
         ...(isWarmup ? { isWarmup: true } : {}),
         methodologyManifest: {
