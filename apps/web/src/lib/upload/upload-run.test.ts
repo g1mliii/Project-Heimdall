@@ -47,6 +47,24 @@ function generatedPresentMonFile(): File {
   return new File([lines.join("\n")], "presentmon-generated.csv");
 }
 
+function vsyncPresentMonFile(): File {
+  const [header, ...rows] = readFileSync(path.join(FIXTURES, "presentmon/v2-basic.csv"), "utf8")
+    .trim()
+    .split("\n");
+  const columns = header!.split(",");
+  const syncInterval = columns.indexOf("SyncInterval");
+  const allowsTearing = columns.indexOf("AllowsTearing");
+  if (syncInterval < 0 || allowsTearing < 0) throw new Error("v2 fixture is missing PresentMon sync columns");
+
+  const vsyncRows = rows.map((row) => {
+    const values = row.split(",");
+    values[syncInterval] = "1";
+    values[allowsTearing] = "0";
+    return values.join(",");
+  });
+  return new File([[header, ...vsyncRows].join("\n")], "presentmon-vsync.csv");
+}
+
 interface TransportLog {
   createBody?: unknown;
   finalizeBody?: unknown;
@@ -209,6 +227,47 @@ describe("uploadCapture engine", () => {
       benchmarkSetSecret: BENCHMARK_SET_SECRET,
       isWarmup: true,
     });
+  });
+
+  it("keeps a declared resolution when PresentMon has no hardware inventory", async () => {
+    const log: TransportLog = {};
+    const result = await uploadCapture(fixtureFile("presentmon/v2-basic.csv"), {
+      game: "Test Game",
+      visibility: "unlisted",
+      methodology: {
+        sceneType: "benchmark-scene",
+        resolution: "2560x1440",
+        upscaler: "none",
+        rayTracing: "off",
+        framePacing: { vsync: false, vrr: false },
+      },
+      transport: mockTransport(log),
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(createRunRequestSchema.parse(log.createBody).methodologyManifest?.resolution).toBe(
+      "2560x1440",
+    );
+  });
+
+  it("uses PresentMon's detected VSync state over a stale declaration", async () => {
+    const log: TransportLog = {};
+    const result = await uploadCapture(vsyncPresentMonFile(), {
+      game: "Test Game",
+      visibility: "unlisted",
+      methodology: {
+        sceneType: "benchmark-scene",
+        upscaler: "none",
+        rayTracing: "off",
+        framePacing: { vsync: false, vrr: false },
+      },
+      transport: mockTransport(log),
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    const body = createRunRequestSchema.parse(log.createBody);
+    expect(body.capabilityManifest?.syncMode).toBe("vsync");
+    expect(body.methodologyManifest?.framePacing.vsync).toBe(true);
   });
 
   it("round trip: the uploaded parquet recomputes to the exact client summary (§11.5 basis)", async () => {

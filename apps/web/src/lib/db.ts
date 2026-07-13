@@ -395,12 +395,12 @@ export async function insertRun(
          capability_manifest, capability_manifest_version,
          settings_json, methodology_manifest_version,
          upscaler, ray_tracing, frame_pacing_cap, vsync, vrr, scene_type,
-         benchmark_set_id, is_warmup, graphics_api
+         benchmark_set_id, is_warmup, graphics_api, scene, settings_preset
        ) select
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
          $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
          $36::jsonb, $37,
-         $38::jsonb, $39, $40, $41, $42, $43, $44, $45, $46, $47, $49
+         $38::jsonb, $39, $40, $41, $42, $43, $44, $45, $46, $47, $49, $50, $51
        where $46::text is null or exists (select 1 from benchmark_set)
        returning id
      )
@@ -440,6 +440,8 @@ export async function insertRun(
       run.isWarmup ?? false,
       benchmarkSetSecretHash ?? null,
       methodologyManifest?.graphicsApi ?? null,
+      methodologyManifest?.scene ?? null,
+      methodologyManifest?.settingsPreset ?? null,
     ],
     db,
   );

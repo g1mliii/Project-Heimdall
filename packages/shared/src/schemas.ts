@@ -208,9 +208,9 @@ export const framePacingSchema = z.object({
 export const methodologyManifestSchema = z.object({
   version: z.number().int().positive().default(METHODOLOGY_MANIFEST_VERSION),
   gameBuild: metadataTextSchema.optional(),
-  scene: metadataTextSchema.optional(),
+  scene: indexedMetadataTextSchema.optional(),
   sceneType: sceneTypeSchema,
-  settingsPreset: metadataTextSchema.optional(),
+  settingsPreset: indexedMetadataTextSchema.optional(),
   graphicsApi: indexedMetadataTextSchema.optional(),
   resolution: indexedMetadataTextSchema.optional(),
   upscaler: upscalerModeSchema,

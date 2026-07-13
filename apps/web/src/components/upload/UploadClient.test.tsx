@@ -57,4 +57,21 @@ describe("UploadClient reproducibility details", () => {
     expect(screen.getByText("Frame cap must be a positive whole number.")).toBeInTheDocument();
     expect(uploadCapture).not.toHaveBeenCalled();
   });
+
+  it("sends a declared resolution for captures without a hardware inventory", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<UploadClient />);
+
+    await user.type(screen.getByLabelText("Game"), "Test Game");
+    await user.click(screen.getByRole("switch", { name: "Include" }));
+    await user.type(screen.getByLabelText("Resolution"), "2560x1440");
+
+    const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(fileInput).not.toBeNull();
+    await user.upload(fileInput!, new File(["capture"], "capture.csv", { type: "text/csv" }));
+
+    await waitFor(() => expect(uploadCapture).toHaveBeenCalledTimes(1));
+    const [, options] = uploadCapture.mock.calls[0]!;
+    expect(options.methodology).toMatchObject({ resolution: "2560x1440" });
+  });
 });

@@ -486,6 +486,15 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
     it("pools only the same scoped public profile and never leaks private members", async () => {
       const benchmarkSetId = "3d9fb878-cb0d-4cc8-9ac8-e9ec97ea977a";
       const benchmarkSetSecretHash = tokenHashFor("benchmark-set-repeatability");
+      const gameId = await resolveGameId("capframex", validRun.game, db.pool);
+      const gpuId = await resolveHardwareId(
+        "gpu",
+        "capframex",
+        validRun.hardware.gpu,
+        validRun.hardware.gpuVendor ?? null,
+        db.pool,
+      );
+      if (!gameId || !gpuId) throw new Error("expected canonical benchmark fixture ids");
       const makeSetRun = (
         id: string,
         avgFps: number,
@@ -495,6 +504,8 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
           status = RUN_STATUS.validated,
           vsync = false,
           graphicsApi = "dx12",
+          scene = "Dogtown route",
+          settingsPreset = "Ultra",
           setId = benchmarkSetId,
         }: {
           isWarmup?: boolean;
@@ -502,6 +513,8 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
           status?: Run["status"];
           vsync?: boolean;
           graphicsApi?: string;
+          scene?: string;
+          settingsPreset?: string;
           setId?: string;
         } = {},
       ): Run => ({
@@ -512,10 +525,13 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
         summary: { ...validRun.summary, avgFps },
         framesObjectKey: `runs/${id}.parquet`,
         benchmarkSetId: setId,
+        hardware: { ...validRun.hardware, canonicalGpuId: gpuId },
         ...(isWarmup ? { isWarmup: true } : {}),
         methodologyManifest: {
           version: 1,
           sceneType: "benchmark-scene",
+          scene,
+          settingsPreset,
           resolution: "2560x1440",
           upscaler: "none",
           rayTracing: "off",
@@ -538,6 +554,12 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
         insertRun(makeSetRun("run_set_other_api", 40, { graphicsApi: "vulkan" }), db.pool, {
           benchmarkSetSecretHash,
         }),
+        insertRun(makeSetRun("run_set_other_scene", 40, { scene: "Different route" }), db.pool, {
+          benchmarkSetSecretHash,
+        }),
+        insertRun(makeSetRun("run_set_other_preset", 40, { settingsPreset: "Low" }), db.pool, {
+          benchmarkSetSecretHash,
+        }),
         insertRun(makeSetRun("run_set_private", 40, { visibility: RUN_VISIBILITY.private }), db.pool, {
           benchmarkSetSecretHash,
         }),
@@ -558,6 +580,10 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
           { benchmarkSetSecretHash: tokenHashFor("same-display-label-other-browser") },
         ),
       ]);
+      await db.pool.query("update runs set game_id = $1 where benchmark_set_id = $2", [
+        gameId,
+        benchmarkSetId,
+      ]);
 
       const summary = await readVisibleBenchmarkSet(primary, db.pool);
       expect(summary).toMatchObject({
@@ -568,6 +594,16 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       });
       expect(summary?.stdDevAvgFps).toBeCloseTo(0.5, 8);
       expect(summary?.coefficientOfVariation).toBeCloseTo(0.5 / 100.5, 8);
+
+      await db.pool.query("update runs set game_id = null, gpu_hardware_id = null where id = $1", [
+        primary.id,
+      ]);
+      expect(await readVisibleBenchmarkSet(primary, db.pool)).toBeNull();
+      await db.pool.query("update runs set game_id = $1, gpu_hardware_id = $2 where id = $3", [
+        gameId,
+        gpuId,
+        primary.id,
+      ]);
 
       // Direct-link visibility alone is insufficient for cross-run data. Until
       // Phase 8 adds owner authorization, an unlisted source run gets no set
@@ -585,6 +621,14 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       };
       await insertRun(profileless, db.pool, { benchmarkSetSecretHash });
       expect(await readVisibleBenchmarkSet(profileless, db.pool)).toBeNull();
+
+      const routeUndeclared = makeSetRun("run_set_route_undeclared", 100);
+      routeUndeclared.methodologyManifest = {
+        ...routeUndeclared.methodologyManifest!,
+        scene: undefined,
+      };
+      await insertRun(routeUndeclared, db.pool, { benchmarkSetSecretHash });
+      expect(await readVisibleBenchmarkSet(routeUndeclared, db.pool)).toBeNull();
     });
   });
 

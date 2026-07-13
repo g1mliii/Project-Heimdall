@@ -95,13 +95,16 @@ export async function readVisibleBenchmarkSet(
 
   const rows = await query<BenchmarkSetAggregateRow>(
     `with base as (
-       select game_id, gpu_hardware_id, resolution, upscaler, ray_tracing,
-              generated_frame_tech, graphics_api, frame_pacing_cap, vsync, vrr, scene_type
+       select game_id, gpu_hardware_id, resolution, scene, settings_preset,
+              upscaler, ray_tracing, generated_frame_tech, graphics_api,
+              frame_pacing_cap, vsync, vrr, scene_type
          from runs base
         where base.id = $2
           and base.benchmark_set_id = $1
           and ${aggregateEligibilitySql("base")}
           and ${comparabilityProfileSql("base")}
+          and base.game_id is not null
+          and base.gpu_hardware_id is not null
      )
      select count(*) filter (where not r.is_warmup) as sample_count,
             count(*) filter (where r.is_warmup) as warmup_run_count,
@@ -114,7 +117,9 @@ export async function readVisibleBenchmarkSet(
          and ${comparabilityMatchSql("r", "base")}
        join run_summaries s on s.run_id = r.id
       where ${aggregateEligibilitySql("r")}
-        and ${comparabilityProfileSql("r")}`,
+        and ${comparabilityProfileSql("r")}
+        and r.game_id is not null
+        and r.gpu_hardware_id is not null`,
     [run.benchmarkSetId, run.id],
     db,
   );

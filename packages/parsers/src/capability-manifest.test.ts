@@ -70,6 +70,35 @@ describe("deriveCapabilityManifest (§16a.3)", () => {
     expect(manifest.syncMode).toBe("tearing");
   });
 
+  it("retains a declared non-dedicated VRAM state when the worker has no total", () => {
+    const noCapacityHardware = { ...hardware, gpuVramTotalMb: undefined };
+    const manifest = buildCapabilityManifest({
+      source: "capframex",
+      presentSensors: [],
+      frameGenerationObserved: false,
+      hardware: noCapacityHardware,
+      declared: {
+        presentationMode: "unknown",
+        syncMode: "unknown",
+        vramCapacity: { state: "unified-memory" },
+      },
+    });
+    expect(manifest.vramCapacity).toEqual({ state: "unified-memory" });
+
+    const knownCapacity = buildCapabilityManifest({
+      source: "capframex",
+      presentSensors: [],
+      frameGenerationObserved: false,
+      hardware,
+      declared: {
+        presentationMode: "unknown",
+        syncMode: "unknown",
+        vramCapacity: { state: "unified-memory" },
+      },
+    });
+    expect(knownCapacity.vramCapacity).toEqual({ totalMb: 12_288 });
+  });
+
   it("browser (frames) and worker (presence set) derives agree", () => {
     const frames: FrameSample[] = [
       { timeMs: 0, frameTimeMs: 10, cpuBusyMs: 4, gpuBusyMs: 9 },

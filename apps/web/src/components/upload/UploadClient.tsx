@@ -137,6 +137,7 @@ export function UploadClient() {
   const [includeMethodology, setIncludeMethodology] = React.useState(false);
   const [gameBuild, setGameBuild] = React.useState("");
   const [scene, setScene] = React.useState("");
+  const [resolution, setResolution] = React.useState("");
   const [sceneType, setSceneType] = React.useState<MethodologyManifest["sceneType"]>("freeform");
   const [settingsPreset, setSettingsPreset] = React.useState("");
   const [upscaler, setUpscaler] = React.useState<MethodologyManifest["upscaler"]>("unknown");
@@ -169,6 +170,7 @@ export function UploadClient() {
       sceneType,
       ...(gameBuild.trim() === "" ? {} : { gameBuild: gameBuild.trim() }),
       ...(scene.trim() === "" ? {} : { scene: scene.trim() }),
+      ...(resolution.trim() === "" ? {} : { resolution: resolution.trim() }),
       ...(settingsPreset.trim() === "" ? {} : { settingsPreset: settingsPreset.trim() }),
       upscaler,
       rayTracing,
@@ -363,6 +365,14 @@ export function UploadClient() {
                 placeholder="Downtown benchmark loop"
                 value={scene}
                 onChange={(event) => setScene(event.target.value)}
+                disabled={busy}
+              />
+              <Input
+                label="Resolution"
+                hint="Required for PresentMon repeats when the capture has no hardware block."
+                placeholder="2560x1440"
+                value={resolution}
+                onChange={(event) => setResolution(event.target.value)}
                 disabled={busy}
               />
               <Select

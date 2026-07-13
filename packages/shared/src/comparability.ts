@@ -9,8 +9,9 @@
  * The key intentionally spans: canonical game + canonical GPU (the hardware/
  * title identity), resolution + upscaler + ray-tracing + frame-generation (the
  * rendering pipeline), graphics API, the frame-pacing ceiling (cap/VSync/VRR),
- * and the scene type (a `benchmark-scene` never pools with `gameplay`, and
- * `freeform` stays separately filterable per §17.5).
+ * the declared route and graphics preset, and the scene type (a
+ * `benchmark-scene` never pools with `gameplay`, and `freeform` stays
+ * separately filterable per §17.5).
  */
 
 import type {
@@ -27,6 +28,8 @@ export interface ComparabilityInput {
   /** Canonical GPU hardware id (null when unresolved). */
   gpuId: string | null;
   resolution: string | null;
+  scene: string | null;
+  settingsPreset: string | null;
   upscaler: UpscalerMode;
   rayTracing: RayTracingMode;
   frameGeneration: GeneratedFrameTech;
@@ -44,6 +47,8 @@ const KEY_FIELDS = [
   "gameId",
   "gpuId",
   "resolution",
+  "scene",
+  "settingsPreset",
   "upscaler",
   "rayTracing",
   "frameGeneration",
@@ -88,6 +93,8 @@ export function comparabilityKeySql(alias = "runs"): string {
     `coalesce(${alias}.game_id::text, '${MISSING}')`,
     `coalesce(${alias}.gpu_hardware_id::text, '${MISSING}')`,
     `coalesce(${alias}.resolution, '${MISSING}')`,
+    `coalesce(${alias}.scene, '${MISSING}')`,
+    `coalesce(${alias}.settings_preset, '${MISSING}')`,
     `coalesce(${alias}.upscaler, '${MISSING}')`,
     `coalesce(${alias}.ray_tracing, '${MISSING}')`,
     `coalesce(${alias}.generated_frame_tech, '${MISSING}')`,
@@ -114,6 +121,8 @@ export function comparabilityMatchSql(leftAlias: string, rightAlias: string): st
     "game_id",
     "gpu_hardware_id",
     "resolution",
+    "scene",
+    "settings_preset",
     "upscaler",
     "ray_tracing",
     "generated_frame_tech",
@@ -142,6 +151,8 @@ export function comparabilityProfileSql(alias = "runs"): string {
   return [
     `${alias}.methodology_manifest_version is not null`,
     `${alias}.resolution is not null`,
+    `${alias}.scene is not null`,
+    `${alias}.settings_preset is not null`,
     `${alias}.upscaler is not null`,
     `${alias}.ray_tracing is not null`,
     `${alias}.vsync is not null`,

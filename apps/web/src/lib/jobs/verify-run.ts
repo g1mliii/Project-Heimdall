@@ -134,6 +134,7 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
               declared: {
                 presentationMode: run.capabilityManifest.presentationMode,
                 syncMode: run.capabilityManifest.syncMode,
+                vramCapacity: run.capabilityManifest.vramCapacity,
               },
             }
           : {}),

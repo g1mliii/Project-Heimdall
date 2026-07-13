@@ -211,7 +211,7 @@ describe("DTO round-trip stability (§3.2)", () => {
       frameGeneration: "none" as const,
       framePacing: { vsync: false, vrr: false },
     };
-    for (const field of ["graphicsApi", "resolution"] as const) {
+    for (const field of ["graphicsApi", "resolution", "scene", "settingsPreset"] as const) {
       expect(
         createRunRequestSchema.safeParse({
           ...validCreateRunRequest,

@@ -8,7 +8,7 @@
 import { generateKeyPairSync, sign as cryptoSign } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { parquetWriteBuffer } from "hyparquet-writer";
-import { computeRunSummary } from "@heimdall/parsers";
+import { computeRunSummary, deriveCapabilityManifest } from "@heimdall/parsers";
 import {
   RUN_STATUS,
   RUN_VISIBILITY,
@@ -284,6 +284,28 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
       ...methodologyManifest,
       resolution: validRun.hardware.resolution,
       frameGeneration: GENERATED_FRAME_TECH.none,
+    });
+  });
+
+  it("retains declared unified-memory VRAM state through verification", async () => {
+    const id = "run_wk_unified_memory";
+    const capabilityManifest = deriveCapabilityManifest(
+      frames,
+      "capframex",
+      { ...validRun.hardware, gpuVramTotalMb: undefined },
+    );
+    capabilityManifest.vramCapacity = { state: "unified-memory" };
+    await setupFinalizedRun(
+      id,
+      runFixture(id, {
+        hardware: { ...validRun.hardware, gpuVramTotalMb: undefined },
+        capabilityManifest,
+      }),
+    );
+
+    expect(await drainJobs({}, realDeps(async () => parquetBytes))).toMatchObject({ validated: 1 });
+    expect((await readRun(id, db.pool))?.capabilityManifest?.vramCapacity).toEqual({
+      state: "unified-memory",
     });
   });
 

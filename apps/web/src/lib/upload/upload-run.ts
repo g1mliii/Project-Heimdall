@@ -20,6 +20,7 @@ import {
   createRunResponseSchema,
   generateManagementToken,
   hashManagementToken,
+  normalizeMethodologyManifest,
 } from "@heimdall/shared";
 import type {
   CaptureSource,
@@ -85,7 +86,7 @@ export interface UploadOptions {
   /** Overrides/completes hardware when the log carries none (PresentMon CSV). */
   hardware?: Partial<HardwareSnapshot>;
   /** Optional declared setup details for reproducibility/comparability (§16c). */
-  methodology?: Omit<MethodologyManifest, "version" | "resolution" | "frameGeneration">;
+  methodology?: Omit<MethodologyManifest, "version" | "frameGeneration">;
   /** Optional repeatable-run group; warm-ups are retained but excluded from its stats. */
   benchmarkSetId?: string;
   /** Browser-held capability authorizing membership of the opaque set id. */
@@ -202,20 +203,37 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
     // Parser-detected details win over a declaration: unlike a user's text
     // entry, the source header/profile is direct capture evidence. Everything
     // else remains explicitly declared and therefore optional.
-    const methodologyManifest: MethodologyManifest | undefined =
+    const detectedVsync =
+      captureSemantics?.syncMode === "vsync"
+        ? true
+        : captureSemantics?.syncMode === "tearing"
+          ? false
+          : undefined;
+    const normalizedMethodology = normalizeMethodologyManifest(
       options.methodology === undefined
         ? undefined
         : {
             version: METHODOLOGY_MANIFEST_VERSION,
             ...options.methodology,
-            ...(hardware.resolution === undefined ? {} : { resolution: hardware.resolution }),
+            frameGeneration: generatedFrameTech,
+          },
+      hardware,
+      generatedFrameTech,
+    );
+    const methodologyManifest: MethodologyManifest | undefined =
+      normalizedMethodology === undefined
+        ? undefined
+        : {
+            ...normalizedMethodology,
+            ...(detectedVsync === undefined
+              ? {}
+              : { framePacing: { ...normalizedMethodology.framePacing, vsync: detectedVsync } }),
             ...(captureSemantics?.graphicsApi === undefined
               ? {}
               : { graphicsApi: captureSemantics.graphicsApi }),
             ...(captureProfile === undefined
               ? {}
               : { captureProfile }),
-            frameGeneration: generatedFrameTech,
             ...(hardware.os === undefined ? {} : { os: hardware.os }),
             ...(hardware.gpuDriver === undefined ? {} : { gpuDriver: hardware.gpuDriver }),
             captureDurationSeconds: summary.durationSeconds,

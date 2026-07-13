@@ -209,7 +209,10 @@ export function deriveVramCapacity(hardware?: HardwareSnapshot): VramCapacity {
  * `PresentMode`/`AllowsTearing`) and carried through the canonical recompute,
  * since the worker never sees the original headers.
  */
-export type DeclaredCaptureSemantics = CaptureSemantics;
+export type DeclaredCaptureSemantics = CaptureSemantics & {
+  /** Explicit state the worker cannot reconstruct when hardware lacks a total. */
+  vramCapacity?: VramCapacity;
+};
 
 export function deriveCapabilityManifest(
   frames: readonly FrameSample[],
@@ -279,7 +282,10 @@ export function buildCapabilityManifest(input: {
     presentationMode: declared?.presentationMode ?? "unknown",
     syncMode: declared?.syncMode ?? "unknown",
     frameGenerationObserved,
-    vramCapacity: deriveVramCapacity(hardware),
+    vramCapacity:
+      hardware?.gpuVramTotalMb === undefined
+        ? declared?.vramCapacity ?? deriveVramCapacity(hardware)
+        : deriveVramCapacity(hardware),
     caveats,
   };
 }

@@ -108,6 +108,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0019_comparability_frame_pacing_index.sql",
       "0020_benchmark_set_scope.sql",
       "0021_graphics_api_comparability.sql",
+      "0022_scene_preset_comparability.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
@@ -265,13 +266,17 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     expect(reaperPredicate).toContain("status = 'pending'::text");
     expect(reaperPredicate).toContain("frames_object_key IS NULL");
     const benchmarkSetIndex = byName.get("runs_public_benchmark_set_profile_idx");
-    expect(benchmarkSetIndex?.definition).toContain("benchmark_set_id");
+    for (const column of ["benchmark_set_id", "scene", "settings_preset"]) {
+      expect(benchmarkSetIndex?.definition).toContain(column);
+    }
     const benchmarkPredicate = benchmarkSetIndex?.predicate ?? "";
     for (const required of [
       "status = 'validated'::text",
       "visibility = 'public'::text",
       "methodology_manifest_version IS NOT NULL",
       "resolution IS NOT NULL",
+      "scene IS NOT NULL",
+      "settings_preset IS NOT NULL",
       "upscaler IS NOT NULL",
       "ray_tracing IS NOT NULL",
       "vsync IS NOT NULL",
@@ -467,6 +472,8 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     const methodologyManifest = {
       version: 1,
       sceneType: "benchmark-scene" as const,
+      scene: "Dogtown route",
+      settingsPreset: "Ultra",
       resolution: "2560x1440",
       upscaler: "dlss" as const,
       rayTracing: "on" as const,
@@ -494,6 +501,8 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       upscaler: string;
       ray_tracing: string;
       graphics_api: string;
+      scene: string;
+      settings_preset: string;
       frame_pacing_cap: number;
       vsync: boolean;
       vrr: boolean;
@@ -501,7 +510,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       benchmark_set_id: string;
       is_warmup: boolean;
     }>(
-      `select upscaler, ray_tracing, graphics_api, frame_pacing_cap, vsync, vrr, scene_type, benchmark_set_id, is_warmup
+      `select upscaler, ray_tracing, graphics_api, scene, settings_preset, frame_pacing_cap, vsync, vrr, scene_type, benchmark_set_id, is_warmup
          from runs where id = $1`,
       [run.id],
     );
@@ -509,6 +518,8 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       upscaler: "dlss",
       ray_tracing: "on",
       graphics_api: "dx12",
+      scene: "Dogtown route",
+      settings_preset: "Ultra",
       frame_pacing_cap: 120,
       vsync: true,
       vrr: false,
@@ -526,6 +537,8 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     const definition = rows[0]?.definition ?? "";
     for (const column of [
       "resolution",
+      "scene",
+      "settings_preset",
       "upscaler",
       "ray_tracing",
       "generated_frame_tech",
@@ -542,12 +555,14 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     expect(definition).toContain("public");
   });
 
-  it("backfills graphics API from pre-0021 methodology rows", async () => {
+  it("backfills indexed methodology fields from pre-0022 rows", async () => {
     const run = {
       ...fixtureRunWithId("run_graphics_api_backfill"),
       methodologyManifest: {
         version: 1,
         sceneType: "benchmark-scene" as const,
+        scene: "Dogtown route",
+        settingsPreset: "Ultra",
         upscaler: "none" as const,
         rayTracing: "off" as const,
         frameGeneration: "none" as const,
@@ -559,19 +574,37 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     await pool.query(
       `update runs
           set graphics_api = null,
-              settings_json = jsonb_set(settings_json, '{graphicsApi}', to_jsonb($2::text))
+              scene = null,
+              settings_preset = null,
+              settings_json = jsonb_set(
+                jsonb_set(
+                  jsonb_set(settings_json, '{graphicsApi}', to_jsonb($2::text)),
+                  '{scene}', to_jsonb($3::text)
+                ),
+                '{settingsPreset}', to_jsonb($4::text)
+              )
         where id = $1`,
-      [run.id, "x".repeat(65)],
+      [run.id, "x".repeat(65), "y".repeat(65), "z".repeat(65)],
     );
-    await pool.query("delete from schema_migrations where version = $1", [
-      "0021_graphics_api_comparability.sql",
-    ]);
+    await pool.query(
+      "delete from schema_migrations where version = any($1::text[])",
+      [["0021_graphics_api_comparability.sql", "0022_scene_preset_comparability.sql"]],
+    );
 
-    expect(await migrate(pool)).toEqual(["0021_graphics_api_comparability.sql"]);
-    const { rows } = await pool.query<{ graphics_api: string | null }>(
-      "select graphics_api from runs where id = $1",
+    expect(await migrate(pool)).toEqual([
+      "0021_graphics_api_comparability.sql",
+      "0022_scene_preset_comparability.sql",
+    ]);
+    const { rows } = await pool.query<{
+      graphics_api: string | null;
+      scene: string | null;
+      settings_preset: string | null;
+    }>(
+      "select graphics_api, scene, settings_preset from runs where id = $1",
       [run.id],
     );
     expect(rows[0]?.graphics_api).toMatch(/^legacy:[0-9a-f]{32}$/);
+    expect(rows[0]?.scene).toMatch(/^legacy:[0-9a-f]{32}$/);
+    expect(rows[0]?.settings_preset).toMatch(/^legacy:[0-9a-f]{32}$/);
   });
 });
