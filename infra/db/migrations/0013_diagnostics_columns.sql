@@ -2,30 +2,19 @@
 -- add VRAM-capacity storage on runs (§15).
 --
 -- 0002 shipped `diagnostics.message`, but the domain/DTO shape is `title` +
--- `detail` (a bold headline and a plain-English body). The rules engine has
--- never run, so the table is empty in every environment — renaming `message` to
--- `detail` and adding `title` is a safe, data-free reshape.
+-- `detail` (a bold headline and a plain-English body). Preserve legacy text if
+-- a database already has diagnostics, then derive the new title from its rule
+-- code.
 --
--- Idempotent: guarded so a re-run (or a fresh DB where the reshape already
--- happened) is a no-op.
-
 -- 1. Reconcile diagnostics(message) → (title, detail).
-alter table diagnostics add column if not exists title text not null default '';
+alter table diagnostics rename column message to detail;
+alter table diagnostics add column title text;
 
-do $$
-begin
-  if exists (
-        select 1 from information_schema.columns
-         where table_name = 'diagnostics' and column_name = 'message'
-      ) and not exists (
-        select 1 from information_schema.columns
-         where table_name = 'diagnostics' and column_name = 'detail'
-      ) then
-    alter table diagnostics rename column message to detail;
-  end if;
-end $$;
+update diagnostics
+   set title = initcap(replace(code, '-', ' '))
+ where title is null;
 
-alter table diagnostics add column if not exists detail text not null default '';
+alter table diagnostics alter column title set not null;
 
 -- 2. Total dedicated VRAM (MB), best-effort from the parsers — drives §15.1.
-alter table runs add column if not exists gpu_vram_total_mb double precision;
+alter table runs add column gpu_vram_total_mb double precision;

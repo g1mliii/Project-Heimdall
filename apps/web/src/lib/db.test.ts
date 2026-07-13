@@ -99,7 +99,6 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0011_maintenance_hot_path_indexes.sql",
       "0012_seed_required_drivers.sql",
       "0013_diagnostics_columns.sql",
-      "0014_driver_requirement_freshness.sql",
       "0015_hardware_alias_kind_aware.sql",
     ]);
 
@@ -124,6 +123,17 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
         "verifications",
       ].sort(),
     );
+
+    const diagnosticColumns = await pool.query<{ column_name: string }>(
+      `select column_name
+         from information_schema.columns
+        where table_schema = current_schema()
+          and table_name = 'diagnostics'`,
+    );
+    const names = diagnosticColumns.rows.map((row) => row.column_name);
+    expect(names).toContain("title");
+    expect(names).toContain("detail");
+    expect(names).not.toContain("message");
   });
 
   it("creates the §4.2 indexes", async () => {
