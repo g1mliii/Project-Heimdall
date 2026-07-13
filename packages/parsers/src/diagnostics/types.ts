@@ -58,18 +58,17 @@ export interface DiagnosticsInput {
 
 export type { DiagnosticFinding };
 
-/** What a rule returns when it fires; the engine stamps on `code`/sensors. */
+/** What a rule returns when it fires; the engine stamps on the `code`. */
 export interface RuleVerdict {
   severity: DiagnosticSeverity;
   title: string;
   detail: string;
 }
 
-/** Context handed to every rule. `hasSensor` reflects real per-run availability. */
+/** Context handed to every rule. */
 export interface DiagnosticRuleContext {
   input: DiagnosticsInput;
   frameCount: number;
-  hasSensor(field: DiagnosticSensorField): boolean;
 }
 
 /**

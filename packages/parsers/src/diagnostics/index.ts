@@ -60,11 +60,7 @@ export function runDiagnostics(input: DiagnosticsInput): DiagnosticFinding[] {
     if (!rule.requiredSensors.every((sensor) => available.has(sensor))) continue;
     let verdict: ReturnType<DiagnosticRule["evaluate"]>;
     try {
-      verdict = rule.evaluate({
-        input,
-        frameCount,
-        hasSensor: (field) => available.has(field),
-      });
+      verdict = rule.evaluate({ input, frameCount });
     } catch {
       // A rule must never fail the whole run; treat a throw as "did not fire".
       continue;
