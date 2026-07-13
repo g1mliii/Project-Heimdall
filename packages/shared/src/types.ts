@@ -9,6 +9,7 @@
  * `visibility.ts`, never redefined here.
  */
 
+import type { CapabilitySensorField } from "./constants";
 import type { RunVisibility, RunStatus } from "./visibility";
 
 export type { RunVisibility, RunStatus } from "./visibility";
@@ -84,9 +85,6 @@ export interface FrameSample {
   /** PresentMon 2.x GPUBusy / CapFrameX MsGPUActive — ms of GPU work for the frame. */
   gpuBusyMs?: number;
 }
-
-/** Import the canonical 7-field sensor set so the manifest can't drift from it. */
-import type { CapabilitySensorField } from "./constants";
 
 /**
  * Explicit VRAM-capacity state (§16a.4). Replaces the ambiguous bare
@@ -195,6 +193,9 @@ export type UpscalerMode = "none" | "dlss" | "fsr" | "xess" | "unknown";
 /** Ray-tracing state (§16c.1). */
 export type RayTracingMode = "off" | "on" | "unknown";
 
+/** Hardware-Accelerated GPU Scheduling state, when the capture environment declares it. */
+export type HagsState = "enabled" | "disabled" | "unknown";
+
 /** Frame-pacing / sync ceiling that shapes comparability (§16c.1/§16c.3). */
 export interface FramePacing {
   /** Applied FPS cap, if any. */
@@ -238,6 +239,8 @@ export interface MethodologyManifest {
   captureTool?: string;
   /** Pinned capture profile id (e.g. "presentmon-2.x"). */
   captureProfile?: string;
+  /** HAGS changes GPU execution timing semantics; unknown is explicitly allowed. */
+  hags?: HagsState;
   /** Warm-up policy applied before the measured window. */
   warmupPolicy?: string;
   /** Measured capture duration in seconds. */
@@ -301,7 +304,7 @@ export interface DiagnosticEvidence {
   /** Fraction of the capture (0–1) the finding's condition covered. */
   coverageFraction?: number;
   /** Sensor fields the finding relied on. */
-  sensors?: string[];
+  sensors?: CapabilitySensorField[];
   /** Named measured values (e.g. `{ cpuBoundFraction: 0.62 }`). */
   metrics?: Record<string, number>;
   /** Capture-semantics / source caveats that qualified the finding. */

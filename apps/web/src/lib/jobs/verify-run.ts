@@ -8,8 +8,8 @@
  */
 
 import { createPublicKey, verify as cryptoVerify } from "node:crypto";
-import { RUN_STATUS } from "@heimdall/shared";
-import type { CapabilityManifest, DiagnosticFinding, RunSummary } from "@heimdall/shared";
+import { GENERATED_FRAME_TECH, RUN_STATUS, normalizeMethodologyManifest } from "@heimdall/shared";
+import type { CapabilityManifest, DiagnosticFinding, GeneratedFrameTech, RunSummary } from "@heimdall/shared";
 import { buildCapabilityManifest, runDiagnostics } from "@heimdall/parsers";
 import { readRunForVerification, type Queryable } from "../db";
 import { applyVerificationResult, type ClaimedJob } from "../repo/jobs";
@@ -166,17 +166,33 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
 
   const mismatch = summaryMismatch(run.summary, recomputed);
   const status = mismatch === null && run.status !== RUN_STATUS.flagged ? "validated" : "flagged";
+  const generatedFrameTech: GeneratedFrameTech =
+    recomputed.generatedFramePct === 0
+      ? GENERATED_FRAME_TECH.none
+      : run.generatedFrameTech === GENERATED_FRAME_TECH.none ||
+          run.generatedFrameTech === GENERATED_FRAME_TECH.unknown
+        ? GENERATED_FRAME_TECH.unknown
+        : run.generatedFrameTech;
+  const methodologyManifest = normalizeMethodologyManifest(
+    run.methodologyManifest,
+    run.hardware,
+    generatedFrameTech,
+  );
 
   // Either way the recompute becomes the stored truth — "corrected and
   // flagged" (§12.4) is exactly the flagged arm of this write. Findings land in
   // the same atomic write.
   await applyVerificationResult(
     job.runId,
-    recomputed,
-    status,
-    signatureValid,
-    findings,
-    capabilityManifest,
+    {
+      summary: recomputed,
+      runStatus: status,
+      signatureValid,
+      diagnostics: findings,
+      capabilityManifest,
+      methodologyManifest: methodologyManifest ?? null,
+      generatedFrameTech,
+    },
     job,
     db,
   );

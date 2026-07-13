@@ -20,13 +20,14 @@
 
 import { DIAGNOSTICS, type ConfidenceLevel, type DiagnosticEvidence } from "@heimdall/shared";
 import type { DiagnosticRule, DiagnosticRuleContext, RuleVerdict } from "./types";
+import { commonCapFpsForFrameTime } from "./frame-cap";
 
 const RULE_VERSION = "1.0.0";
 const BUSY_SENSORS = ["cpuBusyMs", "gpuBusyMs"] as const;
 
 type Regime = "cpu" | "gpu" | "capped" | "insufficient" | "inconclusive";
 
-interface BottleneckAnalysis {
+export interface BottleneckAnalysis {
   regime: Regime;
   confidence: ConfidenceLevel;
   evidence: DiagnosticEvidence;
@@ -35,11 +36,21 @@ interface BottleneckAnalysis {
   coveragePct: number;
 }
 
-function nearestCommonCap(frameTimeMs: number): number | undefined {
-  return DIAGNOSTICS.commonFrameCapFps.find((fps) => {
-    const capMs = 1000 / fps;
-    return Math.abs(frameTimeMs - capMs) <= capMs * DIAGNOSTICS.frameCapToleranceFraction;
-  });
+/**
+ * `runDiagnostics` shares one context among all rules. A WeakMap keeps the
+ * O(frameCount) attribution scan scoped to that invocation without retaining
+ * captures after the engine returns.
+ */
+const analysisByContext = new WeakMap<DiagnosticRuleContext, BottleneckAnalysis>();
+
+function hasFrameAlignedBusyTelemetry(ctx: DiagnosticRuleContext): boolean {
+  const sensors = ctx.input.capabilityManifest?.sensors;
+  return Boolean(
+    sensors?.cpuBusyMs.present &&
+      sensors.cpuBusyMs.frameAligned &&
+      sensors.gpuBusyMs.present &&
+      sensors.gpuBusyMs.frameAligned,
+  );
 }
 
 function gradeConfidence(coverage: number): ConfidenceLevel {
@@ -53,7 +64,26 @@ function gradeConfidence(coverage: number): ConfidenceLevel {
  * regime. Total function: returns `insufficient` when the paired coverage is too
  * thin to attribute, `inconclusive` when covered but no regime is dominant.
  */
-export function analyzeBottleneck({ input, frameCount }: DiagnosticRuleContext): BottleneckAnalysis {
+export function analyzeBottleneck(ctx: DiagnosticRuleContext): BottleneckAnalysis {
+  const cached = analysisByContext.get(ctx);
+  if (cached) return cached;
+
+  const { input, frameCount } = ctx;
+  // A busy-time column alone is not enough evidence to correlate it with a
+  // frame. This preserves the Phase 6 behavior when no capability manifest was
+  // supplied and makes a real matrix's non-aligned evidence effective.
+  if (!hasFrameAlignedBusyTelemetry(ctx)) {
+    const result: BottleneckAnalysis = {
+      regime: "inconclusive",
+      confidence: "low",
+      evidence: {},
+      dominantPct: 0,
+      coveragePct: 0,
+    };
+    analysisByContext.set(ctx, result);
+    return result;
+  }
+
   const cpu = input.frames.cpuBusyMs;
   const gpu = input.frames.gpuBusyMs;
   const frameTimes = input.frames.frameTimeMs;
@@ -82,7 +112,7 @@ export function analyzeBottleneck({ input, frameCount }: DiagnosticRuleContext):
       considered++;
       const critical = Math.max(cpuBusy, gpuBusy);
       const overCritical = frameTimeMs >= critical * (1 + DIAGNOSTICS.bottleneckCapMarginFraction);
-      if (overCritical && nearestCommonCap(frameTimeMs) !== undefined) {
+      if (overCritical && commonCapFpsForFrameTime(frameTimeMs) !== undefined) {
         capped++;
       } else if (cpuBusy > gpuBusy * (1 + margin)) {
         cpuBound++;
@@ -111,13 +141,15 @@ export function analyzeBottleneck({ input, frameCount }: DiagnosticRuleContext):
     considered < DIAGNOSTICS.bottleneckMinPairedSamples ||
     coverage < DIAGNOSTICS.bottleneckMinCoverageFraction
   ) {
-    return {
+    const result: BottleneckAnalysis = {
       regime: "insufficient",
       confidence: "low",
       evidence: baseEvidence,
       dominantPct: 0,
       coveragePct: Math.round(coverage * 100),
     };
+    analysisByContext.set(ctx, result);
+    return result;
   }
 
   const fractions: Array<[Exclude<Regime, "insufficient" | "inconclusive">, number]> = [
@@ -129,13 +161,15 @@ export function analyzeBottleneck({ input, frameCount }: DiagnosticRuleContext):
   const [regime, fraction] = fractions[0]!;
   const dominant = fraction >= DIAGNOSTICS.bottleneckDominantFraction;
 
-  return {
+  const result: BottleneckAnalysis = {
     regime: dominant ? regime : "inconclusive",
     confidence: gradeConfidence(coverage),
     evidence: baseEvidence,
     dominantPct: Math.round(fraction * 100),
     coveragePct: Math.round(coverage * 100),
   };
+  analysisByContext.set(ctx, result);
+  return result;
 }
 
 /** Build a rule that fires only when the shared analysis lands in its regime. */

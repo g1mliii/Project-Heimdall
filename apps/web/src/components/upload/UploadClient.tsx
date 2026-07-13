@@ -10,9 +10,28 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { Badge, Button, ButtonLink, Card, Diagnostic, Input, Segmented, Spinner, Stat } from "@heimdall/ui";
+import {
+  Badge,
+  Button,
+  ButtonLink,
+  Card,
+  Diagnostic,
+  Input,
+  Segmented,
+  Select,
+  Spinner,
+  Stat,
+  Switch,
+} from "@heimdall/ui";
 import { uploadCapture } from "@/lib/upload/upload-run";
-import type { UploadFailure, UploadProgress, UploadResult, UploadSuccess } from "@/lib/upload/upload-run";
+import type {
+  UploadFailure,
+  UploadOptions,
+  UploadProgress,
+  UploadResult,
+  UploadSuccess,
+} from "@/lib/upload/upload-run";
+import type { MethodologyManifest } from "@heimdall/shared";
 import {
   ArrowRightIcon,
   CheckIcon,
@@ -109,17 +128,59 @@ export function UploadClient() {
   const [game, setGame] = React.useState("");
   const [gameError, setGameError] = React.useState<string | null>(null);
   const [visibility, setVisibility] = React.useState<Visibility>("unlisted");
+  const [includeMethodology, setIncludeMethodology] = React.useState(false);
+  const [gameBuild, setGameBuild] = React.useState("");
+  const [scene, setScene] = React.useState("");
+  const [sceneType, setSceneType] = React.useState<MethodologyManifest["sceneType"]>("freeform");
+  const [settingsPreset, setSettingsPreset] = React.useState("");
+  const [upscaler, setUpscaler] = React.useState<MethodologyManifest["upscaler"]>("unknown");
+  const [rayTracing, setRayTracing] = React.useState<MethodologyManifest["rayTracing"]>("unknown");
+  const [capFps, setCapFps] = React.useState("");
+  const [vsync, setVsync] = React.useState(false);
+  const [vrr, setVrr] = React.useState(false);
+  const [refreshHz, setRefreshHz] = React.useState("");
+  const [captureTool, setCaptureTool] = React.useState("");
+  const [warmupPolicy, setWarmupPolicy] = React.useState("");
+  const [hags, setHags] = React.useState<NonNullable<MethodologyManifest["hags"]>>("unknown");
   const [dragOver, setDragOver] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
   const fileInput = React.useRef<HTMLInputElement>(null);
 
   const busy = mode.kind === "single" || mode.kind === "batch";
 
+  function declaredMethodology(): UploadOptions["methodology"] | undefined {
+    if (!includeMethodology) return undefined;
+
+    const parsedCapFps = Number(capFps);
+    const parsedRefreshHz = Number(refreshHz);
+    return {
+      sceneType,
+      ...(gameBuild.trim() === "" ? {} : { gameBuild: gameBuild.trim() }),
+      ...(scene.trim() === "" ? {} : { scene: scene.trim() }),
+      ...(settingsPreset.trim() === "" ? {} : { settingsPreset: settingsPreset.trim() }),
+      upscaler,
+      rayTracing,
+      framePacing: {
+        ...(Number.isFinite(parsedCapFps) && parsedCapFps > 0 ? { capFps: parsedCapFps } : {}),
+        vsync,
+        vrr,
+        ...(Number.isFinite(parsedRefreshHz) && parsedRefreshHz > 0
+          ? { refreshHz: parsedRefreshHz }
+          : {}),
+      },
+      ...(captureTool.trim() === "" ? {} : { captureTool: captureTool.trim() }),
+      ...(warmupPolicy.trim() === "" ? {} : { warmupPolicy: warmupPolicy.trim() }),
+      hags,
+    };
+  }
+
   async function startSingle(file: File) {
     setMode({ kind: "single", fileName: file.name, progress: { stage: "parsing" } });
+    const methodology = declaredMethodology();
     const result: UploadResult = await uploadCapture(file, {
       game,
       visibility,
+      ...(methodology === undefined ? {} : { methodology }),
       onProgress: (progress) =>
         setMode((prev) =>
           prev.kind === "single" ? { ...prev, progress } : prev,
@@ -140,12 +201,17 @@ export function UploadClient() {
       setMode({ kind: "batch", items });
     };
 
+    const methodology = declaredMethodology();
     const queue = files.map((_, index) => index);
     await Promise.all(
       Array.from({ length: Math.min(BATCH_CONCURRENCY, queue.length) }, async () => {
         for (let index = queue.shift(); index !== undefined; index = queue.shift()) {
           update(index, { status: "working" });
-          const result = await uploadCapture(items[index]!.file, { game, visibility });
+          const result = await uploadCapture(items[index]!.file, {
+            game,
+            visibility,
+            ...(methodology === undefined ? {} : { methodology }),
+          });
           if (result.ok) {
             update(index, {
               status: "done",
@@ -224,6 +290,149 @@ export function UploadClient() {
         hint={gameError ? undefined : "Runs are grouped under this title on game pages."}
         disabled={busy}
       />
+
+      <Card variant="flat" style={{ marginTop: "var(--space-5)" }}>
+        <Card.Header
+          title="Reproducibility details"
+          actions={
+            <Switch
+              checked={includeMethodology}
+              onChange={(event) => setIncludeMethodology(event.target.checked)}
+              label="Include"
+              disabled={busy}
+            />
+          }
+        />
+        <Card.Body>
+          <p style={{ font: "var(--type-body-sm)", color: "var(--fg-2)" }}>
+            Optional setup details keep comparable runs together and different setups apart. They are
+            stored with this run and inherit its visibility and deletion controls.
+          </p>
+          {includeMethodology && (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, var(--space-32)), 1fr))",
+                gap: "var(--space-4)",
+                marginTop: "var(--space-5)",
+              }}
+            >
+              <Input
+                label="Game build"
+                placeholder="2.1"
+                value={gameBuild}
+                onChange={(event) => setGameBuild(event.target.value)}
+                disabled={busy}
+              />
+              <Input
+                label="Scene or route"
+                placeholder="Downtown benchmark loop"
+                value={scene}
+                onChange={(event) => setScene(event.target.value)}
+                disabled={busy}
+              />
+              <Select
+                label="Scene type"
+                value={sceneType}
+                onChange={(event) => setSceneType(event.target.value as MethodologyManifest["sceneType"])}
+                options={[
+                  { value: "benchmark-scene", label: "Benchmark scene" },
+                  { value: "gameplay", label: "Gameplay" },
+                  { value: "freeform", label: "Freeform" },
+                ]}
+                disabled={busy}
+              />
+              <Input
+                label="Settings preset"
+                placeholder="Ultra"
+                value={settingsPreset}
+                onChange={(event) => setSettingsPreset(event.target.value)}
+                disabled={busy}
+              />
+              <Select
+                label="Upscaler"
+                value={upscaler}
+                onChange={(event) => setUpscaler(event.target.value as MethodologyManifest["upscaler"])}
+                options={[
+                  { value: "unknown", label: "Unknown" },
+                  { value: "none", label: "Off" },
+                  { value: "dlss", label: "DLSS" },
+                  { value: "fsr", label: "FSR" },
+                  { value: "xess", label: "XeSS" },
+                ]}
+                disabled={busy}
+              />
+              <Select
+                label="Ray tracing"
+                value={rayTracing}
+                onChange={(event) => setRayTracing(event.target.value as MethodologyManifest["rayTracing"])}
+                options={[
+                  { value: "unknown", label: "Unknown" },
+                  { value: "off", label: "Off" },
+                  { value: "on", label: "On" },
+                ]}
+                disabled={busy}
+              />
+              <Input
+                label="Frame cap"
+                hint="Leave empty when uncapped or unknown."
+                type="number"
+                placeholder="120"
+                value={capFps}
+                onChange={(event) => setCapFps(event.target.value)}
+                disabled={busy}
+              />
+              <Input
+                label="Display refresh (Hz)"
+                type="number"
+                placeholder="144"
+                value={refreshHz}
+                onChange={(event) => setRefreshHz(event.target.value)}
+                disabled={busy}
+              />
+              <Input
+                label="Capture tool/version"
+                placeholder="PresentMon 2.3.0"
+                value={captureTool}
+                onChange={(event) => setCaptureTool(event.target.value)}
+                disabled={busy}
+              />
+              <Input
+                label="Warm-up policy"
+                placeholder="Discard first 30 seconds"
+                value={warmupPolicy}
+                onChange={(event) => setWarmupPolicy(event.target.value)}
+                disabled={busy}
+              />
+              <Select
+                label="HAGS state"
+                value={hags}
+                onChange={(event) => setHags(event.target.value as NonNullable<MethodologyManifest["hags"]>)}
+                options={[
+                  { value: "unknown", label: "Unknown" },
+                  { value: "enabled", label: "Enabled" },
+                  { value: "disabled", label: "Disabled" },
+                ]}
+                disabled={busy}
+              />
+              <div style={{ display: "flex", alignItems: "end", gap: "var(--space-5)" }}>
+                <Switch
+                  checked={vsync}
+                  onChange={(event) => setVsync(event.target.checked)}
+                  label="VSync enabled"
+                  disabled={busy}
+                />
+                <Switch
+                  checked={vrr}
+                  onChange={(event) => setVrr(event.target.checked)}
+                  label="VRR enabled"
+                  disabled={busy}
+                />
+              </div>
+            </div>
+          )}
+        </Card.Body>
+      </Card>
 
       {/* Dropzone — the kit's dashed panel, all four stages. */}
       <div

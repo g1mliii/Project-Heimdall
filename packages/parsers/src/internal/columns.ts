@@ -98,7 +98,7 @@ export const PRESENTMON_PROFILES = [
  * state. Pre-lowercased to match `buildHeaderMap`.
  */
 export const PRESENTMON_SEMANTICS_COLUMNS = {
-  runtime: ["runtime"],
+  runtime: ["runtime", "presentruntime"],
   presentMode: ["presentmode"],
   allowsTearing: ["allowstearing"],
   syncInterval: ["syncinterval"],

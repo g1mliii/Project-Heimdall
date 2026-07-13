@@ -9,10 +9,11 @@
  */
 
 import {
-  GENERATED_FRAME_TECH,
   RUN_STATUS,
   type CapabilityManifest,
   type DiagnosticFinding,
+  type GeneratedFrameTech,
+  type MethodologyManifest,
   type RunSummary,
 } from "@heimdall/shared";
 import {
@@ -31,6 +32,17 @@ export interface ClaimedJob {
   runId: string;
   /** Attempt number INCLUDING this claim. */
   attempts: number;
+}
+
+/** Canonical worker output committed together after a successful verification. */
+export interface VerificationResult {
+  summary: RunSummary;
+  runStatus: "validated" | "flagged";
+  signatureValid: boolean | null;
+  diagnostics: readonly DiagnosticFinding[];
+  capabilityManifest: CapabilityManifest | null;
+  methodologyManifest: MethodologyManifest | null;
+  generatedFrameTech: GeneratedFrameTech;
 }
 
 export async function claimNextVerificationJob(
@@ -167,11 +179,7 @@ export async function failVerificationJob(
  */
 export async function applyVerificationResult(
   runId: string,
-  summary: RunSummary,
-  runStatus: "validated" | "flagged",
-  signatureValid: boolean | null,
-  diagnostics: readonly DiagnosticFinding[],
-  capabilityManifest: CapabilityManifest | null,
+  result: VerificationResult,
   claim: Pick<ClaimedJob, "id" | "attempts">,
   db: Queryable = getPool(),
 ): Promise<void> {
@@ -187,22 +195,20 @@ export async function applyVerificationResult(
   // none — a run that used to warn and no longer does ends clean.
   await db.query(
     `with job_claim as (
-       select 1
+        select 1
          from verification_jobs
-        where id = $17
+        where id = $16
           and run_id = $1
           and status = 'running'
-          and attempts = $18
+          and attempts = $17
      ), run_update as (
        update runs
           set status = $13, signature_valid = $14,
-              generated_frame_tech = case
-                when $9::double precision = 0 then $16
-                when generated_frame_tech in ($15, $16) then $15
-                else generated_frame_tech
-              end,
-              capability_manifest = $19::jsonb,
-              capability_manifest_version = ($19::jsonb ->> 'version')::integer
+              generated_frame_tech = $15,
+              capability_manifest = $18::jsonb,
+              capability_manifest_version = ($18::jsonb ->> 'version')::integer,
+              settings_json = $19::jsonb,
+              methodology_manifest_version = ($19::jsonb ->> 'version')::integer
         where id = $1
           and status <> 'hidden'
           and exists (select 1 from job_claim)
@@ -223,25 +229,25 @@ export async function applyVerificationResult(
      ${diagnosticInsertSql(1, 20, "exists (select 1 from run_update)")}`,
     [
       runId,
-      summary.avgFps,
-      summary.onePercentLowFps,
-      summary.pointOnePercentLowFps,
-      summary.frameTimeP50Ms,
-      summary.frameTimeP95Ms,
-      summary.frameTimeP99Ms,
-      summary.stutterCount,
-      summary.generatedFramePct,
-      summary.pointOnePercentLowConfidence,
-      summary.sampleCount,
-      summary.durationSeconds,
-      runStatus,
-      signatureValid,
-      GENERATED_FRAME_TECH.unknown,
-      GENERATED_FRAME_TECH.none,
+      result.summary.avgFps,
+      result.summary.onePercentLowFps,
+      result.summary.pointOnePercentLowFps,
+      result.summary.frameTimeP50Ms,
+      result.summary.frameTimeP95Ms,
+      result.summary.frameTimeP99Ms,
+      result.summary.stutterCount,
+      result.summary.generatedFramePct,
+      result.summary.pointOnePercentLowConfidence,
+      result.summary.sampleCount,
+      result.summary.durationSeconds,
+      result.runStatus,
+      result.signatureValid,
+      result.generatedFrameTech,
       claim.id,
       claim.attempts,
-      capabilityManifest ? JSON.stringify(capabilityManifest) : null,
-      ...diagnosticInsertColumns(diagnostics),
+      result.capabilityManifest ? JSON.stringify(result.capabilityManifest) : null,
+      result.methodologyManifest ? JSON.stringify(result.methodologyManifest) : null,
+      ...diagnosticInsertColumns(result.diagnostics),
     ],
   );
 }

@@ -177,6 +177,8 @@ export const INGEST_LIMITS = {
    * back an object the API accepted — equal by construction, not by test.
    */
   maxParquetBytes: 64 * 1024 * 1024,
+  /** Bounds the JSON metadata body before it can become a DB/heap abuse vector. */
+  maxMetadataBytes: 64 * 1024,
   /** Below this a capture is noise, not a benchmark. */
   minFramesPerRun: 10,
   /** Unfinalized `pending` runs older than this are reaped (§11.11). */

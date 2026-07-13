@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import { CAPABILITY_MANIFEST_VERSION, type FrameSample, type HardwareSnapshot } from "@heimdall/shared";
 
 import {
+  SENSOR_AVAILABILITY,
   buildCapabilityManifest,
   deriveCapabilityManifest,
   deriveVramCapacity,
+  verifiedCell,
 } from "./sensor-availability";
 import { parsePresentMon } from "./presentmon";
 import { detectPresentMonSemantics } from "./presentmon";
@@ -82,6 +84,35 @@ describe("deriveCapabilityManifest (§16a.3)", () => {
     });
     expect(fromPresence).toEqual(fromFrames);
   });
+
+  it("uses verified matrix evidence when a present sensor is not frame-aligned", () => {
+    const original = SENSOR_AVAILABILITY.capframex.nvidia;
+    if (original === undefined) throw new Error("expected CapFrameX/NVIDIA matrix cell");
+
+    SENSOR_AVAILABILITY.capframex.nvidia = verifiedCell(
+      original.availability,
+      {
+        source: "capframex",
+        gpuVendor: "nvidia",
+        driver: "566.36",
+        toolVersion: "CapFrameX 1.7.0",
+        headers: ["MsGPUActive"],
+        units: { gpuBusyMs: "ms" },
+        frameAligned: { gpuBusyMs: false },
+        fixture: "capframex/csv/nvidia-full-sensors.csv",
+      },
+    );
+    try {
+      const manifest = deriveCapabilityManifest(
+        [{ timeMs: 0, frameTimeMs: 10, gpuBusyMs: 9 }],
+        "capframex",
+        hardware,
+      );
+      expect(manifest.sensors.gpuBusyMs).toEqual({ present: true, frameAligned: false });
+    } finally {
+      SENSOR_AVAILABILITY.capframex.nvidia = original;
+    }
+  });
 });
 
 describe("detectPresentMonSemantics (§16a.2)", () => {
@@ -91,16 +122,21 @@ describe("detectPresentMonSemantics (§16a.2)", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value.captureSemantics).toEqual({
+        graphicsApi: "dxgi",
         presentationMode: "hardware-independent-flip",
         syncMode: "tearing",
       });
+      expect(result.value.captureProfile).toBe("presentmon-2.x");
     }
   });
 
-  it("detects no semantics for a v1 capture (no PresentMode column)", () => {
+  it("detects v1 runtime semantics and records its pinned profile", () => {
     const result = parsePresentMon(readFixture("presentmon/v1-basic.csv"));
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.value.captureSemantics).toBeUndefined();
+    if (result.ok) {
+      expect(result.value.captureSemantics).toMatchObject({ graphicsApi: "dxgi" });
+      expect(result.value.captureProfile).toBe("presentmon-1.x");
+    }
   });
 
   it("maps PresentMode + tearing/sync cells to canonical semantics", () => {

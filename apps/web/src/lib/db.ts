@@ -11,7 +11,7 @@
  */
 
 import pg from "pg";
-import { DIAGNOSTICS } from "@heimdall/shared";
+import { DIAGNOSTICS, normalizeMethodologyManifest } from "@heimdall/shared";
 import type {
   CapabilityManifest,
   Diagnostic,
@@ -329,6 +329,12 @@ function canonicalIdParam(value: string | undefined, label: string): string | nu
  */
 export async function insertRun(run: Run, db: Queryable = getPool()): Promise<void> {
   const { hardware: hw, summary } = run;
+  const methodologyManifest = normalizeMethodologyManifest(
+    run.methodologyManifest,
+    hw,
+    run.generatedFrameTech,
+  );
+  const resolution = methodologyManifest?.resolution ?? hw.resolution ?? null;
   await db.query(
     `with run_row as (
        insert into runs (
@@ -361,7 +367,7 @@ export async function insertRun(run: Run, db: Queryable = getPool()): Promise<vo
       run.captureSource, run.visibility, run.status, run.signatureValid ?? null,
       hw.cpu, hw.gpu, hw.gpuVendor ?? null, hw.gpuDriver ?? null,
       hw.ramGb ?? null, hw.ramRatedSpeedMtps ?? null, hw.ramSpeedMtps ?? null,
-      hw.os ?? null, hw.resolution ?? null,
+      hw.os ?? null, resolution,
       run.generatedFrameTech, run.framesObjectKey ?? null,
       run.schemaVersion, run.parserVersion, run.createdAt, hw.gpuVramTotalMb ?? null,
       summary.avgFps, summary.onePercentLowFps, summary.pointOnePercentLowFps,
@@ -370,14 +376,14 @@ export async function insertRun(run: Run, db: Queryable = getPool()): Promise<vo
       summary.sampleCount, summary.durationSeconds,
       run.capabilityManifest ? JSON.stringify(run.capabilityManifest) : null,
       run.capabilityManifest?.version ?? null,
-      run.methodologyManifest ? JSON.stringify(run.methodologyManifest) : null,
-      run.methodologyManifest?.version ?? null,
-      run.methodologyManifest?.upscaler ?? null,
-      run.methodologyManifest?.rayTracing ?? null,
-      run.methodologyManifest?.framePacing.capFps ?? null,
-      run.methodologyManifest?.framePacing.vsync ?? null,
-      run.methodologyManifest?.framePacing.vrr ?? null,
-      run.methodologyManifest?.sceneType ?? null,
+      methodologyManifest ? JSON.stringify(methodologyManifest) : null,
+      methodologyManifest?.version ?? null,
+      methodologyManifest?.upscaler ?? null,
+      methodologyManifest?.rayTracing ?? null,
+      methodologyManifest?.framePacing.capFps ?? null,
+      methodologyManifest?.framePacing.vsync ?? null,
+      methodologyManifest?.framePacing.vrr ?? null,
+      methodologyManifest?.sceneType ?? null,
     ],
   );
 }

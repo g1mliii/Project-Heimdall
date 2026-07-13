@@ -18,6 +18,9 @@ create index if not exists runs_game_gpu_idx
     upscaler,
     ray_tracing,
     generated_frame_tech,
+    frame_pacing_cap,
+    vsync,
+    vrr,
     scene_type,
     created_at desc,
     id desc

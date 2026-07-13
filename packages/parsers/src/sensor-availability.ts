@@ -25,11 +25,10 @@ import {
   type FrameSample,
   type GpuVendor,
   type HardwareSnapshot,
-  type PresentationMode,
-  type SyncMode,
   type VramCapacity,
 } from "@heimdall/shared";
 
+import type { CaptureSemantics } from "./errors";
 import { SENSOR_COLUMN_FIELDS, type SensorColumnField } from "./internal/columns";
 
 export type SensorField = SensorColumnField;
@@ -204,16 +203,13 @@ export function deriveVramCapacity(hardware?: HardwareSnapshot): VramCapacity {
  * over 500k-frame captures.
  */
 /**
- * Capture semantics that the merged frame stream cannot reveal (§16a.3) —
- * declared by the uploader/desktop client or detected from source-specific
- * header columns (e.g. PresentMon `PresentMode`/`AllowsTearing`). Carried
- * through the canonical recompute unchanged, since the worker never sees the
- * original headers.
+ * Capture semantics that the merged frame stream cannot reveal (§16a.3) are
+ * shared with parser output. They are declared by the uploader/desktop client
+ * or detected from source-specific header columns (e.g. PresentMon
+ * `PresentMode`/`AllowsTearing`) and carried through the canonical recompute,
+ * since the worker never sees the original headers.
  */
-export interface DeclaredCaptureSemantics {
-  presentationMode?: PresentationMode;
-  syncMode?: SyncMode;
-}
+export type DeclaredCaptureSemantics = CaptureSemantics;
 
 export function deriveCapabilityManifest(
   frames: readonly FrameSample[],
@@ -248,13 +244,23 @@ export function buildCapabilityManifest(input: {
 }): CapabilityManifest {
   const { source, frameGenerationObserved, hardware, declared } = input;
   const present = new Set(input.presentSensors);
+  const matrixCell = hardware?.gpuVendor
+    ? SENSOR_AVAILABILITY[source][hardware.gpuVendor]
+    : undefined;
   const sensors = Object.fromEntries(
     SENSOR_FIELDS.map((field): [SensorField, CaptureCapability] => {
       const isPresent = present.has(field);
       // CSV/JSON row-per-frame sources are frame-aligned by construction; a
-      // periodically-sampled real export flips this via the matrix-cell
-      // evidence, not the derive path.
-      return [field, { present: isPresent, frameAligned: isPresent }];
+      // real fixture can explicitly prove a periodically sampled column. Only
+      // a `verified-real` cell is allowed to override the safe row-per-frame
+      // default; synthetic expectations never turn a real column into a claim.
+      const frameAligned =
+        isPresent &&
+        !(
+          matrixCell?.provenance === "verified-real" &&
+          matrixCell.evidence?.frameAligned[field] === false
+        );
+      return [field, { present: isPresent, frameAligned }];
     }),
   ) as CapabilityManifest["sensors"];
 

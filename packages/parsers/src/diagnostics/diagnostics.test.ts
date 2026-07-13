@@ -13,6 +13,7 @@ import {
   type HardwareSnapshot,
 } from "@heimdall/shared";
 import { computeRunSummary } from "../metrics";
+import { deriveCapabilityManifest } from "../sensor-availability";
 import { DIAGNOSTIC_RULES, framesToColumns, runDiagnostics, type DiagnosticsInput } from "./index";
 
 const baseHardware: HardwareSnapshot = {
@@ -29,7 +30,7 @@ function inputFor(
   frames: FrameSample[],
   overrides: Partial<DiagnosticsInput> = {},
 ): DiagnosticsInput {
-  return {
+  const input: DiagnosticsInput = {
     summary: computeRunSummary(frames),
     hardware: baseHardware,
     source: "capframex",
@@ -37,6 +38,15 @@ function inputFor(
     frames: framesToColumns(frames),
     ...overrides,
   };
+  // Rich Phase 6.5 attribution requires the same explicit capability evidence
+  // that the worker passes after its canonical Parquet recompute. Existing
+  // Phase 6 rule fixtures remain agnostic to it.
+  return Object.prototype.hasOwnProperty.call(overrides, "capabilityManifest")
+    ? input
+    : {
+        ...input,
+        capabilityManifest: deriveCapabilityManifest(frames, input.source, input.hardware),
+      };
 }
 
 /** Baseline stream at ~10 ms with `stutterMs`-clearing spikes at the given indices. */
@@ -262,6 +272,22 @@ describe("runDiagnostics — confidence-graded bottleneck attribution (§16b / 1
     ]) {
       expect(codes).not.toContain(code);
     }
+  });
+
+  it("requires a frame-aligned capability manifest before attributing busy telemetry", () => {
+    const frames = busyFrames(60, () => ({ cpuBusyMs: 12, gpuBusyMs: 5 }));
+
+    // A legacy/no-manifest caller retains Phase 6 behavior even if columns
+    // happen to be present; the richer likelihood is not guessed.
+    expect(
+      runDiagnostics(inputFor(frames, { capabilityManifest: undefined })).map((finding) => finding.code),
+    ).not.toContain("likely-cpu-bound");
+
+    const manifest = deriveCapabilityManifest(frames, "capframex", baseHardware);
+    manifest.sensors.cpuBusyMs.frameAligned = false;
+    expect(
+      runDiagnostics(inputFor(frames, { capabilityManifest: manifest })).map((finding) => finding.code),
+    ).not.toContain("likely-cpu-bound");
   });
 
   it("stays inconclusive (no attribution) when covered but no regime dominates", () => {

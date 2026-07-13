@@ -18,7 +18,7 @@ import {
   validFrames,
   validRun,
 } from "@heimdall/shared";
-import type { FrameSample, Run } from "@heimdall/shared";
+import type { FrameSample, MethodologyManifest, Run } from "@heimdall/shared";
 import { insertRun, readRun } from "../db";
 import { framesUploadObjectKey, stagingCleanupNotBefore } from "../r2";
 import { createTestDb, testDbAvailable, type TestDb } from "../testing/test-db";
@@ -245,6 +245,33 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
 
     expect(result).toMatchObject({ claimed: 1, validated: 1 });
     expect((await readRun(id, db.pool))?.generatedFrameTech).toBe(GENERATED_FRAME_TECH.none);
+  });
+
+  it("keeps persisted methodology aligned with canonical resolution and frame generation", async () => {
+    const id = "run_wk_methodology";
+    const methodologyManifest: MethodologyManifest = {
+      version: 1,
+      sceneType: "benchmark-scene",
+      resolution: "1920x1080", // stale declaration; parsed hardware says 1440p.
+      upscaler: "dlss",
+      rayTracing: "on",
+      frameGeneration: GENERATED_FRAME_TECH.dlss3,
+      framePacing: { vsync: false, vrr: true },
+    };
+    await setupFinalizedRun(
+      id,
+      runFixture(id, {
+        generatedFrameTech: GENERATED_FRAME_TECH.dlss3,
+        methodologyManifest,
+      }),
+    );
+
+    expect(await drainJobs({}, realDeps(async () => parquetBytes))).toMatchObject({ validated: 1 });
+    expect((await readRun(id, db.pool))?.methodologyManifest).toEqual({
+      ...methodologyManifest,
+      resolution: validRun.hardware.resolution,
+      frameGeneration: GENERATED_FRAME_TECH.none,
+    });
   });
 
   it("transient storage error retries; the attempts cap terminalizes (12.5)", async () => {

@@ -103,6 +103,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0016_capability_manifest.sql",
       "0017_methodology_manifest.sql",
       "0018_comparability_index.sql",
+      "0019_comparability_frame_pacing_index.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
@@ -451,6 +452,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     };
     const run = {
       ...fixtureRunWithId("run_manifests"),
+      generatedFrameTech: "dlss3" as const,
       capabilityManifest,
       methodologyManifest,
     };
@@ -491,7 +493,16 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
          from pg_index where indexrelid = 'runs_game_gpu_idx'::regclass`,
     );
     const definition = rows[0]?.definition ?? "";
-    for (const column of ["resolution", "upscaler", "ray_tracing", "generated_frame_tech", "scene_type"]) {
+    for (const column of [
+      "resolution",
+      "upscaler",
+      "ray_tracing",
+      "generated_frame_tech",
+      "frame_pacing_cap",
+      "vsync",
+      "vrr",
+      "scene_type",
+    ]) {
       expect(definition, `runs_game_gpu_idx includes ${column}`).toContain(column);
     }
     // The partial predicate is preserved from 0004.

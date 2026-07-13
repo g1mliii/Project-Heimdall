@@ -8,12 +8,13 @@
  * injectable so tests run it in Node.
  */
 
-import { computeRunSummary, parseAnyCapture } from "@heimdall/parsers";
+import { computeRunSummary, deriveCapabilityManifest, parseAnyCapture } from "@heimdall/parsers";
 import type { ParseWarning } from "@heimdall/parsers";
 import {
   CURRENT_SCHEMA_VERSION,
   GENERATED_FRAME_TECH,
   INGEST_LIMITS,
+  METHODOLOGY_MANIFEST_VERSION,
   PARQUET_CONTENT_TYPE,
   UNKNOWN_HARDWARE,
   createRunResponseSchema,
@@ -25,6 +26,7 @@ import type {
   CreateRunRequest,
   FinalizeRunRequest,
   HardwareSnapshot,
+  MethodologyManifest,
   RunSummary,
 } from "@heimdall/shared";
 import { readApiFailure } from "../api/errors";
@@ -82,6 +84,8 @@ export interface UploadOptions {
   visibility: "unlisted" | "public";
   /** Overrides/completes hardware when the log carries none (PresentMon CSV). */
   hardware?: Partial<HardwareSnapshot>;
+  /** Optional declared setup details for reproducibility/comparability (§16c). */
+  methodology?: Omit<MethodologyManifest, "version" | "resolution" | "frameGeneration">;
   onProgress?: (progress: UploadProgress) => void;
   transport?: UploadTransport;
 }
@@ -124,7 +128,13 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
     if (!parsed.ok) {
       return { ok: false, code: parsed.error.code, message: parsed.error.message };
     }
-    const { frames, hardware: parsedHardware, parserVersion } = parsed.capture;
+    const {
+      frames,
+      hardware: parsedHardware,
+      parserVersion,
+      captureSemantics,
+      captureProfile,
+    } = parsed.capture;
 
     // Fast local feedback for the same limits the server enforces (§11.10).
     if (frames.length > INGEST_LIMITS.maxFramesPerRun) {
@@ -164,6 +174,38 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
       cpu: options.hardware?.cpu ?? parsedHardware?.cpu ?? UNKNOWN_HARDWARE.cpu,
     };
 
+    const generatedFrameTech =
+      summary.generatedFramePct > 0
+        ? GENERATED_FRAME_TECH.unknown
+        : GENERATED_FRAME_TECH.none;
+    const capabilityManifest = deriveCapabilityManifest(
+      frames,
+      parsed.source,
+      hardware,
+      captureSemantics,
+    );
+    // Parser-detected details win over a declaration: unlike a user's text
+    // entry, the source header/profile is direct capture evidence. Everything
+    // else remains explicitly declared and therefore optional.
+    const methodologyManifest: MethodologyManifest | undefined =
+      options.methodology === undefined
+        ? undefined
+        : {
+            version: METHODOLOGY_MANIFEST_VERSION,
+            ...options.methodology,
+            ...(hardware.resolution === undefined ? {} : { resolution: hardware.resolution }),
+            ...(captureSemantics?.graphicsApi === undefined
+              ? {}
+              : { graphicsApi: captureSemantics.graphicsApi }),
+            ...(captureProfile === undefined
+              ? {}
+              : { captureProfile }),
+            frameGeneration: generatedFrameTech,
+            ...(hardware.os === undefined ? {} : { os: hardware.os }),
+            ...(hardware.gpuDriver === undefined ? {} : { gpuDriver: hardware.gpuDriver }),
+            captureDurationSeconds: summary.durationSeconds,
+          };
+
     emit({ stage: "creating" });
     const createRequest: CreateRunRequest = {
       game: options.game.trim(),
@@ -173,11 +215,10 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
       summary,
       // Capture formats expose whether a frame was generated, but not which
       // vendor technology produced it. Preserve that distinction explicitly.
-      generatedFrameTech:
-        summary.generatedFramePct > 0
-          ? GENERATED_FRAME_TECH.unknown
-          : GENERATED_FRAME_TECH.none,
+      generatedFrameTech,
       parquetByteLength: parquet.byteLength,
+      capabilityManifest,
+      ...(methodologyManifest === undefined ? {} : { methodologyManifest }),
       schemaVersion: CURRENT_SCHEMA_VERSION,
       parserVersion,
     };

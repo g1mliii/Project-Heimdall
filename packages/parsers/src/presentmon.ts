@@ -29,6 +29,7 @@ import {
 import { decodeInput, splitLines } from "./internal/decode";
 import { findColumn, findCsvHeader, headerFailure, splitCsvLine, type FoundHeader } from "./internal/csv";
 import {
+  PRESENTMON_PROFILES,
   PRESENTMON_SEMANTICS_COLUMNS,
   PRESENTMON_V1_COLUMNS,
   PRESENTMON_V2_COLUMNS,
@@ -52,6 +53,7 @@ export function parsePresentMon(input: string | Uint8Array): ParseResult<ParsedC
 
   const isV2 = findColumn(found.header, PRESENTMON_V2_COLUMNS.frameTimeMs) !== undefined;
   const columns = isV2 ? PRESENTMON_V2_COLUMNS : PRESENTMON_V1_COLUMNS;
+  const captureProfile = isV2 ? PRESENTMON_PROFILES[1] : PRESENTMON_PROFILES[0];
 
   const stream = dominantStream(lines, found);
   const generatedColumn = findColumn(found.header, ["frametype"]);
@@ -61,15 +63,16 @@ export function parsePresentMon(input: string | Uint8Array): ParseResult<ParsedC
   });
   if (!rows.ok) return rows;
 
-  // v2 exposes presentation/sync semantics via PresentMode/AllowsTearing that
-  // the merged frame stream cannot reveal; v1 has none (§16a.2/§16a.3).
-  const captureSemantics = isV2 ? detectPresentMonSemantics(lines, found) : undefined;
+  // Both pinned profiles can expose a runtime; v2 additionally exposes the
+  // presentation/sync columns the merged frame stream cannot reveal (§16a.2).
+  const captureSemantics = detectPresentMonSemantics(lines, found);
 
   return success(
     {
       source: SOURCE,
       frames: rows.value,
       parserVersion: parserVersionString(SOURCE),
+      captureProfile: captureProfile.id,
       ...(captureSemantics ? { captureSemantics } : {}),
     },
     [...rows.warnings, ...stream.warnings],
@@ -97,10 +100,16 @@ export function detectPresentMonSemantics(
   lines: readonly string[],
   found: FoundHeader,
 ): CaptureSemantics | undefined {
+  const runtimeIndex = findColumn(found.header, PRESENTMON_SEMANTICS_COLUMNS.runtime);
   const presentModeIndex = findColumn(found.header, PRESENTMON_SEMANTICS_COLUMNS.presentMode);
   const tearingIndex = findColumn(found.header, PRESENTMON_SEMANTICS_COLUMNS.allowsTearing);
   const syncIntervalIndex = findColumn(found.header, PRESENTMON_SEMANTICS_COLUMNS.syncInterval);
-  if (presentModeIndex === undefined && tearingIndex === undefined && syncIntervalIndex === undefined) {
+  if (
+    runtimeIndex === undefined &&
+    presentModeIndex === undefined &&
+    tearingIndex === undefined &&
+    syncIntervalIndex === undefined
+  ) {
     return undefined;
   }
 
@@ -113,6 +122,10 @@ export function detectPresentMonSemantics(
   if (firstRow === undefined) return undefined;
 
   const semantics: CaptureSemantics = {};
+  if (runtimeIndex !== undefined) {
+    const graphicsApi = toGraphicsApi(firstRow[runtimeIndex] ?? "");
+    if (graphicsApi !== undefined) semantics.graphicsApi = graphicsApi;
+  }
   if (presentModeIndex !== undefined) {
     const mode = toPresentationMode(firstRow[presentModeIndex] ?? "");
     if (mode !== "unknown") semantics.presentationMode = mode;
@@ -124,9 +137,20 @@ export function detectPresentMonSemantics(
   );
   if (syncMode !== undefined) semantics.syncMode = syncMode;
 
-  return semantics.presentationMode === undefined && semantics.syncMode === undefined
+  return semantics.presentationMode === undefined &&
+    semantics.syncMode === undefined &&
+    semantics.graphicsApi === undefined
     ? undefined
     : semantics;
+}
+
+/** Normalize the small runtime vocabulary PresentMon writes into methodology. */
+function toGraphicsApi(raw: string): string | undefined {
+  const value = raw.trim().toLowerCase();
+  if (value === "") return undefined;
+  if (value === "d3d12" || value === "direct3d 12") return "dx12";
+  if (value === "d3d11" || value === "direct3d 11") return "dx11";
+  return value;
 }
 
 /**

@@ -6,7 +6,7 @@
 
 import { NextResponse } from "next/server";
 import type { ZodType } from "zod";
-import type { ApiError } from "@heimdall/shared";
+import { INGEST_LIMITS, type ApiError } from "@heimdall/shared";
 import { getIngestEnv } from "../env";
 import { consumeRateLimit } from "../repo/rate-limit";
 
@@ -29,15 +29,65 @@ export function jsonError(
 
 /**
  * Parse + validate a JSON body. Returns the typed value, or a ready-to-return
- * 400 response (discriminate with `instanceof NextResponse`).
+ * 400/413 response (discriminate with `instanceof NextResponse`). The body is
+ * streamed with a byte cap so JSON metadata cannot allocate an unbounded heap
+ * buffer before zod reaches its field limits.
  */
 export async function parseJsonBody<T>(
   request: Request,
   schema: ZodType<T>,
+  { maxBytes = INGEST_LIMITS.maxMetadataBytes }: { maxBytes?: number } = {},
 ): Promise<T | NextResponse<ApiError>> {
+  const declaredLength = request.headers.get("content-length");
+  if (declaredLength !== null) {
+    const bytes = Number(declaredLength);
+    if (Number.isFinite(bytes) && bytes > maxBytes) {
+      return jsonError(413, "payload-too-large", `request body exceeds ${maxBytes} bytes`);
+    }
+  }
+
+  let text: string;
+  try {
+    const reader = request.body?.getReader();
+    if (!reader) {
+      text = "";
+    } else {
+      const chunks: Uint8Array[] = [];
+      let totalBytes = 0;
+      let tooLarge = false;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          totalBytes += value.byteLength;
+          if (totalBytes > maxBytes) {
+            tooLarge = true;
+            await reader.cancel();
+            break;
+          }
+          chunks.push(value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      if (tooLarge) {
+        return jsonError(413, "payload-too-large", `request body exceeds ${maxBytes} bytes`);
+      }
+      const bytes = new Uint8Array(totalBytes);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      text = new TextDecoder().decode(bytes);
+    }
+  } catch {
+    return jsonError(400, "invalid-json", "request body must be valid JSON");
+  }
+
   let raw: unknown;
   try {
-    raw = await request.json();
+    raw = JSON.parse(text);
   } catch {
     return jsonError(400, "invalid-json", "request body must be valid JSON");
   }

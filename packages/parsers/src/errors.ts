@@ -20,6 +20,8 @@ import type {
 export interface CaptureSemantics {
   presentationMode?: PresentationMode;
   syncMode?: SyncMode;
+  /** Graphics runtime recorded by a source header, e.g. `dxgi` or `vulkan`. */
+  graphicsApi?: string;
 }
 
 /** The common output shape every source parser produces. */
@@ -31,6 +33,8 @@ export interface ParsedCapture {
   hardware?: HardwareSnapshot;
   /** Detected presentation/sync semantics (PresentMon v2+); absent otherwise. */
   captureSemantics?: CaptureSemantics;
+  /** Pinned parser-recognized capture profile, e.g. `presentmon-2.x`. */
+  captureProfile?: string;
   /** e.g. `"capframex@1.0.0"` — stored for reprocessing provenance (§2.2). */
   parserVersion: string;
 }

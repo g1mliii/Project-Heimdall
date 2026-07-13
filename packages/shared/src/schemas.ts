@@ -11,11 +11,13 @@ import { z } from "zod";
 import { RUN_VISIBILITY, RUN_STATUS } from "./visibility";
 import {
   CAPABILITY_MANIFEST_VERSION,
+  CAPABILITY_SENSOR_FIELDS,
   CURRENT_SCHEMA_VERSION,
   INGEST_LIMITS,
   METHODOLOGY_MANIFEST_VERSION,
   MIN_FRAME_TIME_MS,
 } from "./constants";
+import type { CapabilitySensorField } from "./constants";
 
 /* ── Primitive enums (kept in lockstep with the domain unions in types.ts) ── */
 
@@ -46,6 +48,11 @@ export const runStatusSchema = z.enum([
 /* ── Shared object schemas ──────────────────────────────────────────────── */
 
 const pct = z.number().min(0).max(100);
+const MAX_METADATA_TEXT_LENGTH = 512;
+const MAX_MANIFEST_CAVEATS = 16;
+const MAX_EVIDENCE_METRICS = 16;
+const metadataTextSchema = z.string().trim().min(1).max(MAX_METADATA_TEXT_LENGTH);
+const evidenceMetricNameSchema = z.string().trim().min(1).max(64);
 
 export const hardwareSnapshotSchema = z.object({
   gpu: z.string().min(1),
@@ -68,9 +75,14 @@ export const hardwareSnapshotSchema = z.object({
  */
 export const diagnosticEvidenceSchema = z.object({
   coverageFraction: z.number().min(0).max(1).optional(),
-  sensors: z.array(z.string()).optional(),
-  metrics: z.record(z.string(), z.number()).optional(),
-  caveats: z.array(z.string()).optional(),
+  sensors: z.array(z.enum(CAPABILITY_SENSOR_FIELDS)).max(CAPABILITY_SENSOR_FIELDS.length).optional(),
+  metrics: z
+    .record(evidenceMetricNameSchema, z.number())
+    .refine((metrics) => Object.keys(metrics).length <= MAX_EVIDENCE_METRICS, {
+      message: `at most ${MAX_EVIDENCE_METRICS} evidence metrics are allowed`,
+    })
+    .optional(),
+  caveats: z.array(metadataTextSchema).max(MAX_MANIFEST_CAVEATS).optional(),
 });
 
 /**
@@ -144,15 +156,11 @@ const captureCapabilitySchema = z.object({
 });
 
 /** Per-sensor capability, keyed by the canonical 7-field sensor set (§7.3). */
-const capabilitySensorsSchema = z.object({
-  gpuLoadPct: captureCapabilitySchema,
-  gpuClockMhz: captureCapabilitySchema,
-  gpuPowerW: captureCapabilitySchema,
-  vramUsedMb: captureCapabilitySchema,
-  cpuLoadPct: captureCapabilitySchema,
-  cpuBusyMs: captureCapabilitySchema,
-  gpuBusyMs: captureCapabilitySchema,
-});
+const capabilitySensorsSchema = z.object(
+  Object.fromEntries(
+    CAPABILITY_SENSOR_FIELDS.map((field) => [field, captureCapabilitySchema]),
+  ) as Record<CapabilitySensorField, typeof captureCapabilitySchema>,
+);
 
 /** Mirrors the `CapabilityManifest` domain type; drift-guarded in the tests. */
 export const capabilityManifestSchema = z.object({
@@ -163,7 +171,7 @@ export const capabilityManifestSchema = z.object({
   syncMode: syncModeSchema,
   frameGenerationObserved: z.boolean(),
   vramCapacity: vramCapacitySchema,
-  caveats: z.array(z.string()),
+  caveats: z.array(metadataTextSchema).max(MAX_MANIFEST_CAVEATS),
 });
 export type CapabilityManifestDto = z.infer<typeof capabilityManifestSchema>;
 
@@ -172,6 +180,7 @@ export type CapabilityManifestDto = z.infer<typeof capabilityManifestSchema>;
 export const sceneTypeSchema = z.enum(["benchmark-scene", "gameplay", "freeform"]);
 export const upscalerModeSchema = z.enum(["none", "dlss", "fsr", "xess", "unknown"]);
 export const rayTracingModeSchema = z.enum(["off", "on", "unknown"]);
+export const hagsStateSchema = z.enum(["enabled", "disabled", "unknown"]);
 
 export const framePacingSchema = z.object({
   capFps: z.number().positive().optional(),
@@ -183,21 +192,22 @@ export const framePacingSchema = z.object({
 /** Mirrors the `MethodologyManifest` domain type; drift-guarded in the tests. */
 export const methodologyManifestSchema = z.object({
   version: z.number().int().positive().default(METHODOLOGY_MANIFEST_VERSION),
-  gameBuild: z.string().min(1).optional(),
-  scene: z.string().min(1).optional(),
+  gameBuild: metadataTextSchema.optional(),
+  scene: metadataTextSchema.optional(),
   sceneType: sceneTypeSchema,
-  settingsPreset: z.string().min(1).optional(),
-  graphicsApi: z.string().min(1).optional(),
-  resolution: z.string().min(1).optional(),
+  settingsPreset: metadataTextSchema.optional(),
+  graphicsApi: metadataTextSchema.optional(),
+  resolution: metadataTextSchema.optional(),
   upscaler: upscalerModeSchema,
   rayTracing: rayTracingModeSchema,
   frameGeneration: generatedFrameTechSchema,
   framePacing: framePacingSchema,
-  os: z.string().min(1).optional(),
-  gpuDriver: z.string().min(1).optional(),
-  captureTool: z.string().min(1).optional(),
-  captureProfile: z.string().min(1).optional(),
-  warmupPolicy: z.string().min(1).optional(),
+  os: metadataTextSchema.optional(),
+  gpuDriver: metadataTextSchema.optional(),
+  captureTool: metadataTextSchema.optional(),
+  captureProfile: metadataTextSchema.optional(),
+  hags: hagsStateSchema.optional(),
+  warmupPolicy: metadataTextSchema.optional(),
   captureDurationSeconds: z.number().positive().optional(),
 });
 export type MethodologyManifestDto = z.infer<typeof methodologyManifestSchema>;

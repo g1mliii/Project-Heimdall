@@ -148,6 +148,10 @@ describe("uploadCapture engine", () => {
     expect(createBody.game).toBe("Cyberpunk 2077");
     expect(createBody.parquetByteLength).toBe(log.putBytes!.byteLength);
     expect(createBody.summary).toEqual(result.summary);
+    expect(createBody.capabilityManifest?.sensors.gpuLoadPct).toEqual({
+      present: true,
+      frameAligned: true,
+    });
 
     // Raw file never transits the API: the PUT carries Parquet, not CSV.
     expect(log.putUrl).toBe("https://r2.example.test/put");
@@ -163,6 +167,38 @@ describe("uploadCapture engine", () => {
       await hashManagementToken(result.managementToken),
     );
     expect(JSON.stringify(log.finalizeBody)).not.toContain(result.managementToken);
+  });
+
+  it("sends parser-derived capability semantics and normalized methodology metadata (§16a/§16c)", async () => {
+    const log: TransportLog = {};
+    const result = await uploadCapture(fixtureFile("presentmon/v2-basic.csv"), {
+      game: "Test Game",
+      visibility: "unlisted",
+      hardware: { resolution: "2560x1440" },
+      methodology: {
+        sceneType: "benchmark-scene",
+        upscaler: "none",
+        rayTracing: "off",
+        framePacing: { vsync: false, vrr: true },
+        hags: "unknown",
+      },
+      transport: mockTransport(log),
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    const createBody = createRunRequestSchema.parse(log.createBody);
+    expect(createBody.capabilityManifest).toMatchObject({
+      source: "presentmon",
+      presentationMode: "hardware-independent-flip",
+      syncMode: "tearing",
+    });
+    expect(createBody.methodologyManifest).toMatchObject({
+      resolution: "2560x1440",
+      graphicsApi: "dxgi",
+      captureProfile: "presentmon-2.x",
+      frameGeneration: "none",
+      hags: "unknown",
+    });
   });
 
   it("round trip: the uploaded parquet recomputes to the exact client summary (§11.5 basis)", async () => {

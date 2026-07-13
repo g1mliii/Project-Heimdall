@@ -299,7 +299,20 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       const corrected = { ...validSummary, avgFps: 100.5, stutterCount: 7 };
       const claimed = await claimNextVerificationJob({}, db.pool);
       expect(claimed?.runId).toBe("run_job_0005");
-      await applyVerificationResult("run_job_0005", corrected, "flagged", false, [], null, claimed!, db.pool);
+      await applyVerificationResult(
+        "run_job_0005",
+        {
+          summary: corrected,
+          runStatus: "flagged",
+          signatureValid: false,
+          diagnostics: [],
+          capabilityManifest: null,
+          methodologyManifest: null,
+          generatedFrameTech: "none",
+        },
+        claimed!,
+        db.pool,
+      );
       await completeVerificationJob(claimed!.id, claimed!.attempts, db.pool);
       const run = await readRun("run_job_0005", db.pool);
       expect(run?.status).toBe(RUN_STATUS.flagged);
@@ -338,7 +351,20 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
 
       const first = await claimNextVerificationJob({}, db.pool);
       expect(first?.runId).toBe("run_job_manifest");
-      await applyVerificationResult("run_job_manifest", validSummary, "validated", null, findings, manifest, first!, db.pool);
+      await applyVerificationResult(
+        "run_job_manifest",
+        {
+          summary: validSummary,
+          runStatus: "validated",
+          signatureValid: null,
+          diagnostics: findings,
+          capabilityManifest: manifest,
+          methodologyManifest: null,
+          generatedFrameTech: "none",
+        },
+        first!,
+        db.pool,
+      );
       await completeVerificationJob(first!.id, first!.attempts, db.pool);
 
       const run = await readRun("run_job_manifest", db.pool);
@@ -358,7 +384,20 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
         ["run_job_manifest"],
       );
       const second = await claimNextVerificationJob({}, db.pool);
-      await applyVerificationResult("run_job_manifest", validSummary, "validated", null, [], null, second!, db.pool);
+      await applyVerificationResult(
+        "run_job_manifest",
+        {
+          summary: validSummary,
+          runStatus: "validated",
+          signatureValid: null,
+          diagnostics: [],
+          capabilityManifest: null,
+          methodologyManifest: null,
+          generatedFrameTech: "none",
+        },
+        second!,
+        db.pool,
+      );
       expect(await readDiagnostics("run_job_manifest", db.pool)).toEqual([]);
       // A null manifest clears the stored one.
       expect((await readRun("run_job_manifest", db.pool))?.capabilityManifest).toBeUndefined();
@@ -380,11 +419,15 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
 
       await applyVerificationResult(
         "run_job_stale_claim",
-        { ...validSummary, avgFps: 333 },
-        "flagged",
-        null,
-        [],
-        null,
+        {
+          summary: { ...validSummary, avgFps: 333 },
+          runStatus: "flagged",
+          signatureValid: null,
+          diagnostics: [],
+          capabilityManifest: null,
+          methodologyManifest: null,
+          generatedFrameTech: "none",
+        },
         first!,
         db.pool,
       );
@@ -394,11 +437,15 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
 
       await applyVerificationResult(
         "run_job_stale_claim",
-        validSummary,
-        "validated",
-        null,
-        [],
-        null,
+        {
+          summary: validSummary,
+          runStatus: "validated",
+          signatureValid: null,
+          diagnostics: [],
+          capabilityManifest: null,
+          methodologyManifest: null,
+          generatedFrameTech: "none",
+        },
         second!,
         db.pool,
       );

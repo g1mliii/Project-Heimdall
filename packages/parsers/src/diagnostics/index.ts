@@ -71,12 +71,15 @@ export function runDiagnostics(input: DiagnosticsInput): DiagnosticFinding[] {
   const frameCount = input.frames.frameTimeMs.length;
   const available = availableSensors(input.frames);
   const findings: DiagnosticFinding[] = [];
+  // Attribution rules share this context, allowing their mutually-exclusive
+  // classification to be memoized for one diagnostics pass over a large run.
+  const context = { input, frameCount };
 
   for (const rule of DIAGNOSTIC_RULES) {
     if (!rule.requiredSensors.every((sensor) => available.has(sensor))) continue;
     let verdict: ReturnType<DiagnosticRule["evaluate"]>;
     try {
-      verdict = rule.evaluate({ input, frameCount });
+      verdict = rule.evaluate(context);
     } catch {
       // A rule must never fail the whole run; treat a throw as "did not fire".
       continue;
