@@ -23,7 +23,7 @@ CapFrameX/PresentMon/MangoHud imports):
 | OS | Vendor | "Driver" that matters | Game-ready mapping exists? |
 | --- | --- | --- | --- |
 | Windows | NVIDIA | GeForce Game Ready / Studio driver (`610.xx`) | Yes (per-game, strong) |
-| Windows | AMD | Adrenalin (`26.6.1` + WHQL wrapper) | Yes (per-game, in release notes) |
+| Windows | AMD | Adrenalin (`26.6.4` + WHQL wrapper) | Yes (per-game, in release notes) |
 | Windows | Intel | Arc/Iris Xe graphics driver (`32.0.101.xxxx`) | Partial (release notes) |
 | Linux | NVIDIA | Proprietary Unix driver (`595.xx`) | No (lean on currency) |
 | Linux | AMD | **Mesa/RADV** (`26.1.x`) + kernel | No (lean on currency) |
@@ -77,8 +77,10 @@ unless its version, release date, and vendor-hosted details URL all validate.
   version and artifact path; the directory provides its release date.
 - **AMD (Win):** Adrenalin release notes at the predictable pattern
   `https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-<ver>.html`
-  (version in URL; page lists newly-supported games). Latest-driver index page
-  links the newest.
+  (version in URL; game-ready releases list newly-supported games). AMD's Vulkan
+  support index can lag hotfix releases — it still listed `26.6.1` when the
+  official `26.6.4` page was current — so the dated fallback is refreshed from
+  the direct vendor page instead of treating that index as authoritative.
 - **Intel (Win):** Arc & Iris Xe graphics driver release notes on intel.com;
   Intel Driver & Support Assistant surface.
 - **AMD/Intel (Linux) = Mesa:** latest Mesa release from
@@ -172,7 +174,9 @@ and `gpu` for NVIDIA.
   uses the vendor's architecture-wide `latest.txt` pointer instead.
 - AMD and Intel are HTML contracts. Fixture-backed parsers fail closed when the
   expected headings disappear, while the dated CSV fallback preserves known
-  coverage without being re-stamped indefinitely.
+  coverage without being re-stamped indefinitely. AMD `26.6.4` is a confirmed
+  hotfix with no New Game Support section, so it advances only the currency
+  catalog; the `26.6.1` per-game requirements remain intact.
 - MangoHud's sysinfo `driver` column preserves strings such as
   `Mesa 26.1.4`; a golden parser fixture locks that contract.
 - The Worker uses manual redirects with an HTTPS host allowlist, a 15-second
@@ -193,6 +197,6 @@ application.
 
 - [Cloudflare Workers limits](https://developers.cloudflare.com/workers/platform/limits/) · [Cron Triggers](https://developers.cloudflare.com/workers/configuration/cron-triggers/)
 - [NVIDIA GeForce drivers](https://www.nvidia.com/en-us/geforce/drivers/) · [Game Ready Drivers](https://www.nvidia.com/en-us/geforce/game-ready-drivers/) · [GFE supported games](https://www.nvidia.com/en-us/geforce/geforce-experience/games/)
-- [AMD Adrenalin 26.6.1 release notes](https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-1.html)
+- [AMD Adrenalin 26.6.4 release notes](https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-4.html)
 - [Intel Arc Graphics Windows driver](https://www.intel.com/content/www/us/en/download/785597/intel-arc-graphics-windows.html)
 - [Mesa release notes](https://docs.mesa3d.org/relnotes.html)

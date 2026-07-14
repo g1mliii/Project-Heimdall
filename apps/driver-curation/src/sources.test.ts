@@ -64,6 +64,23 @@ describe("driver source contracts", () => {
     ]);
   });
 
+  it("parses AMD's confirmed 26.6.4 hotfix without inventing game requirements", async () => {
+    const sourceUrl =
+      "https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-4.html";
+    const batch = parseAmdReleaseNotes(
+      await fixture("amd-hotfix-release.html"),
+      fetchedAt,
+      sourceUrl,
+    );
+    expect(batch.catalog[0]).toMatchObject({
+      vendor: "amd",
+      latestVersion: "26.6.4",
+      releasedAt: "2026-06-29",
+      sourceUrl,
+    });
+    expect(batch.requirements).toEqual([]);
+  });
+
   it("accepts AMD's vendor-relative release-note links", () => {
     expect(
       parseAmdIndex(
@@ -130,5 +147,18 @@ describe("driver source contracts", () => {
         "catalog,amd,windows,gpu,26.6.1,2026-06-02,2026-07-01,https://www.amd.com/release,\n",
     );
     expect(batch.catalog[0]?.fetchedAt).toBe("2026-07-01T00:00:00.000Z");
+  });
+
+  it("keeps AMD's latest currency separate from older game-ready requirements", async () => {
+    const batch = parseFallbackCsv(
+      await readFile(path.resolve(import.meta.dirname, "../data/driver-fallback.csv"), "utf8"),
+    );
+    expect(batch.catalog.find((row) => row.vendor === "amd")).toMatchObject({
+      latestVersion: "26.6.4",
+      releasedAt: "2026-06-29",
+    });
+    expect(
+      batch.requirements.filter((row) => row.vendor === "amd").map((row) => row.minVersion),
+    ).toEqual(["26.6.1", "26.6.1"]);
   });
 });

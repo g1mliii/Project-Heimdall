@@ -1,5 +1,5 @@
 kind,vendor,os,component,version,released_at,checked_at,source_url,title
-catalog,amd,windows,gpu,26.6.1,2026-06-02,2026-07-13,https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-1.html,
+catalog,amd,windows,gpu,26.6.4,2026-06-29,2026-07-13,https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-4.html,
 requirement,amd,windows,gpu,26.6.1,2026-06-02,2026-07-13,https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-1.html,F1 25: 2026 Season Pack
 requirement,amd,windows,gpu,26.6.1,2026-06-02,2026-07-13,https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-1.html,World of Tanks: HEAT
 catalog,intel,windows,gpu,32.0.101.8861,2026-07-07,2026-07-13,https://www.intel.com/content/www/us/en/download/785597/intel-arc-graphics-windows.html,
