@@ -661,6 +661,37 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       }
     });
 
+    it("does not map explicitly unsupported Windows versions to a driver platform", async () => {
+      for (const [id, os] of [
+        ["run_driver_os_windows_7", "Windows 7"],
+        ["run_driver_os_windows_8_1", "Windows 8.1"],
+        ["run_driver_os_windows_server", "Windows Server 2025"],
+      ] as const) {
+        await insertRun(
+          {
+            ...pendingRun(id),
+            hardware: { ...validRun.hardware, os },
+          },
+          db.pool,
+        );
+        expect((await readRunForVerification(id, db.pool))?.driverPlatform).toBeNull();
+      }
+
+      const unversionedId = "run_driver_os_windows_unversioned";
+      await insertRun(
+        {
+          ...pendingRun(unversionedId),
+          hardware: { ...validRun.hardware, os: "Windows" },
+        },
+        db.pool,
+      );
+      expect((await readRunForVerification(unversionedId, db.pool))?.driverPlatform).toEqual({
+        vendor: "nvidia",
+        os: "windows",
+        component: "gpu",
+      });
+    });
+
     it("selects the seeded catalog for every supported vendor and OS cell", async () => {
       await db.pool.query(
         "update driver_catalog set fetched_at = now(), released_at = current_date - interval '8 days'",

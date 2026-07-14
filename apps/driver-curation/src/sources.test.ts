@@ -64,6 +64,33 @@ describe("driver source contracts", () => {
     expect(batch.requirements.map((row) => row.title)).toEqual(["Foo", "Bar", "Baz"]);
   });
 
+  it("preserves conjunctions and dotted titles in NVIDIA game-ready notes", () => {
+    const batch = parseNvidiaLookup(
+      JSON.stringify({
+        Success: "1",
+        IDS: [
+          {
+            downloadInfo: {
+              Version: "610.74",
+              ReleaseDateTime: "Tue Jul 07, 2026",
+              DetailsURL: "https://www.nvidia.com/en-us/drivers/details/274187/",
+              ReleaseNotes:
+                "Game Ready for Indiana Jones and the Great Circle\n" +
+                "Enhanced gaming experience including S.T.A.L.K.E.R. 2: Heart of Chornobyl.",
+            },
+          },
+        ],
+      }),
+      "windows",
+      fetchedAt,
+    );
+
+    expect(batch.requirements.map((row) => row.title)).toEqual([
+      "Indiana Jones and the Great Circle",
+      "S.T.A.L.K.E.R. 2: Heart of Chornobyl",
+    ]);
+  });
+
   it("parses NVIDIA's confirmed Linux latest.txt + directory-index contract", async () => {
     const batch = parseNvidiaLinuxLatest(
       await fixture("nvidia-linux-latest.txt"),

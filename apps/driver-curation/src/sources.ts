@@ -112,10 +112,16 @@ function uniqueTitles(values: readonly string[]): string[] {
   return [...titles.values()];
 }
 
-function splitTitleList(value: string): string[] {
+function splitTitleList(value: string, splitListConjunction = false): string[] {
+  const separator = splitListConjunction
+    ? /\s*,\s*(?:and\s+)?|\s+and\s+(?=[A-Z0-9])/i
+    : /\s*,\s*(?:and\s+)?/i;
   return value
     .replace(/^.*?including\s+/i, "")
-    .split(/\s*,\s*(?:and\s+)?|\s+and\s+/i)
+    // Only NVIDIA's explicit plural "games including" prose supports a
+    // list-style conjunction. A Game Ready title can legitimately contain
+    // "and" (for example, Indiana Jones and the Great Circle).
+    .split(separator)
     .map((part) => part.trim());
 }
 
@@ -178,7 +184,7 @@ export function parseNvidiaLookup(
     if (/^Game Ready for\s+/i.test(line)) {
       gameTitles.push(...splitTitleList(line.replace(/^Game Ready for\s+/i, "")));
     } else if (/\bincluding\b/i.test(line) && /gaming experience/i.test(line)) {
-      gameTitles.push(...splitTitleList(line.replace(/\..*$/, "")));
+      gameTitles.push(...splitTitleList(line, /\bgames\s+including\b/i.test(line)));
     }
   }
   const requirementBatch = boundedRequirements(
