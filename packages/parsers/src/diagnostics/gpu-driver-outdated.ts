@@ -15,6 +15,11 @@ import type { DiagnosticRule, DriverComponent, DriverPlatform } from "./types";
  * the numeric version token published by their own source.
  */
 const NVIDIA_WINDOWS_VERSION = /^\d{3}\.\d{2,}(?:\.\d+)?$/;
+// AMD's Windows Driver Store package versions (for example
+// `32.0.31019.2002`) are not comparable with Adrenalin releases such as
+// `26.6.4`. A capture that supplies only this package token must no-op rather
+// than falsely appear newer than the curated Adrenalin version.
+const AMD_WINDOWS_DRIVER_STORE_VERSION = /^\d+\.\d+\.\d+\.\d+$/;
 const VERSION_TOKEN = /\d+(?:\.\d+)+/;
 
 /** Split a driver string into its numeric segments (`"31.0.15.6636"` → [31,0,15,6636]). */
@@ -66,6 +71,15 @@ export function normalizeDriverVersion(
     const branchTail = windows[1]!;
     const build = windows[2]!;
     return `${branchTail}${build.slice(0, -2)}.${build.slice(-2)}`;
+  }
+
+  if (
+    vendor === "amd" &&
+    os === "windows" &&
+    component === "gpu" &&
+    AMD_WINDOWS_DRIVER_STORE_VERSION.test(token)
+  ) {
+    return null;
   }
 
   return token;

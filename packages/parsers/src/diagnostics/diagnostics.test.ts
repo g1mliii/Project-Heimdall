@@ -225,6 +225,28 @@ describe("runDiagnostics — per-rule fixtures", () => {
     );
   });
 
+  it("self-suppresses AMD Windows driver-store package versions", () => {
+    const frames = framesWithStutters(20, []);
+    const platform = { vendor: "amd", os: "windows", component: "gpu" } as const;
+    const findings = runDiagnostics(
+      inputFor(frames, {
+        vendor: "amd",
+        hardware: {
+          ...baseHardware,
+          gpuVendor: "amd",
+          gpuDriver: "32.0.31019.2002",
+        },
+        game: { requiredDriver: "26.6.1" },
+        driverPlatform: platform,
+        driverCatalog: { ...platform, latestVersion: "26.6.4" },
+      }),
+    );
+
+    expect(normalizeDriverVersion("32.0.31019.2002", "amd", "windows", "gpu")).toBeNull();
+    expect(findings.map((finding) => finding.code)).not.toContain("driver-update-available");
+    expect(findings.map((finding) => finding.code)).not.toContain("gpu-driver-outdated");
+  });
+
   const currencyCells = [
     {
       label: "NVIDIA / Windows",

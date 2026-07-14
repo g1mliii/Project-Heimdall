@@ -6,6 +6,14 @@ import { compareDriverVersions, normalizeDriverVersion } from "./gpu-driver-outd
 const version = fc
   .array(fc.integer({ min: 0, max: 9_999 }), { minLength: 1, maxLength: 6 })
   .map((segments) => segments.join("."));
+const amdWindowsDriverStoreVersion = fc
+  .tuple(
+    fc.integer({ min: 10, max: 99 }),
+    fc.integer({ min: 0, max: 9 }),
+    fc.integer({ min: 10_000, max: 99_999 }),
+    fc.integer({ min: 1_000, max: 9_999 }),
+  )
+  .map((segments) => segments.join("."));
 
 describe("driver version properties", () => {
   it("is reflexive and antisymmetric for numeric versions", () => {
@@ -33,7 +41,16 @@ describe("driver version properties", () => {
     fc.assert(
       fc.property(fc.string(), (capture) => {
         expect(() => normalizeDriverVersion(capture, "nvidia", "windows", "gpu")).not.toThrow();
+        expect(() => normalizeDriverVersion(capture, "amd", "windows", "gpu")).not.toThrow();
         expect(() => normalizeDriverVersion(capture, "amd", "linux", "mesa")).not.toThrow();
+      }),
+    );
+  });
+
+  it("rejects AMD Windows driver-store package versions", () => {
+    fc.assert(
+      fc.property(amdWindowsDriverStoreVersion, (capture) => {
+        expect(normalizeDriverVersion(capture, "amd", "windows", "gpu")).toBeNull();
       }),
     );
   });
