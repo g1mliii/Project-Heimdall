@@ -176,6 +176,11 @@ export const INGEST_LIMITS = {
   /** ~2.3 h at 60 fps; keeps the Parquet far below the server read cap. */
   maxFramesPerRun: 500_000,
   /**
+   * Browser-side raw-capture cap. Parsing expands UTF-8 bytes into text, lines,
+   * and frame objects, so reject before `File.arrayBuffer()` can spike a tab.
+   */
+  maxCaptureBytes: 64 * 1024 * 1024,
+  /**
    * Hard cap on the uploaded Parquet. The web app's R2 MAX_OBJECT_READ_BYTES
    * is defined AS this constant, so the verification worker can always read
    * back an object the API accepted — equal by construction, not by test.

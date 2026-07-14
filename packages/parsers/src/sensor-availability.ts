@@ -237,15 +237,6 @@ export function deriveVramCapacity(hardware?: HardwareSnapshot): VramCapacity {
 }
 
 /**
- * Derive the per-run {@link CapabilityManifest} (§16a.3/§16a.4) purely from the
- * parsed frames + hardware snapshot, so the browser and the server recompute it
- * identically. Capture semantics the merged frame stream cannot reveal
- * (presentation/sync mode) default to `"unknown"` and are populated by the
- * uploader/desktop client; VRAM capacity and frame-generation are detectable
- * here. This never inspects per-frame values beyond presence, so it stays cheap
- * over 500k-frame captures.
- */
-/**
  * Capture semantics that the merged frame stream cannot reveal (§16a.3) are
  * shared with parser output. They are declared by the uploader/desktop client
  * or detected from source-specific header columns (e.g. PresentMon
@@ -259,6 +250,15 @@ export type DeclaredCaptureSemantics = CaptureSemantics & {
   sensorAlignment?: Partial<Record<SensorField, boolean>>;
 };
 
+/**
+ * Derive the per-run {@link CapabilityManifest} (§16a.3/§16a.4) purely from the
+ * parsed frames + hardware snapshot, so the browser and the server recompute it
+ * identically. Capture semantics the merged frame stream cannot reveal
+ * (presentation/sync mode) default to `"unknown"` and are populated by the
+ * uploader/desktop client; VRAM capacity and frame-generation are detectable
+ * here. This never inspects per-frame values beyond presence, so it stays cheap
+ * over 500k-frame captures.
+ */
 export function deriveCapabilityManifest(
   frames: readonly FrameSample[],
   source: CaptureSource,

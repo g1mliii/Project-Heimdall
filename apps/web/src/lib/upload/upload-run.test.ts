@@ -14,6 +14,7 @@ import {
   createRunRequestSchema,
   finalizeRunRequestSchema,
   hashManagementToken,
+  INGEST_LIMITS,
   rowsToFrameSamples,
 } from "@heimdall/shared";
 import {
@@ -355,6 +356,22 @@ describe("uploadCapture engine", () => {
       });
       expect(result.ok, fixture).toBe(false);
     }
+    expect(transport.fetch).not.toHaveBeenCalled();
+    expect(transport.putWithProgress).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized raw capture before allocating its bytes", async () => {
+    const arrayBuffer = vi.fn();
+    const file = {
+      size: INGEST_LIMITS.maxCaptureBytes + 1,
+      arrayBuffer,
+    } as unknown as File;
+    const transport = mockTransport({});
+
+    await expect(
+      uploadCapture(file, { game: "Test Game", visibility: "unlisted", transport }),
+    ).resolves.toMatchObject({ ok: false, code: "capture-too-large" });
+    expect(arrayBuffer).not.toHaveBeenCalled();
     expect(transport.fetch).not.toHaveBeenCalled();
     expect(transport.putWithProgress).not.toHaveBeenCalled();
   });

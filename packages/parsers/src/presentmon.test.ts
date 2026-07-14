@@ -154,6 +154,18 @@ describe("parsePresentMon — stream selection & frame generation (§8)", () => 
     expect(warnings.find((w) => w.code === "multiple-streams")).toBeUndefined();
   });
 
+  it("rejects an unbounded number of distinct process/swapchain streams", () => {
+    const lines = [header];
+    for (let i = 0; i <= 1_024; i++) {
+      lines.push(row(`app-${i}.exe`, String(i), `0x${i}`, "Application", 3_500 + i, 10));
+    }
+
+    expect(parsePresentMon(lines.join("\n"))).toMatchObject({
+      ok: false,
+      error: { code: "too-many-streams", source: "presentmon" },
+    });
+  });
+
   it("marks non-Application FrameType rows as generated (DLSS3/FSR3/XeSS)", () => {
     const lines = [header];
     for (let i = 0; i < 6; i++) {

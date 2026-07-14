@@ -629,6 +629,14 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       };
       await insertRun(routeUndeclared, db.pool, { benchmarkSetSecretHash });
       expect(await readVisibleBenchmarkSet(routeUndeclared, db.pool)).toBeNull();
+
+      const apiUndeclared = makeSetRun("run_set_api_undeclared", 100);
+      apiUndeclared.methodologyManifest = {
+        ...apiUndeclared.methodologyManifest!,
+        graphicsApi: undefined,
+      };
+      await insertRun(apiUndeclared, db.pool, { benchmarkSetSecretHash });
+      expect(await readVisibleBenchmarkSet(apiUndeclared, db.pool)).toBeNull();
     });
   });
 

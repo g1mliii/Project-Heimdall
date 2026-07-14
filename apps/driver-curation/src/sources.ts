@@ -1,5 +1,5 @@
 import { compareDriverVersions, normalizeDriverVersion, splitCsvLine } from "@heimdall/parsers";
-import { cleanDisplayName } from "@heimdall/shared";
+import { cleanDisplayName, normalizeAliasName } from "@heimdall/shared";
 
 import { fetchText } from "./fetch";
 import type {
@@ -107,7 +107,7 @@ function uniqueTitles(values: readonly string[]): string[] {
   const titles = new Map<string, string>();
   for (const value of values) {
     const cleaned = title(value);
-    if (cleaned) titles.set(cleaned.toLowerCase(), cleaned);
+    if (cleaned) titles.set(normalizeAliasName(cleaned), cleaned);
   }
   return [...titles.values()];
 }
@@ -115,7 +115,7 @@ function uniqueTitles(values: readonly string[]): string[] {
 function splitTitleList(value: string): string[] {
   return value
     .replace(/^.*?including\s+/i, "")
-    .split(/\s*,\s*|\s+and\s+/i)
+    .split(/\s*,\s*(?:and\s+)?|\s+and\s+/i)
     .map((part) => part.trim());
 }
 

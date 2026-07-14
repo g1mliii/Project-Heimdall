@@ -62,6 +62,12 @@ const indexedMetadataTextSchema = metadataText(MAX_INDEXED_METADATA_TEXT_LENGTH)
 const benchmarkSetIdSchema = z.string().uuid();
 /** URL-safe 256-bit browser-held capability used only to join an existing set. */
 const benchmarkSetSecretSchema = z.string().regex(/^[A-Za-z0-9_-]{43,128}$/);
+/** Browser-local benchmark-set credentials use the same contract as the API. */
+export const benchmarkSetCredentialsSchema = z.object({
+  id: benchmarkSetIdSchema,
+  secret: benchmarkSetSecretSchema,
+});
+export type BenchmarkSetCredentials = z.infer<typeof benchmarkSetCredentialsSchema>;
 const evidenceMetricNameSchema = z.string().trim().min(1).max(64);
 
 export const hardwareSnapshotSchema = z.object({

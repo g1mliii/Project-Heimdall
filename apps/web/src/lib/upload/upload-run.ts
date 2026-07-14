@@ -137,10 +137,18 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
     };
   }
 
+  if (file.size > INGEST_LIMITS.maxCaptureBytes) {
+    return {
+      ok: false,
+      code: "capture-too-large",
+      message: `capture is ${file.size} bytes (limit ${INGEST_LIMITS.maxCaptureBytes})`,
+    };
+  }
+
   try {
     emit({ stage: "parsing" });
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const parsed = parseAnyCapture(bytes);
+    const parsed = parseAnyCapture(bytes, { maxFrames: INGEST_LIMITS.maxFramesPerRun });
     if (!parsed.ok) {
       return { ok: false, code: parsed.error.code, message: parsed.error.message };
     }

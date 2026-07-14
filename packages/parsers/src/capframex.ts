@@ -8,7 +8,13 @@
 
 import { MIN_FRAME_TIME_MS, type FrameSample, type HardwareSnapshot } from "@heimdall/shared";
 
-import { failure, success, type ParsedCapture, type ParseResult } from "./errors";
+import {
+  failure,
+  success,
+  type CaptureParseOptions,
+  type ParsedCapture,
+  type ParseResult,
+} from "./errors";
 import { decodeInput, splitLines } from "./internal/decode";
 import { findCsvHeader, headerFailure } from "./internal/csv";
 import {
@@ -16,29 +22,37 @@ import {
   frameAlignedSensorMap,
   type SensorColumnField,
 } from "./internal/columns";
-import { finalizeFrames, guardSensor, parseFrameRowsAt } from "./internal/frames";
+import {
+  finalizeFrames,
+  guardSensor,
+  parseFrameRowsAt,
+  tooManyFramesFailure,
+} from "./internal/frames";
 import { inferGpuVendor } from "./internal/vendor";
 import { parseVramTotalMb } from "./internal/hardware";
 import { parserVersionString } from "./version";
 
 const SOURCE = "capframex" as const;
 
-export function parseCapFrameX(input: string | Uint8Array): ParseResult<ParsedCapture> {
+export function parseCapFrameX(
+  input: string | Uint8Array,
+  { maxFrames }: CaptureParseOptions = {},
+): ParseResult<ParsedCapture> {
   const text = decodeInput(input);
   const sniff = /\S/.exec(text)?.[0];
   if (sniff === undefined) return failure(SOURCE, "empty-input", "Input is empty.");
-  if (sniff === "{" || sniff === "[") return parseJson(text);
-  return parseCsv(text);
+  if (sniff === "{" || sniff === "[") return parseJson(text, maxFrames);
+  return parseCsv(text, maxFrames);
 }
 
 /* ── CSV branch (§7.1–§7.2) ─────────────────────────────────────────────── */
 
-function parseCsv(text: string): ParseResult<ParsedCapture> {
+function parseCsv(text: string, maxFrames?: number): ParseResult<ParsedCapture> {
   const lines = splitLines(text);
   const found = findCsvHeader(lines, CAPFRAMEX_COLUMNS.frameTimeMs);
   if (found === undefined) return headerFailure(SOURCE, lines);
 
-  const rows = parseFrameRowsAt(SOURCE, lines, found, CAPFRAMEX_COLUMNS);
+  const rows = parseFrameRowsAt(SOURCE, lines, found, CAPFRAMEX_COLUMNS, { maxFrames });
   if (!rows.ok) return rows;
 
   return success(
@@ -206,7 +220,7 @@ function attachPeriodicSensors(
   }
 }
 
-function parseJson(text: string): ParseResult<ParsedCapture> {
+function parseJson(text: string, maxFrames?: number): ParseResult<ParsedCapture> {
   let root: unknown;
   try {
     root = JSON.parse(text);
@@ -305,6 +319,10 @@ function parseJson(text: string): ParseResult<ParsedCapture> {
         lastRawMs = rawMs;
       } else {
         localTimeMs = runCumulativeMs;
+      }
+
+      if (maxFrames !== undefined && frames.length >= maxFrames) {
+        return tooManyFramesFailure(SOURCE, maxFrames);
       }
 
       const frame: FrameSample = { timeMs: runOffsetMs + localTimeMs, frameTimeMs };

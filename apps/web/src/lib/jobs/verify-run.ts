@@ -10,7 +10,7 @@
 import { createPublicKey, verify as cryptoVerify } from "node:crypto";
 import { GENERATED_FRAME_TECH, RUN_STATUS, normalizeMethodologyManifest } from "@heimdall/shared";
 import type { CapabilityManifest, DiagnosticFinding, GeneratedFrameTech, RunSummary } from "@heimdall/shared";
-import { buildCapabilityManifest, runDiagnostics, SENSOR_FIELDS } from "@heimdall/parsers";
+import { buildCapabilityManifest, runDiagnostics } from "@heimdall/parsers";
 import { readRunForVerification, type Queryable } from "../db";
 import { applyVerificationResult, type ClaimedJob } from "../repo/jobs";
 import { computeFrameParquetSummary } from "../parquet/frame-metadata";
@@ -122,8 +122,10 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
       // Recompute the capability manifest canonically from the stored Parquet —
       // the client-derived manifest (written at insertRun) was provisional, the
       // same way the summary is. Cheap: presence booleans + hardware, no frame
-      // arrays retained. Declared capture semantics (presentation/sync mode) that
-      // the Parquet can't reveal are preserved from the stored client manifest.
+      // arrays retained. Only capture semantics that the Parquet cannot reveal
+      // (presentation/sync mode and VRAM capacity) survive from the provisional
+      // client manifest. Sensor alignment gates richer diagnostics, so it must
+      // be derived from server-owned source evidence instead.
       capabilityManifest = buildCapabilityManifest({
         source: run.captureSource,
         presentSensors: parquet.presentSensors,
@@ -135,12 +137,6 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
                 presentationMode: run.capabilityManifest.presentationMode,
                 syncMode: run.capabilityManifest.syncMode,
                 vramCapacity: run.capabilityManifest.vramCapacity,
-                sensorAlignment: Object.fromEntries(
-                  SENSOR_FIELDS.map((field) => [
-                    field,
-                    run.capabilityManifest!.sensors[field].frameAligned,
-                  ]),
-                ),
               },
             }
           : {}),

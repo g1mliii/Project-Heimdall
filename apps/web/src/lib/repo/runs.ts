@@ -10,6 +10,7 @@ import {
   aggregateEligibilitySql,
   comparabilityMatchSql,
   comparabilityProfileSql,
+  comparabilitySelectSql,
   isAggregateEligible,
   RUN_STATUS,
   RUN_VISIBILITY,
@@ -95,9 +96,7 @@ export async function readVisibleBenchmarkSet(
 
   const rows = await query<BenchmarkSetAggregateRow>(
     `with base as (
-       select game_id, gpu_hardware_id, resolution, scene, settings_preset,
-              upscaler, ray_tracing, generated_frame_tech, graphics_api,
-              frame_pacing_cap, vsync, vrr, scene_type
+       select ${comparabilitySelectSql("base")}
          from runs base
         where base.id = $2
           and base.benchmark_set_id = $1

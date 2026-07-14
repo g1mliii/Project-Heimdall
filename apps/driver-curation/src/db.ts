@@ -3,6 +3,9 @@ import { normalizeAliasName, slugifyGameName } from "@heimdall/shared";
 
 import type { CurationBatch, PersistReport } from "./types";
 
+const LEGACY_REQUIRED_DRIVER_SOURCE =
+  "repo://infra/db/migrations/0012_seed_required_drivers.sql";
+
 /**
  * One HTTP query performs both idempotent upserts. Game-ready titles resolve
  * only through existing canonical rows/aliases. Exact slugs win; conservative
@@ -38,21 +41,37 @@ export const CURATION_UPSERT_SQL = `with catalog_input as (
      or (
        excluded.released_at = driver_catalog.released_at
        and (
-         excluded.fetched_at > driver_catalog.fetched_at
-         or (
-           excluded.fetched_at = driver_catalog.fetched_at
-           and (
-             excluded.gpu_series,
-             excluded.latest_version,
-             excluded.source_url
-           ) is distinct from (
-             driver_catalog.gpu_series,
-             driver_catalog.latest_version,
-             driver_catalog.source_url
-           )
-         )
-       )
-     )
+          -- Source parsing admits only numeric dot-separated versions; arrays
+          -- compare those segments numerically rather than lexically.
+          string_to_array(regexp_replace(excluded.latest_version, '([.]0)+$', ''), '.')::numeric[]
+            > string_to_array(
+              regexp_replace(driver_catalog.latest_version, '([.]0)+$', ''),
+              '.'
+            )::numeric[]
+          or (
+            string_to_array(regexp_replace(excluded.latest_version, '([.]0)+$', ''), '.')::numeric[]
+              = string_to_array(
+                regexp_replace(driver_catalog.latest_version, '([.]0)+$', ''),
+                '.'
+              )::numeric[]
+            and (
+              excluded.fetched_at > driver_catalog.fetched_at
+              or (
+                excluded.fetched_at = driver_catalog.fetched_at
+                and (
+                  excluded.gpu_series,
+                  excluded.latest_version,
+                  excluded.source_url
+                ) is distinct from (
+                  driver_catalog.gpu_series,
+                  driver_catalog.latest_version,
+                  driver_catalog.source_url
+                )
+              )
+            )
+          )
+        )
+      )
   returning 1
 ), requirement_input as (
   select *
@@ -72,23 +91,30 @@ export const CURATION_UPSERT_SQL = `with catalog_input as (
   select requirement_input.*,
          regexp_split_to_array(normalized_name, '\\s+') as tokens
     from requirement_input
-), existing_names as (
-  select g.id as game_id,
-         lower(g.name) as normalized_name,
-         regexp_split_to_array(lower(g.name), '\\s+') as tokens
-    from games g
-  union all
-  select ga.game_id,
-         ga.normalized_name,
-         regexp_split_to_array(ga.normalized_name, '\\s+') as tokens
-    from game_aliases ga
+), requirement_probes as (
+  -- A score of 0.82 permits at most floor(18% of input tokens) to differ.
+  -- Probe with one more of the longest distinct tokens than that allowance:
+  -- every candidate that can pass the exact overlap test below must share one.
+  -- The GIN indexes in 0024 make this a narrow candidate lookup rather than a
+  -- cross join over every canonical game name and alias.
+  select i.*,
+         array(
+           select token
+             from (
+               select distinct token
+                 from unnest(i.tokens) as input_token(token)
+             ) distinct_tokens
+            order by char_length(token) desc, token
+            limit greatest(1, floor(cardinality(i.tokens) * 0.18)::integer + 1)
+         ) as probe_tokens
+    from requirement_names i
 ), exact_raw_candidates as (
   select i.ordinal, g.id as game_id, 3 as priority, 1::real as score
-    from requirement_names i
+    from requirement_probes i
     join games g on g.slug = i.slug
   union all
   select i.ordinal, ga.game_id, 2 as priority, 1::real as score
-    from requirement_names i
+    from requirement_probes i
     join game_aliases ga on ga.normalized_name = i.normalized_name
 ), exact_candidates as (
   select ordinal, game_id, max(priority) as priority, max(score) as score
@@ -96,7 +122,7 @@ export const CURATION_UPSERT_SQL = `with catalog_input as (
    group by ordinal, game_id
 ), unresolved_requirements as (
   select i.*
-    from requirement_names i
+    from requirement_probes i
    where not exists (
      select 1 from exact_candidates exact where exact.ordinal = i.ordinal
    )
@@ -106,7 +132,19 @@ export const CURATION_UPSERT_SQL = `with catalog_input as (
          1 as priority,
          max(token_overlap.score) as score
     from unresolved_requirements i
-   cross join existing_names n
+   cross join lateral (
+     select g.id as game_id,
+            lower(g.name) as normalized_name,
+            regexp_split_to_array(lower(g.name), '\\s+') as tokens
+       from games g
+      where regexp_split_to_array(lower(g.name), '\\s+') && i.probe_tokens
+     union all
+     select ga.game_id,
+            ga.normalized_name,
+            regexp_split_to_array(ga.normalized_name, '\\s+') as tokens
+       from game_aliases ga
+      where regexp_split_to_array(ga.normalized_name, '\\s+') && i.probe_tokens
+   ) n
    cross join lateral (
      select count(*)::real /
             greatest(cardinality(i.tokens), cardinality(n.tokens), 1) as score
@@ -136,7 +174,7 @@ export const CURATION_UPSERT_SQL = `with catalog_input as (
     from raw_candidates
 ), resolved as (
   select i.*, ranked.game_id
-    from requirement_names i
+    from requirement_probes i
     join ranked_candidates ranked on ranked.ordinal = i.ordinal
    where ranked.candidate_rank = 1
      and (
@@ -153,12 +191,15 @@ export const CURATION_UPSERT_SQL = `with catalog_input as (
     from (
       select deduplicated.*
         from (
-          select resolved.*,
-                 row_number() over (
-                   partition by game_id, vendor, os
-                   order by released_at desc, fetched_at desc, ordinal
-                 ) as target_rank
-            from resolved
+           select resolved.*,
+                  row_number() over (
+                    partition by game_id, vendor, os
+                    order by released_at desc,
+                             string_to_array(regexp_replace(min_version, '([.]0)+$', ''), '.')::numeric[] desc,
+                             fetched_at desc,
+                             ordinal
+                  ) as target_rank
+             from resolved
         ) deduplicated
        where deduplicated.target_rank = 1
     ) resolved_targets
@@ -167,23 +208,45 @@ export const CURATION_UPSERT_SQL = `with catalog_input as (
         source_url = excluded.source_url,
         released_at = excluded.released_at,
         fetched_at = excluded.fetched_at
-  where excluded.released_at > game_driver_requirements.released_at
+  -- Migration 0012 recorded when its synthetic seed was reviewed, not the vendor's
+  -- driver release date. Let the first verified source replace that provenance
+  -- even when its real release date is older; later updates stay no-rollback.
+  where (
+        game_driver_requirements.source_url = '${LEGACY_REQUIRED_DRIVER_SOURCE}'
+        and excluded.source_url <> game_driver_requirements.source_url
+        and excluded.fetched_at >= game_driver_requirements.fetched_at
+      )
+     or excluded.released_at > game_driver_requirements.released_at
      or (
        excluded.released_at = game_driver_requirements.released_at
        and (
-         excluded.fetched_at > game_driver_requirements.fetched_at
-         or (
-           excluded.fetched_at = game_driver_requirements.fetched_at
-           and (
-             excluded.min_version,
-             excluded.source_url
-           ) is distinct from (
-             game_driver_requirements.min_version,
-             game_driver_requirements.source_url
-           )
-         )
-       )
-     )
+          string_to_array(regexp_replace(excluded.min_version, '([.]0)+$', ''), '.')::numeric[]
+            > string_to_array(
+              regexp_replace(game_driver_requirements.min_version, '([.]0)+$', ''),
+              '.'
+            )::numeric[]
+          or (
+            string_to_array(regexp_replace(excluded.min_version, '([.]0)+$', ''), '.')::numeric[]
+              = string_to_array(
+                regexp_replace(game_driver_requirements.min_version, '([.]0)+$', ''),
+                '.'
+              )::numeric[]
+            and (
+              excluded.fetched_at > game_driver_requirements.fetched_at
+              or (
+                excluded.fetched_at = game_driver_requirements.fetched_at
+                and (
+                  excluded.min_version,
+                  excluded.source_url
+                ) is distinct from (
+                  game_driver_requirements.min_version,
+                  game_driver_requirements.source_url
+                )
+              )
+            )
+          )
+        )
+      )
   returning 1
 )
 select (select count(*)::integer from catalog_upsert) as catalog_upserted,

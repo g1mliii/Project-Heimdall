@@ -42,6 +42,8 @@ export interface FrameRowsInput {
    * any non-empty value other than `Application` sets `frame.generated`.
    */
   generatedColumn?: number;
+  /** Reject on the first valid frame beyond this limit instead of retaining it. */
+  maxFrames?: number;
 }
 
 /** Plausibility guard: implausible sensor readings become "absent", not row-fatal. */
@@ -99,6 +101,14 @@ export function finalizeFrames(source: CaptureSource, tally: FrameTally): ParseR
   }
 
   return { ok: true, value: frames, warnings };
+}
+
+/** Typed early exit for callers that must bound browser-side capture parsing. */
+export function tooManyFramesFailure(
+  source: CaptureSource,
+  maxFrames: number,
+): ParseResult<never> {
+  return failure(source, "too-many-frames", `Capture exceeds the ${maxFrames}-frame limit.`);
 }
 
 /**
@@ -189,6 +199,10 @@ export function parseFrameRows(input: FrameRowsInput): ParseResult<FrameSample[]
       continue;
     }
 
+    if (input.maxFrames !== undefined && frames.length >= input.maxFrames) {
+      return tooManyFramesFailure(source, input.maxFrames);
+    }
+
     const frame: FrameSample = { timeMs: rawTimeMs - (baselineMs ?? rawTimeMs), frameTimeMs };
     for (const field of SENSOR_COLUMN_FIELDS) {
       const index = sensorIndices[field];
@@ -222,7 +236,10 @@ export function parseFrameRowsAt(
   lines: readonly string[],
   found: FoundHeader,
   columns: SourceColumns,
-  options?: Pick<FrameRowsInput, "timeColumn" | "sensorScale" | "rowFilter" | "generatedColumn">,
+  options?: Pick<
+    FrameRowsInput,
+    "timeColumn" | "sensorScale" | "rowFilter" | "generatedColumn" | "maxFrames"
+  >,
 ): ParseResult<FrameSample[]> {
   return parseFrameRows({
     source,

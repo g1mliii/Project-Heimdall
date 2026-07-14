@@ -9,7 +9,13 @@
 
 import type { HardwareSnapshot } from "@heimdall/shared";
 
-import { failure, success, type ParsedCapture, type ParseResult } from "./errors";
+import {
+  failure,
+  success,
+  type CaptureParseOptions,
+  type ParsedCapture,
+  type ParseResult,
+} from "./errors";
 import { decodeInput, splitLines } from "./internal/decode";
 import { findColumn, findCsvHeader, headerFailure, splitCsvLine, type FoundHeader } from "./internal/csv";
 import { frameAlignedSensorMap, MANGOHUD_COLUMNS } from "./internal/columns";
@@ -23,7 +29,10 @@ const SOURCE = "mangohud" as const;
 /** Sysinfo values above ~256 in the `ram` slot are MB, not GB (heuristic). */
 const RAM_MB_THRESHOLD = 256;
 
-export function parseMangoHud(input: string | Uint8Array): ParseResult<ParsedCapture> {
+export function parseMangoHud(
+  input: string | Uint8Array,
+  { maxFrames }: CaptureParseOptions = {},
+): ParseResult<ParsedCapture> {
   const text = decodeInput(input);
   const lines = splitLines(text);
   if (lines.length === 0) return failure(SOURCE, "empty-input", "Input is empty.");
@@ -37,6 +46,7 @@ export function parseMangoHud(input: string | Uint8Array): ParseResult<ParsedCap
       ? {}
       : { timeColumn: { index: elapsedIndex, unit: "nanoseconds" as const } }),
     sensorScale: { vramUsedMb: 1024 }, // gpu_vram_used is GiB
+    ...(maxFrames === undefined ? {} : { maxFrames }),
   });
   if (!rows.ok) return rows;
 

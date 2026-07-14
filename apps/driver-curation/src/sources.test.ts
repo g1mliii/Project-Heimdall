@@ -42,6 +42,28 @@ describe("driver source contracts", () => {
     ]);
   });
 
+  it("splits Oxford-comma Game Ready title lists without retaining the conjunction", () => {
+    const batch = parseNvidiaLookup(
+      JSON.stringify({
+        Success: "1",
+        IDS: [
+          {
+            downloadInfo: {
+              Version: "610.74",
+              ReleaseDateTime: "Tue Jul 07, 2026",
+              DetailsURL: "https://www.nvidia.com/en-us/drivers/details/274187/",
+              ReleaseNotes: "Game Ready for Foo, Bar, and Baz",
+            },
+          },
+        ],
+      }),
+      "windows",
+      fetchedAt,
+    );
+
+    expect(batch.requirements.map((row) => row.title)).toEqual(["Foo", "Bar", "Baz"]);
+  });
+
   it("parses NVIDIA's confirmed Linux latest.txt + directory-index contract", async () => {
     const batch = parseNvidiaLinuxLatest(
       await fixture("nvidia-linux-latest.txt"),

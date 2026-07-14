@@ -151,11 +151,18 @@ describe("RunPageClient states", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Benchmark set repeatability")).toBeInTheDocument();
-    expect(screen.getByText("3 measured runs · 1 warm-up pass excluded")).toBeInTheDocument();
+    const benchmarkSetCard = screen.getByLabelText("Benchmark set repeatability");
+    expect(benchmarkSetCard).toBeInTheDocument();
+    expect(benchmarkSetCard).toHaveTextContent("3 measured runs · 1 warm-up pass excluded");
     expect(screen.getByText("High confidence")).toBeInTheDocument();
     expect(screen.getByText("Mean avg FPS")).toBeInTheDocument();
     expect(screen.getByText("Relative variation (CV)")).toBeInTheDocument();
+    for (const numericLabel of ["3", "1"]) {
+      for (const numericValue of screen.getAllByText(numericLabel)) {
+        expect(numericValue).toHaveAttribute("data-mono");
+      }
+    }
+    expect(screen.getByText("±0.8 FPS")).toHaveAttribute("data-mono");
     expect(screen.getByText(/This run is marked as a warm-up/)).toBeInTheDocument();
   });
 
@@ -175,7 +182,9 @@ describe("RunPageClient states", () => {
       />,
     );
 
-    expect(screen.getByText("1 measured run · No warm-up passes recorded")).toBeInTheDocument();
+    expect(screen.getByLabelText("Benchmark set repeatability")).toHaveTextContent(
+      "1 measured run · No warm-up passes recorded",
+    );
     expect(screen.getByText(/Add another measured run to estimate repeatability/)).toBeInTheDocument();
     expect(screen.queryByText("Relative variation (CV)")).not.toBeInTheDocument();
     expect(screen.queryByText(/Standard deviation/)).not.toBeInTheDocument();

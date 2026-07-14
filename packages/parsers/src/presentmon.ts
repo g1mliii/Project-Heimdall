@@ -22,6 +22,7 @@ import type { PresentationMode, SyncMode } from "@heimdall/shared";
 import {
   failure,
   success,
+  type CaptureParseOptions,
   type CaptureSemantics,
   type ParsedCapture,
   type ParseResult,
@@ -41,8 +42,12 @@ import { parseFrameRowsAt, type FrameRowsInput } from "./internal/frames";
 import { parserVersionString } from "./version";
 
 const SOURCE = "presentmon" as const;
+const MAX_TRACKED_STREAMS = 1_024;
 
-export function parsePresentMon(input: string | Uint8Array): ParseResult<ParsedCapture> {
+export function parsePresentMon(
+  input: string | Uint8Array,
+  { maxFrames }: CaptureParseOptions = {},
+): ParseResult<ParsedCapture> {
   const text = decodeInput(input);
   const lines = splitLines(text);
   if (lines.length === 0) return failure(SOURCE, "empty-input", "Input is empty.");
@@ -70,11 +75,13 @@ export function parsePresentMon(input: string | Uint8Array): ParseResult<ParsedC
       : PRESENTMON_PROFILES.v1;
 
   const stream = dominantStream(lines, found);
+  if (stream.error !== undefined) return failure(SOURCE, "too-many-streams", stream.error);
   const generatedColumn = findColumn(found.header, ["frametype"]);
   const rows = parseFrameRowsAt(SOURCE, lines, found, columns, {
     ...(stream.rowFilter === undefined ? {} : { rowFilter: stream.rowFilter }),
     ...(generatedColumn === undefined ? {} : { generatedColumn }),
     ...(isV2 ? presentMonV2TimeColumn(found) : {}),
+    ...(maxFrames === undefined ? {} : { maxFrames }),
   });
   if (!rows.ok) return rows;
 
@@ -214,6 +221,7 @@ function dominantStream(
   rowFilter?: FrameRowsInput["rowFilter"];
   firstRow?: readonly string[];
   warnings: ParseWarning[];
+  error?: string;
 } {
   const indices = ["application", "processid", "swapchainaddress"]
     .map((alias) => findColumn(found.header, [alias]))
@@ -231,16 +239,32 @@ function dominantStream(
     indices.map((index) => cells[index]?.trim() ?? "").join("|");
 
   const counts = new Map<string, number>();
+  // Retain at most one row per bounded stream so semantics detection does not
+  // need to rescan a potentially 500k-frame capture after grouping it.
   const firstRows = new Map<string, readonly string[]>();
   for (let i = found.index + 1; i < lines.length; i++) {
     const line = lines[i]!;
     if (line.trim() === "") continue;
     const cells = splitCsvLine(line, found.dialect.delimiter);
     const key = keyOf(cells);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-    if (!firstRows.has(key)) firstRows.set(key, cells);
+    const previous = counts.get(key);
+    if (previous === undefined) {
+      if (counts.size >= MAX_TRACKED_STREAMS) {
+        return {
+          warnings: [],
+          error: `Capture contains more than ${MAX_TRACKED_STREAMS} process/swapchain streams.`,
+        };
+      }
+      counts.set(key, 1);
+      firstRows.set(key, cells);
+    } else {
+      counts.set(key, previous + 1);
+    }
   }
-  if (counts.size <= 1) return { warnings: [], firstRow: firstRows.values().next().value };
+
+  if (counts.size <= 1) {
+    return { warnings: [], firstRow: firstRows.values().next().value };
+  }
 
   let dominant = "";
   let dominantCount = 0;

@@ -3,13 +3,21 @@ import type { BenchmarkSetStats } from "@heimdall/parsers";
 import { CONFIDENCE_LABEL, CONFIDENCE_TONE } from "./confidence";
 import styles from "./RunPageClient.module.css";
 
-function measuredRunsLabel(count: number): string {
-  return `${count} measured ${count === 1 ? "run" : "runs"}`;
+function measuredRunsLabel(count: number) {
+  return (
+    <>
+      <span data-mono>{count}</span> measured {count === 1 ? "run" : "runs"}
+    </>
+  );
 }
 
-function warmupLabel(count: number): string {
+function warmupLabel(count: number) {
   if (count === 0) return "No warm-up passes recorded";
-  return `${count} warm-up ${count === 1 ? "pass" : "passes"} excluded`;
+  return (
+    <>
+      <span data-mono>{count}</span> warm-up {count === 1 ? "pass" : "passes"} excluded
+    </>
+  );
 }
 
 /** Repeatability context for a public benchmark-set member (§16c.2). */
@@ -58,7 +66,7 @@ export function BenchmarkSetCard({
               />
             </div>
             <p className={styles.benchmarkSetNote}>
-              Standard deviation ±{stats.stdDevAvgFps.toFixed(1)} FPS across{" "}
+              Standard deviation <span data-mono>±{stats.stdDevAvgFps.toFixed(1)} FPS</span> across{" "}
               {measuredRunsLabel(stats.sampleCount)}.
             </p>
           </>

@@ -42,23 +42,6 @@ export interface ComparabilityInput {
   sceneType: SceneType;
 }
 
-/** Field order — shared by the TS builder and {@link comparabilityKeySql}. */
-const KEY_FIELDS = [
-  "gameId",
-  "gpuId",
-  "resolution",
-  "scene",
-  "settingsPreset",
-  "upscaler",
-  "rayTracing",
-  "frameGeneration",
-  "graphicsApi",
-  "frameCapFps",
-  "vsync",
-  "vrr",
-  "sceneType",
-] as const;
-
 /** A component that can't be resolved renders as this sentinel, never empty. */
 const MISSING = "~";
 
@@ -67,6 +50,53 @@ function component(value: string | number | boolean | null): string {
   return String(value);
 }
 
+type ComparabilityKeyField = {
+  inputKey: keyof ComparabilityInput;
+  column: string;
+  profileRequired?: true;
+  sqlComponent: (column: string) => string;
+};
+
+function nullableTextSql(column: string): string {
+  return `coalesce(${column}, '${MISSING}')`;
+}
+
+function nullableNumberSql(column: string): string {
+  return `coalesce(${column}::text, '${MISSING}')`;
+}
+
+function nullableBooleanSql(column: string): string {
+  // Booleans render as 'true'/'false' (matching JS String(boolean)), not the
+  // Postgres 't'/'f', so the SQL key is byte-identical to the TS key.
+  return `case when ${column} is null then '${MISSING}' when ${column} then 'true' else 'false' end`;
+}
+
+/**
+ * Single descriptor list for the TypeScript key, SQL key, SQL match predicate,
+ * and declared-profile gate. A new comparability dimension cannot land in only
+ * one path and silently split Phase 7 distributions from repeatability sets.
+ */
+const KEY_FIELDS = [
+  { inputKey: "gameId", column: "game_id", sqlComponent: nullableNumberSql },
+  { inputKey: "gpuId", column: "gpu_hardware_id", sqlComponent: nullableNumberSql },
+  { inputKey: "resolution", column: "resolution", profileRequired: true, sqlComponent: nullableTextSql },
+  { inputKey: "scene", column: "scene", profileRequired: true, sqlComponent: nullableTextSql },
+  {
+    inputKey: "settingsPreset",
+    column: "settings_preset",
+    profileRequired: true,
+    sqlComponent: nullableTextSql,
+  },
+  { inputKey: "upscaler", column: "upscaler", profileRequired: true, sqlComponent: nullableTextSql },
+  { inputKey: "rayTracing", column: "ray_tracing", profileRequired: true, sqlComponent: nullableTextSql },
+  { inputKey: "frameGeneration", column: "generated_frame_tech", sqlComponent: nullableTextSql },
+  { inputKey: "graphicsApi", column: "graphics_api", profileRequired: true, sqlComponent: nullableTextSql },
+  { inputKey: "frameCapFps", column: "frame_pacing_cap", sqlComponent: nullableNumberSql },
+  { inputKey: "vsync", column: "vsync", profileRequired: true, sqlComponent: nullableBooleanSql },
+  { inputKey: "vrr", column: "vrr", profileRequired: true, sqlComponent: nullableBooleanSql },
+  { inputKey: "sceneType", column: "scene_type", profileRequired: true, sqlComponent: nullableTextSql },
+] as const satisfies readonly ComparabilityKeyField[];
+
 /**
  * Deterministic pooling key. Two runs share a bucket iff every comparability
  * component matches. Unresolved game/GPU render as a sentinel so they only ever
@@ -74,7 +104,7 @@ function component(value: string | number | boolean | null): string {
  * aggregates via the eligibility guard, not here).
  */
 export function comparabilityKey(input: ComparabilityInput): string {
-  return KEY_FIELDS.map((field) => component(input[field])).join("|");
+  return KEY_FIELDS.map((field) => component(input[field.inputKey])).join("|");
 }
 
 /**
@@ -85,28 +115,18 @@ export function comparabilityKey(input: ComparabilityInput): string {
  * asserted against {@link KEY_FIELDS} in the tests.
  */
 export function comparabilityKeySql(alias = "runs"): string {
-  // Booleans render as 'true'/'false' (matching JS String(boolean)), not the
-  // Postgres 't'/'f', so the SQL key is byte-identical to the TS key.
-  const boolText = (column: string): string =>
-    `case when ${column} is null then '${MISSING}' when ${column} then 'true' else 'false' end`;
-  const parts = [
-    `coalesce(${alias}.game_id::text, '${MISSING}')`,
-    `coalesce(${alias}.gpu_hardware_id::text, '${MISSING}')`,
-    `coalesce(${alias}.resolution, '${MISSING}')`,
-    `coalesce(${alias}.scene, '${MISSING}')`,
-    `coalesce(${alias}.settings_preset, '${MISSING}')`,
-    `coalesce(${alias}.upscaler, '${MISSING}')`,
-    `coalesce(${alias}.ray_tracing, '${MISSING}')`,
-    `coalesce(${alias}.generated_frame_tech, '${MISSING}')`,
-    `coalesce(${alias}.graphics_api, '${MISSING}')`,
-    `coalesce(${alias}.frame_pacing_cap::text, '${MISSING}')`,
-    boolText(`${alias}.vsync`),
-    boolText(`${alias}.vrr`),
-    `coalesce(${alias}.scene_type, '${MISSING}')`,
-  ];
+  const parts = KEY_FIELDS.map((field) => field.sqlComponent(`${alias}.${field.column}`));
   // Every part is already coalesced to the '~' sentinel, so concat_ws never
   // skips a NULL and collapses distinct keys.
   return `concat_ws('|', ${parts.join(", ")})`;
+}
+
+/**
+ * The exact column projection needed before comparing a base run to candidate
+ * runs. `alias` is a trusted developer-supplied SQL identifier.
+ */
+export function comparabilitySelectSql(alias = "runs"): string {
+  return KEY_FIELDS.map(({ column }) => `${alias}.${column}`).join(", ");
 }
 
 /**
@@ -117,22 +137,9 @@ export function comparabilityKeySql(alias = "runs"): string {
  * developer-supplied SQL identifiers, never user input.
  */
 export function comparabilityMatchSql(leftAlias: string, rightAlias: string): string {
-  return [
-    "game_id",
-    "gpu_hardware_id",
-    "resolution",
-    "scene",
-    "settings_preset",
-    "upscaler",
-    "ray_tracing",
-    "generated_frame_tech",
-    "graphics_api",
-    "frame_pacing_cap",
-    "vsync",
-    "vrr",
-    "scene_type",
-  ]
-    .map((column) => `${leftAlias}.${column} is not distinct from ${rightAlias}.${column}`)
+  return KEY_FIELDS.map(
+    ({ column }) => `${leftAlias}.${column} is not distinct from ${rightAlias}.${column}`,
+  )
     .join(" and ");
 }
 
@@ -150,14 +157,9 @@ export function comparabilityMatchSql(leftAlias: string, rightAlias: string): st
 export function comparabilityProfileSql(alias = "runs"): string {
   return [
     `${alias}.methodology_manifest_version is not null`,
-    `${alias}.resolution is not null`,
-    `${alias}.scene is not null`,
-    `${alias}.settings_preset is not null`,
-    `${alias}.upscaler is not null`,
-    `${alias}.ray_tracing is not null`,
-    `${alias}.vsync is not null`,
-    `${alias}.vrr is not null`,
-    `${alias}.scene_type is not null`,
+    ...KEY_FIELDS.filter((field) => "profileRequired" in field).map(
+      ({ column }) => `${alias}.${column} is not null`,
+    ),
   ].join(" and ");
 }
 

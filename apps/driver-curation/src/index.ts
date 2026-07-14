@@ -22,9 +22,4 @@ export default {
       throw new Error("driver curation failed");
     }
   },
-};
-
-export { curateDrivers, mergeBatches } from "./curate";
-export { CURATION_UPSERT_SQL, persistCurationWith } from "./db";
-export * from "./sources";
-export type * from "./types";
+} satisfies ExportedHandler<Env>;

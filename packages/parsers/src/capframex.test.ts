@@ -263,6 +263,14 @@ describe("parseCapFrameX — JSON (§7.1 hardware extraction)", () => {
     }
   });
 
+  it("stops a JSON capture at the configured frame limit", () => {
+    const result = parseCapFrameX(
+      JSON.stringify({ Runs: [{ CaptureData: { MsBetweenPresents: [8, 9, 10] } }] }),
+      { maxFrames: 2 },
+    );
+    expect(result).toMatchObject({ ok: false, error: { code: "too-many-frames" } });
+  });
+
   it("skips implausibly tiny positive frame times", () => {
     const frameTimes = Array.from({ length: 40 }, () => 10);
     frameTimes[7] = 1e-300;

@@ -6,6 +6,7 @@ import {
   comparabilityKeySql,
   comparabilityMatchSql,
   comparabilityProfileSql,
+  comparabilitySelectSql,
   type ComparabilityInput,
 } from "./comparability";
 
@@ -139,6 +140,29 @@ describe("comparabilityMatchSql", () => {
   });
 });
 
+describe("comparabilitySelectSql", () => {
+  it("projects every comparability column with the caller's alias", () => {
+    const sql = comparabilitySelectSql("base");
+    for (const column of [
+      "game_id",
+      "gpu_hardware_id",
+      "resolution",
+      "scene",
+      "settings_preset",
+      "upscaler",
+      "ray_tracing",
+      "generated_frame_tech",
+      "graphics_api",
+      "frame_pacing_cap",
+      "vsync",
+      "vrr",
+      "scene_type",
+    ]) {
+      expect(sql).toContain(`base.${column}`);
+    }
+  });
+});
+
 describe("comparabilityProfileSql", () => {
   it("requires a declared methodology profile rather than pooling sentinel values", () => {
     const sql = comparabilityProfileSql("r");
@@ -149,6 +173,7 @@ describe("comparabilityProfileSql", () => {
       "r.settings_preset",
       "r.upscaler",
       "r.ray_tracing",
+      "r.graphics_api",
       "r.vsync",
       "r.vrr",
       "r.scene_type",

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { curateDrivers } from "./curate";
+import { curateDrivers, mergeBatches } from "./curate";
 import type { DriverSource, SourceLoader } from "./sources";
 import type {
   CurationBatch,
@@ -31,6 +31,42 @@ const batch = (catalog: DriverCatalogRecord[]): SourceBatch => ({
 });
 
 describe("curateDrivers", () => {
+  it("keeps the higher version when sources disagree on the same release date", () => {
+    const higher: SourceBatch = {
+      catalog: [{ ...row("nvidia", "windows", "gpu"), latestVersion: "610.75" }],
+      requirements: [
+        {
+          vendor: "nvidia",
+          os: "windows",
+          minVersion: "610.75",
+          title: "Example Game",
+          releasedAt: "2026-07-01",
+          sourceUrl: "https://example.com/higher",
+          fetchedAt: now.toISOString(),
+        },
+      ],
+      dropped: 0,
+    };
+    const lower: SourceBatch = {
+      catalog: [{ ...row("nvidia", "windows", "gpu"), latestVersion: "610.74" }],
+      requirements: [
+        {
+          ...higher.requirements[0]!,
+          minVersion: "610.74",
+          title: "Example Game™",
+          sourceUrl: "https://example.com/lower",
+        },
+      ],
+      dropped: 0,
+    };
+
+    const merged = mergeBatches([higher, lower]);
+
+    expect(merged.catalog[0]?.latestVersion).toBe("610.75");
+    expect(merged.requirements).toHaveLength(1);
+    expect(merged.requirements[0]?.minVersion).toBe("610.75");
+  });
+
   it("isolates source failures and keeps all six currency cells through fallback", async () => {
     const named = (name: string, load: SourceLoader): DriverSource => ({ name, load });
     const sources: DriverSource[] = [

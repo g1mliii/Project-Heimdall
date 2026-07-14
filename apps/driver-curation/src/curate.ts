@@ -1,4 +1,6 @@
 import fallbackCsv from "../data/driver-fallback.csv";
+import { compareDriverVersions } from "@heimdall/parsers";
+import { normalizeAliasName } from "@heimdall/shared";
 
 import { persistCuration } from "./db";
 import { LIVE_DRIVER_SOURCES, parseFallbackCsv, type DriverSource } from "./sources";
@@ -31,10 +33,14 @@ function catalogKey(row: DriverCatalogRecord): string {
 }
 
 function requirementKey(row: GameRequirementCandidate): string {
-  return [row.vendor, row.os, row.title.toLowerCase()].join(":");
+  return [row.vendor, row.os, normalizeAliasName(row.title)].join(":");
 }
 
-function preferNewer<T extends { fetchedAt: string; releasedAt: string }>(
+function versionOf(row: DriverCatalogRecord | GameRequirementCandidate): string {
+  return "latestVersion" in row ? row.latestVersion : row.minVersion;
+}
+
+function preferNewer<T extends DriverCatalogRecord | GameRequirementCandidate>(
   previous: T | undefined,
   incoming: T,
 ): T {
@@ -42,6 +48,8 @@ function preferNewer<T extends { fetchedAt: string; releasedAt: string }>(
   if (incoming.releasedAt !== previous.releasedAt) {
     return incoming.releasedAt > previous.releasedAt ? incoming : previous;
   }
+  const versionComparison = compareDriverVersions(versionOf(incoming), versionOf(previous));
+  if (versionComparison !== 0) return versionComparison > 0 ? incoming : previous;
   return incoming.fetchedAt >= previous.fetchedAt ? incoming : previous;
 }
 
