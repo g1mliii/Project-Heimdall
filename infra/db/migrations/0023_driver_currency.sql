@@ -54,8 +54,8 @@ values
     '2026-07-13T00:00:00Z'
   ),
   (
-    'amd', 'windows', 'gpu', null, '26.6.1', '2026-06-02',
-    'https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-1.html',
+    'amd', 'windows', 'gpu', null, '26.6.4', '2026-06-29',
+    'https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-4.html',
     '2026-07-13T00:00:00Z'
   ),
   (
