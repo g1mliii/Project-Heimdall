@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8"));
 const minAgeDays = Number.parseInt(process.env.DEPENDENCY_MIN_AGE_DAYS ?? "30", 10);
+const minimumAgeExceptions = packageJson.dependencyPolicy?.minimumAgeExceptions ?? {};
 const now = new Date();
 const failures = [];
 const warnings = [];
@@ -126,9 +127,17 @@ async function validateDependency(dependency) {
   const releaseDate = new Date(releaseTime);
   const releaseAgeDays = ageInDays(releaseDate);
   if (releaseAgeDays < minAgeDays) {
-    failures.push(
-      `${dependency.source}.${dependency.name}@${dependency.version}: released ${releaseAgeDays} days ago; minimum soak is ${minAgeDays} days unless a security exception is documented.`,
-    );
+    const exceptionKey = `${dependency.name}@${dependency.version}`;
+    const exception = minimumAgeExceptions[exceptionKey];
+    if (typeof exception === "string" && exception.trim().length > 0) {
+      warnings.push(
+        `${dependency.source}.${exceptionKey}: released ${releaseAgeDays} days ago; minimum-age exception: ${exception}`,
+      );
+    } else {
+      failures.push(
+        `${dependency.source}.${exceptionKey}: released ${releaseAgeDays} days ago; minimum soak is ${minAgeDays} days unless a security exception is documented.`,
+      );
+    }
   }
 
   const versionMetadata = metadata.versions?.[dependency.version];
@@ -147,7 +156,18 @@ async function validateDependency(dependency) {
   }
 }
 
-for (const dependency of collectDependencies()) {
+const dependencies = collectDependencies();
+const dependencyKeys = new Set(dependencies.map(({ name, version }) => `${name}@${version}`));
+for (const [key, reason] of Object.entries(minimumAgeExceptions)) {
+  if (!dependencyKeys.has(key)) {
+    failures.push(`dependencyPolicy.minimumAgeExceptions.${key}: no matching pinned dependency.`);
+  }
+  if (typeof reason !== "string" || reason.trim().length === 0) {
+    failures.push(`dependencyPolicy.minimumAgeExceptions.${key}: reason must be non-empty.`);
+  }
+}
+
+for (const dependency of dependencies) {
   await validateDependency(dependency);
 }
 

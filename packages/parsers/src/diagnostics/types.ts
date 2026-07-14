@@ -53,6 +53,21 @@ export interface DiagnosticsGame {
   requiredDriver?: string;
 }
 
+export type DriverPlatform = "windows" | "linux";
+export type DriverComponent = "gpu" | "mesa";
+
+/** Vendor/OS/component identity derived server-side from the captured run. */
+export interface DiagnosticsDriverPlatform {
+  vendor: Exclude<GpuVendor, "unknown">;
+  os: DriverPlatform;
+  component: DriverComponent;
+}
+
+/** Fresh latest-driver fact selected server-side for this run's platform. */
+export interface DiagnosticsDriverCatalog extends DiagnosticsDriverPlatform {
+  latestVersion: string;
+}
+
 /** Everything a rule needs about one run. */
 export interface DiagnosticsInput {
   summary: RunSummary;
@@ -60,6 +75,10 @@ export interface DiagnosticsInput {
   source: CaptureSource;
   vendor: GpuVendor;
   game?: DiagnosticsGame;
+  /** Present whenever the captured vendor and OS map to a supported cell. */
+  driverPlatform?: DiagnosticsDriverPlatform;
+  /** Absent when the currency ingest is missing/stale or the platform is unknown. */
+  driverCatalog?: DiagnosticsDriverCatalog;
   frames: DiagnosticsFrameColumns;
   /**
    * Per-run capability manifest (§16a.3) — lets a confidence-graded rule read

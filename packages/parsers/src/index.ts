@@ -15,3 +15,4 @@ export * from "./detect";
 export * from "./metrics";
 export * from "./sensor-availability";
 export * from "./diagnostics";
+export { splitCsvLine } from "./internal/csv";

@@ -21,6 +21,10 @@ import type {
   Run,
   RunSummary,
 } from "@heimdall/shared";
+import type {
+  DiagnosticsDriverCatalog,
+  DiagnosticsDriverPlatform,
+} from "@heimdall/parsers";
 import { getDbEnv } from "./env";
 
 /** A pg.Pool or checked-out pg.PoolClient — anything that can run a query. */
@@ -81,13 +85,31 @@ export async function query<Row extends pg.QueryResultRow>(
 
 /** A hand-curated game-ready requirement expires unless a curation pass refreshes it. */
 export const REQUIRED_DRIVER_MAX_AGE_DAYS = DIAGNOSTICS.driverRequirementMaxAgeDays;
+export const DRIVER_CATALOG_MAX_AGE_DAYS = DIAGNOSTICS.driverCatalogMaxAgeDays;
+export const DRIVER_UPDATE_GRACE_DAYS = DIAGNOSTICS.driverUpdateGraceDays;
 
-/** Shared by the direct helper and the verification hot-path read. */
-const FRESH_REQUIRED_DRIVER_SQL = `case
-  when g.required_driver_checked_at >= now() - ($2::integer * interval '1 day')
-    then g.required_driver
+/** Free-form OS snapshots mapped conservatively to the two supported families. */
+const DRIVER_OS_SQL = `case
+  when lower(coalesce(r.os_build, '')) ~ '(^|[^a-z0-9])(windows([ _-]?(10|11))?|win[ _-]?(10|11))([^a-z0-9]|$)' then 'windows'
+  when lower(coalesce(r.os_build, '')) ~ '(^|[^a-z0-9])(linux|ubuntu|debian|fedora|arch( linux)?|steam ?os|pop!?_?os|manjaro|nobara|bazzite|opensuse|mint)([^a-z0-9]|$)' then 'linux'
   else null
 end`;
+
+/** Linux AMD/Intel use Mesa; every other supported cell uses a GPU package. */
+const DRIVER_COMPONENT_SQL = `case
+  when driver_platform.os = 'linux' and r.gpu_vendor in ('amd', 'intel') then 'mesa'
+  else 'gpu'
+end`;
+
+const DRIVER_PLATFORM_JOIN_SQL = `left join lateral (
+        select ${DRIVER_OS_SQL} as os
+      ) driver_platform on true`;
+
+const REQUIRED_DRIVER_JOIN_SQL = `left join game_driver_requirements requirement
+        on requirement.game_id = r.game_id
+       and requirement.vendor = r.gpu_vendor
+       and requirement.os = driver_platform.os
+       and requirement.fetched_at >= now() - ($2::integer * interval '1 day')`;
 
 /* ── Row ↔ domain mapping ───────────────────────────────────────────────── */
 
@@ -490,9 +512,10 @@ export async function readRunRequiredDriver(
   db: Queryable = getPool(),
 ): Promise<string | null> {
   const rows = await query<{ required_driver: string | null }>(
-    `select ${FRESH_REQUIRED_DRIVER_SQL} as required_driver
+    `select requirement.min_version as required_driver
        from runs r
-       join games g on g.id = r.game_id
+       ${DRIVER_PLATFORM_JOIN_SQL}
+       ${REQUIRED_DRIVER_JOIN_SQL}
       where r.id = $1`,
     [id, REQUIRED_DRIVER_MAX_AGE_DAYS],
     db,
@@ -503,6 +526,9 @@ export async function readRunRequiredDriver(
 interface VerificationRunRow extends RunRow {
   signature: string | null;
   required_driver: string | null;
+  driver_os: DiagnosticsDriverPlatform["os"] | null;
+  driver_component: DiagnosticsDriverPlatform["component"] | null;
+  latest_driver: string | null;
 }
 
 /**
@@ -513,23 +539,54 @@ interface VerificationRunRow extends RunRow {
 export async function readRunForVerification(
   id: string,
   db: Queryable = getPool(),
-): Promise<{ run: Run; signature: string | null; requiredDriver: string | null } | null> {
+): Promise<{
+  run: Run;
+  signature: string | null;
+  requiredDriver: string | null;
+  driverPlatform: DiagnosticsDriverPlatform | null;
+  driverCatalog: DiagnosticsDriverCatalog | null;
+} | null> {
   const rows = await query<VerificationRunRow>(
     `${RUN_WITH_SUMMARY_SELECT},
         r.signature,
-        ${FRESH_REQUIRED_DRIVER_SQL} as required_driver
+        requirement.min_version as required_driver,
+        driver_platform.os as driver_os,
+        ${DRIVER_COMPONENT_SQL} as driver_component,
+        catalog.latest_version as latest_driver
        ${RUN_WITH_SUMMARY_FROM}
-       left join games g on g.id = r.game_id
+       ${DRIVER_PLATFORM_JOIN_SQL}
+       ${REQUIRED_DRIVER_JOIN_SQL}
+       left join driver_catalog catalog
+         on catalog.vendor = r.gpu_vendor
+        and catalog.os = driver_platform.os
+        and catalog.component = ${DRIVER_COMPONENT_SQL}
+        and catalog.gpu_series_key = ''
+        and catalog.fetched_at >= now() - ($3::integer * interval '1 day')
+        and catalog.released_at <= current_date - $4::integer
       where r.id = $1`,
-    [id, REQUIRED_DRIVER_MAX_AGE_DAYS],
+    [
+      id,
+      REQUIRED_DRIVER_MAX_AGE_DAYS,
+      DRIVER_CATALOG_MAX_AGE_DAYS,
+      DRIVER_UPDATE_GRACE_DAYS,
+    ],
     db,
   );
   const row = rows[0];
-  return row
-    ? {
-        run: rowToRun(row, []),
-        signature: row.signature,
-        requiredDriver: row.required_driver,
-      }
-    : null;
+  if (!row) return null;
+  const vendor = row.gpu_vendor;
+  const driverPlatform =
+    vendor && vendor !== "unknown" && row.driver_os && row.driver_component
+      ? { vendor, os: row.driver_os, component: row.driver_component }
+      : null;
+  return {
+    run: rowToRun(row, []),
+    signature: row.signature,
+    requiredDriver: row.required_driver,
+    driverPlatform,
+    driverCatalog:
+      driverPlatform && row.latest_driver
+        ? { ...driverPlatform, latestVersion: row.latest_driver }
+        : null,
+  };
 }

@@ -1,0 +1,42 @@
+{
+  "summary": {
+    "avgFps": 83.33333333333333,
+    "onePercentLowFps": 33.333333333333336,
+    "pointOnePercentLowFps": 33.333333333333336,
+    "frameTimeP50Ms": 10,
+    "frameTimeP95Ms": 30,
+    "frameTimeP99Ms": 30,
+    "stutterCount": 1,
+    "generatedFramePct": 0,
+    "pointOnePercentLowConfidence": "low",
+    "sampleCount": 10,
+    "durationSeconds": 0.12
+  },
+  "sampleCount": 10,
+  "firstFrame": {
+    "timeMs": 0,
+    "frameTimeMs": 10,
+    "gpuLoadPct": 95,
+    "gpuClockMhz": 2610,
+    "gpuPowerW": 215,
+    "vramUsedMb": 7680,
+    "cpuLoadPct": 35
+  },
+  "lastFrame": {
+    "timeMs": 110,
+    "frameTimeMs": 10,
+    "gpuLoadPct": 95,
+    "gpuClockMhz": 2610,
+    "gpuPowerW": 215,
+    "vramUsedMb": 7680,
+    "cpuLoadPct": 35
+  },
+  "hardware": {
+    "gpu": "AMD Radeon RX 7900 XTX",
+    "cpu": "AMD Ryzen 7 7800X3D",
+    "gpuVendor": "amd",
+    "ramGb": 32,
+    "os": "Arch Linux",
+    "gpuDriver": "Mesa 26.1.4"
+  }
+}

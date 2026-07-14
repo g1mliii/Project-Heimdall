@@ -20,7 +20,7 @@ import {
 import { vramSaturationRule } from "./vram-saturation";
 import { cpuBottleneckRule } from "./cpu-bottleneck";
 import { ramBelowRatedRule } from "./ram-below-rated";
-import { gpuDriverOutdatedRule } from "./gpu-driver-outdated";
+import { driverUpdateAvailableRule, gpuDriverOutdatedRule } from "./gpu-driver-outdated";
 import {
   frameCappedOrDisplayLimitedRule,
   likelyCpuBoundRule,
@@ -29,7 +29,7 @@ import {
 } from "./bottleneck-attribution";
 
 export * from "./types";
-export { compareDriverVersions } from "./gpu-driver-outdated";
+export { compareDriverVersions, normalizeDriverVersion } from "./gpu-driver-outdated";
 export { analyzeBottleneck } from "./bottleneck-attribution";
 
 /**
@@ -42,6 +42,7 @@ export const DIAGNOSTIC_RULES: readonly DiagnosticRule[] = [
   vramSaturationRule,
   cpuBottleneckRule,
   ramBelowRatedRule,
+  driverUpdateAvailableRule,
   gpuDriverOutdatedRule,
   likelyCpuBoundRule,
   likelyGpuBoundRule,

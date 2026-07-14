@@ -1,0 +1,21 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "heimdall-driver-curation",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-13",
+  "workers_dev": false,
+  "triggers": {
+    "crons": ["17 6 * * 1"]
+  },
+  "rules": [
+    {
+      "type": "Text",
+      "globs": ["**/*.csv"],
+      "fallthrough": true
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}

@@ -84,6 +84,10 @@ export const DIAGNOSTICS = {
   frameCapMinStableFraction: 0.9,
   /** Curated game-ready driver requirements self-suppress after this age. */
   driverRequirementMaxAgeDays: 30,
+  /** Latest-driver catalog rows self-suppress if the ingest has not refreshed them. */
+  driverCatalogMaxAgeDays: 30,
+  /** Give a newly published driver time to settle before recommending it. */
+  driverUpdateGraceDays: 7,
   /**
    * Confidence-graded bottleneck attribution (§16b), computed from VERIFIED
    * per-frame busy times (PresentMon v2 CPUBusy/GPUBusy, CapFrameX MsGPUActive).

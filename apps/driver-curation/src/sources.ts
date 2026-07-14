@@ -1,0 +1,543 @@
+import { compareDriverVersions, normalizeDriverVersion, splitCsvLine } from "@heimdall/parsers";
+import { cleanDisplayName } from "@heimdall/shared";
+
+import { fetchText } from "./fetch";
+import type {
+  DriverCatalogRecord,
+  DriverVendor,
+  GameRequirementCandidate,
+  SourceBatch,
+} from "./types";
+
+export const SOURCE_URLS = {
+  nvidiaWindows:
+    "https://gfwsl.geforce.com/services_toolkit/services/com/nvidia/services/AjaxDriverService.php?func=DriverManualLookup&psid=120&pfid=942&osID=57&languageCode=1033&beta=0&isWHQL=1&dltype=-1&dch=1&upCRD=0&qnf=0&ctk=null&sort1=1&numberOfResults=1",
+  nvidiaLinuxLatest: "https://download.nvidia.com/XFree86/Linux-x86_64/latest.txt",
+  amdIndex:
+    "https://www.amd.com/en/resources/support-articles/release-notes/rn-rad-win-vulkan.html",
+  intelWindows:
+    "https://www.intel.com/content/www/us/en/download/785597/intel-arc-graphics-windows.html",
+  mesaIndex: "https://docs.mesa3d.org/relnotes.html",
+} as const;
+
+const MAX_REQUIREMENTS_PER_SOURCE = 100;
+const VERSION = /^\d+(?:\.\d+){1,4}$/;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+function validVersion(
+  value: string,
+  vendor: DriverVendor,
+  os: "windows" | "linux",
+  component: "gpu" | "mesa",
+): string {
+  const normalized = normalizeDriverVersion(value, vendor, os, component);
+  if (!normalized || normalized.length > 32 || !VERSION.test(normalized)) {
+    throw new Error(`invalid ${vendor}/${os} driver version`);
+  }
+  return normalized;
+}
+
+function isoDate(value: string): string {
+  const cleaned = value
+    .replace(/(\d+)(st|nd|rd|th)/gi, "$1")
+    .replace(/^[A-Za-z]{3}\s+/, "")
+    .replace(/\.$/, "")
+    .trim();
+  const date = new Date(cleaned);
+  if (Number.isNaN(date.valueOf())) throw new Error(`invalid release date: ${value}`);
+  return date.toISOString().slice(0, 10);
+}
+
+function decodeEntities(value: string): string {
+  const named: Record<string, string> = {
+    amp: "&",
+    apos: "'",
+    gt: ">",
+    lt: "<",
+    nbsp: " ",
+    quot: '"',
+    reg: "",
+    trade: "",
+  };
+  return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (entity, body: string) => {
+    if (body.startsWith("#x")) return String.fromCodePoint(Number.parseInt(body.slice(2), 16));
+    if (body.startsWith("#")) return String.fromCodePoint(Number.parseInt(body.slice(1), 10));
+    return named[body.toLowerCase()] ?? entity;
+  });
+}
+
+function safePercentDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+export function htmlLines(value: string): string[] {
+  return decodeEntities(safePercentDecode(value))
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<(?:br|\/p|\/li|\/h[1-6]|\/div|\/section)\b[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
+
+function title(value: string): string | null {
+  const cleaned = cleanDisplayName(
+    decodeEntities(value)
+    .replace(/^[\s*•·–—-]+/, "")
+    .replace(/[*]+/g, "")
+    .replace(/[.;]+$/, "")
+    .trim(),
+  );
+  if (cleaned.length < 2 || cleaned.length > 160 || !/[\p{L}\p{N}]/u.test(cleaned)) {
+    return null;
+  }
+  return cleaned;
+}
+
+function uniqueTitles(values: readonly string[]): string[] {
+  const titles = new Map<string, string>();
+  for (const value of values) {
+    const cleaned = title(value);
+    if (cleaned) titles.set(cleaned.toLowerCase(), cleaned);
+  }
+  return [...titles.values()];
+}
+
+function splitTitleList(value: string): string[] {
+  return value
+    .replace(/^.*?including\s+/i, "")
+    .split(/\s*,\s*|\s+and\s+/i)
+    .map((part) => part.trim());
+}
+
+function boundedRequirements(
+  vendor: DriverVendor,
+  version: string,
+  releasedAt: string,
+  sourceUrl: string,
+  fetchedAt: string,
+  titles: readonly string[],
+): Pick<SourceBatch, "requirements" | "dropped"> {
+  const values = uniqueTitles(titles);
+  const accepted = values.slice(0, MAX_REQUIREMENTS_PER_SOURCE);
+  return {
+    requirements: accepted.map((gameTitle) => ({
+      vendor,
+      os: "windows",
+      minVersion: version,
+      title: gameTitle,
+      releasedAt,
+      sourceUrl,
+      fetchedAt,
+    })),
+    dropped: Math.max(0, values.length - accepted.length),
+  };
+}
+
+interface NvidiaLookup {
+  Success?: string;
+  IDS?: Array<{
+    downloadInfo?: {
+      Version?: string;
+      ReleaseDateTime?: string;
+      DetailsURL?: string;
+      ReleaseNotes?: string;
+    };
+  }>;
+}
+
+export function parseNvidiaLookup(
+  raw: string,
+  os: "windows" | "linux",
+  fetchedAt: string,
+): SourceBatch {
+  const parsed = JSON.parse(raw) as NvidiaLookup;
+  const info = parsed.IDS?.[0]?.downloadInfo;
+  if (parsed.Success !== "1" || !info?.Version || !info.ReleaseDateTime || !info.DetailsURL) {
+    throw new Error(`NVIDIA ${os} response did not contain one driver`);
+  }
+  const latestVersion = validVersion(info.Version, "nvidia", os, "gpu");
+  const releasedAt = isoDate(info.ReleaseDateTime);
+  const source = new URL(info.DetailsURL);
+  if (source.protocol !== "https:" || source.hostname !== "www.nvidia.com") {
+    throw new Error("NVIDIA details URL left the vendor host");
+  }
+
+  const notes = os === "windows" ? htmlLines(info.ReleaseNotes ?? "") : [];
+  const gameTitles: string[] = [];
+  for (const line of notes) {
+    if (/^Game Ready for\s+/i.test(line)) {
+      gameTitles.push(...splitTitleList(line.replace(/^Game Ready for\s+/i, "")));
+    } else if (/\bincluding\b/i.test(line) && /gaming experience/i.test(line)) {
+      gameTitles.push(...splitTitleList(line.replace(/\..*$/, "")));
+    }
+  }
+  const requirementBatch = boundedRequirements(
+    "nvidia",
+    latestVersion,
+    releasedAt,
+    source.href,
+    fetchedAt,
+    gameTitles,
+  );
+  return {
+    catalog: [
+      {
+        vendor: "nvidia",
+        os,
+        component: "gpu",
+        latestVersion,
+        releasedAt,
+        sourceUrl: source.href,
+        fetchedAt,
+      },
+    ],
+    requirements: os === "windows" ? requirementBatch.requirements : [],
+    dropped: os === "windows" ? requirementBatch.dropped : 0,
+  };
+}
+
+export function parseNvidiaLinuxPointer(latestRaw: string): {
+  version: string;
+  detailsUrl: string;
+} {
+  const latest = latestRaw.trim().match(/^(\d+(?:\.\d+){1,2})\s+(\S+)$/);
+  if (!latest?.[1] || !latest[2]) throw new Error("NVIDIA Linux latest shape changed");
+  const version = validVersion(latest[1], "nvidia", "linux", "gpu");
+  const expectedPath = `${version}/NVIDIA-Linux-x86_64-${version}.run`;
+  if (latest[2] !== expectedPath) throw new Error("NVIDIA Linux latest path changed");
+  return {
+    version,
+    detailsUrl: `https://download.nvidia.com/XFree86/Linux-x86_64/${version}/`,
+  };
+}
+
+export function parseNvidiaLinuxLatest(
+  latestRaw: string,
+  detailsRaw: string,
+  fetchedAt: string,
+): SourceBatch {
+  const { version, detailsUrl } = parseNvidiaLinuxPointer(latestRaw);
+  const escapedVersion = version.replaceAll(".", "\\.");
+  const releasedAt = detailsRaw.match(
+    new RegExp(
+      `NVIDIA-Linux-x86_64-${escapedVersion}\\.run[\\s\\S]{0,250}<span class=['"]date['"]>(\\d{4}-\\d{2}-\\d{2})`,
+      "i",
+    ),
+  )?.[1];
+  if (!releasedAt || !ISO_DATE.test(releasedAt)) {
+    throw new Error("NVIDIA Linux details shape changed");
+  }
+  return {
+    catalog: [
+      {
+        vendor: "nvidia",
+        os: "linux",
+        component: "gpu",
+        latestVersion: version,
+        releasedAt,
+        sourceUrl: detailsUrl,
+        fetchedAt,
+      },
+    ],
+    requirements: [],
+    dropped: 0,
+  };
+}
+
+export function parseAmdIndex(raw: string): string {
+  const match = raw.match(
+    /href=["']((?:https:\/\/www\.amd\.com)?\/en\/resources\/support-articles\/release-notes\/RN-RAD-WIN-\d+-\d+-\d+\.html)["']/i,
+  );
+  if (!match?.[1]) throw new Error("AMD index had no current Adrenalin release-note link");
+  const source = new URL(match[1], "https://www.amd.com");
+  if (source.protocol !== "https:" || source.hostname !== "www.amd.com") {
+    throw new Error("AMD release-note link left the vendor host");
+  }
+  return source.href;
+}
+
+function sectionItems(
+  lines: readonly string[],
+  start: RegExp,
+  stops: readonly RegExp[],
+): string[] {
+  const startIndex = lines.findIndex((line) => start.test(line));
+  if (startIndex === -1) return [];
+  const values: string[] = [];
+  for (let i = startIndex + 1; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (stops.some((stop) => stop.test(line))) break;
+    values.push(line);
+  }
+  return values;
+}
+
+export function parseAmdReleaseNotes(
+  raw: string,
+  fetchedAt: string,
+  sourceUrl: string,
+): SourceBatch {
+  const lines = htmlLines(raw);
+  const joined = lines.join("\n");
+  const versionMatch = joined.match(/AMD Software:\s*Adrenalin Edition\s+(\d+(?:\.\d+){2})/i);
+  const dateMatch = joined.match(/Last Updated:\s*([^\n]+)/i);
+  if (!versionMatch?.[1] || !dateMatch?.[1]) throw new Error("AMD release shape changed");
+  const latestVersion = validVersion(versionMatch[1], "amd", "windows", "gpu");
+  const releasedAt = isoDate(dateMatch[1]);
+  const games = sectionItems(lines, /^New Game Support$/i, [
+    /^Fixed Issues$/i,
+    /^Known Issues$/i,
+    /^New Product Support$/i,
+  ]);
+  const requirementBatch = boundedRequirements(
+    "amd",
+    latestVersion,
+    releasedAt,
+    sourceUrl,
+    fetchedAt,
+    games,
+  );
+  return {
+    catalog: [
+      {
+        vendor: "amd",
+        os: "windows",
+        component: "gpu",
+        latestVersion,
+        releasedAt,
+        sourceUrl,
+        fetchedAt,
+      },
+    ],
+    ...requirementBatch,
+  };
+}
+
+export function parseIntelDownload(
+  raw: string,
+  fetchedAt: string,
+  sourceUrl: string,
+): SourceBatch {
+  const lines = htmlLines(raw);
+  const joined = lines.join("\n");
+  const versionMatch = joined.match(/(?:Graphics Driver|Version:)\s*(\d+\.\d+\.\d+\.\d+)/i);
+  const dateMatch = joined.match(/(?:Release Date|Date:)\s*([^\n]+)/i);
+  const dateHeadingIndex = lines.findIndex((line) => /^(?:Release )?Date$/i.test(line));
+  const releaseDate = dateMatch?.[1] ?? (dateHeadingIndex >= 0 ? lines[dateHeadingIndex + 1] : undefined);
+  if (!versionMatch?.[1] || !releaseDate) throw new Error("Intel download shape changed");
+  const latestVersion = validVersion(versionMatch[1], "intel", "windows", "gpu");
+  const releasedAt = isoDate(releaseDate);
+  const games = sectionItems(lines, /Game On Driver support.*for:?$/i, [
+    /^OS Support:?$/i,
+    /^Game performance improvements/i,
+    /^Known Issues/i,
+  ]);
+  const requirementBatch = boundedRequirements(
+    "intel",
+    latestVersion,
+    releasedAt,
+    sourceUrl,
+    fetchedAt,
+    games,
+  );
+  return {
+    catalog: [
+      {
+        vendor: "intel",
+        os: "windows",
+        component: "gpu",
+        latestVersion,
+        releasedAt,
+        sourceUrl,
+        fetchedAt,
+      },
+    ],
+    ...requirementBatch,
+  };
+}
+
+export function parseMesaIndex(raw: string): { version: string; detailsUrl: string } {
+  const versions = [...raw.matchAll(/href=["'](?:\.\/)?relnotes\/(\d+\.\d+\.\d+)\.html["']/gi)]
+    .map((match) => match[1]!)
+    .filter((version) => VERSION.test(version));
+  if (versions.length === 0) throw new Error("Mesa index had no stable release links");
+  versions.sort((a, b) => compareDriverVersions(b, a));
+  const version = versions[0]!;
+  return { version, detailsUrl: `https://docs.mesa3d.org/relnotes/${version}.html` };
+}
+
+export function parseMesaDetails(
+  raw: string,
+  expectedVersion: string,
+  fetchedAt: string,
+  sourceUrl: string,
+): SourceBatch {
+  const lines = htmlLines(raw);
+  const heading = lines.find((line) => line.includes(`Mesa ${expectedVersion} Release Notes`));
+  const date = heading?.match(/(\d{4}-\d{2}-\d{2})/)?.[1];
+  if (!date || !ISO_DATE.test(date)) throw new Error("Mesa details shape changed");
+  const version = validVersion(expectedVersion, "amd", "linux", "mesa");
+  return {
+    catalog: (["amd", "intel"] as const).map((vendor) => ({
+      vendor,
+      os: "linux",
+      component: "mesa",
+      latestVersion: version,
+      releasedAt: date,
+      sourceUrl,
+      fetchedAt,
+    })),
+    requirements: [],
+    dropped: 0,
+  };
+}
+
+export function parseFallbackCsv(raw: string): SourceBatch {
+  const lines = raw.split(/\r?\n/).filter((line) => line.trim() && !line.trim().startsWith("#"));
+  const expectedHeader =
+    "kind,vendor,os,component,version,released_at,checked_at,source_url,title";
+  if (lines.shift()?.toLowerCase() !== expectedHeader) throw new Error("fallback CSV header changed");
+  const catalog: DriverCatalogRecord[] = [];
+  const requirements: GameRequirementCandidate[] = [];
+  for (const line of lines) {
+    const [kind, vendor, os, component, version, releasedAt, checkedAt, sourceUrl, gameTitle] =
+      splitCsvLine(line, ",").map((cell) => cell.trim());
+    if (
+      !kind ||
+      !vendor ||
+      !(["amd", "intel"] as string[]).includes(vendor) ||
+      os !== "windows" ||
+      component !== "gpu" ||
+      !version ||
+      !releasedAt ||
+      !checkedAt ||
+      !sourceUrl
+    ) {
+      throw new Error("invalid fallback CSV row");
+    }
+    const checkedIso = `${isoDate(checkedAt)}T00:00:00.000Z`;
+    const normalizedVersion = validVersion(version, vendor as "amd" | "intel", "windows", "gpu");
+    const source = new URL(sourceUrl);
+    const expectedHost = vendor === "amd" ? "www.amd.com" : "www.intel.com";
+    if (source.protocol !== "https:" || source.hostname !== expectedHost) {
+      throw new Error("fallback source URL left the vendor host");
+    }
+    const base = {
+      vendor: vendor as "amd" | "intel",
+      os: "windows" as const,
+      latestVersion: normalizedVersion,
+      releasedAt: isoDate(releasedAt),
+      sourceUrl: source.href,
+      fetchedAt: checkedIso,
+    };
+    if (kind === "catalog") {
+      catalog.push({ ...base, component: "gpu" });
+    } else if (kind === "requirement" && gameTitle) {
+      const normalizedTitle = title(gameTitle);
+      if (!normalizedTitle) throw new Error("invalid fallback game title");
+      requirements.push({
+        vendor: base.vendor,
+        os: "windows",
+        minVersion: normalizedVersion,
+        title: normalizedTitle,
+        releasedAt: base.releasedAt,
+        sourceUrl: base.sourceUrl,
+        fetchedAt: base.fetchedAt,
+      });
+    } else {
+      throw new Error("invalid fallback CSV kind/title");
+    }
+  }
+  return { catalog, requirements, dropped: 0 };
+}
+
+export interface SourceDeps {
+  fetchImpl?: typeof fetch;
+  now: Date;
+}
+
+export type SourceLoader = (deps: SourceDeps) => Promise<SourceBatch>;
+
+export interface DriverSource {
+  name: string;
+  load: SourceLoader;
+}
+
+export const LIVE_DRIVER_SOURCES = [
+  {
+    name: "nvidia-windows",
+    load: async ({ fetchImpl, now }) => {
+      const fetchedAt = now.toISOString();
+      const raw = await fetchText(SOURCE_URLS.nvidiaWindows, {
+        allowedHosts: ["gfwsl.geforce.com"],
+        fetchImpl,
+      });
+      return parseNvidiaLookup(raw, "windows", fetchedAt);
+    },
+  },
+  {
+    name: "nvidia-linux",
+    load: async ({ fetchImpl, now }) => {
+      const fetchedAt = now.toISOString();
+      const latest = await fetchText(SOURCE_URLS.nvidiaLinuxLatest, {
+        allowedHosts: ["download.nvidia.com"],
+        fetchImpl,
+      });
+      const { detailsUrl } = parseNvidiaLinuxPointer(latest);
+      const details = await fetchText(detailsUrl, {
+        allowedHosts: ["download.nvidia.com"],
+        fetchImpl,
+      });
+      return parseNvidiaLinuxLatest(latest, details, fetchedAt);
+    },
+  },
+  {
+    name: "amd-windows",
+    load: async ({ fetchImpl, now }) => {
+      const fetchedAt = now.toISOString();
+      const index = await fetchText(SOURCE_URLS.amdIndex, {
+        allowedHosts: ["www.amd.com"],
+        fetchImpl,
+      });
+      const detailsUrl = parseAmdIndex(index);
+      const details = await fetchText(detailsUrl, {
+        allowedHosts: ["www.amd.com"],
+        fetchImpl,
+      });
+      return parseAmdReleaseNotes(details, fetchedAt, detailsUrl);
+    },
+  },
+  {
+    name: "intel-windows",
+    load: async ({ fetchImpl, now }) => {
+      const fetchedAt = now.toISOString();
+      const raw = await fetchText(SOURCE_URLS.intelWindows, {
+        allowedHosts: ["www.intel.com"],
+        fetchImpl,
+      });
+      return parseIntelDownload(raw, fetchedAt, SOURCE_URLS.intelWindows);
+    },
+  },
+  {
+    name: "mesa-linux",
+    load: async ({ fetchImpl, now }) => {
+      const fetchedAt = now.toISOString();
+      const index = await fetchText(SOURCE_URLS.mesaIndex, {
+        allowedHosts: ["docs.mesa3d.org"],
+        fetchImpl,
+      });
+      const latest = parseMesaIndex(index);
+      const details = await fetchText(latest.detailsUrl, {
+        allowedHosts: ["docs.mesa3d.org"],
+        fetchImpl,
+      });
+      return parseMesaDetails(details, latest.version, fetchedAt, latest.detailsUrl);
+    },
+  },
+] as const satisfies readonly DriverSource[];

@@ -116,10 +116,15 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     expect(run?.status).toBe(RUN_STATUS.validated);
     // The recompute over DOUBLE columns is bit-identical to the client's.
     expect(run?.summary).toEqual(honestSummary);
-    // The compact fixture has verified busy-time columns but fewer paired
+    // The seeded currency catalog also produces an informational update. The
+    // compact fixture has verified busy-time columns but fewer paired
     // samples than attribution permits. That yields an explanatory info
     // finding, never a hard bottleneck verdict (§16b / §16d.2).
     expect(run?.diagnostics).toMatchObject([
+      {
+        code: "driver-update-available",
+        severity: "info",
+      },
       {
         code: "telemetry-insufficient",
         severity: "info",
@@ -148,6 +153,7 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     expect(run?.status).toBe(RUN_STATUS.validated);
     expect(run?.diagnostics.map((d) => d.code)).toEqual([
       "ram-below-rated",
+      "driver-update-available",
       "telemetry-insufficient",
     ]);
     const finding = run!.diagnostics[0]!;
@@ -161,7 +167,7 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
           [id],
         )
       ).rows[0]!.n;
-    expect(await countRows()).toBe(2);
+    expect(await countRows()).toBe(3);
 
     // Model a worker that stored findings then died before marking its job done;
     // the expired lease is reclaimed and the run re-verified.
@@ -175,11 +181,12 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     );
     await drainJobs({}, realDeps(async () => parquetBytes));
 
-    // Delete-then-insert keeps the two distinct findings stable across the retry.
-    expect(await countRows()).toBe(2);
+    // Delete-then-insert keeps the three distinct findings stable across the retry.
+    expect(await countRows()).toBe(3);
     const rerun = await readRun(id, db.pool);
     expect(rerun?.diagnostics.map((d) => d.code)).toEqual([
       "ram-below-rated",
+      "driver-update-available",
       "telemetry-insufficient",
     ]);
   });

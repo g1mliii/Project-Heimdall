@@ -10,6 +10,7 @@ allowBuilds:
   protobufjs: false
   sharp: true
   ssh2: false
+  workerd: true
 
 # Force-patch a transitive advisory so `pnpm audit:deps` stays green.
 # next 16.2.6 pulls postcss <8.5.10 (GHSA-qx2v-qp2m-jg93, XSS in stringify);

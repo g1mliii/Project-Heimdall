@@ -14,7 +14,13 @@ import {
 } from "@heimdall/shared";
 import { computeRunSummary } from "../metrics";
 import { deriveCapabilityManifest } from "../sensor-availability";
-import { DIAGNOSTIC_RULES, framesToColumns, runDiagnostics, type DiagnosticsInput } from "./index";
+import {
+  DIAGNOSTIC_RULES,
+  framesToColumns,
+  normalizeDriverVersion,
+  runDiagnostics,
+  type DiagnosticsInput,
+} from "./index";
 
 const baseHardware: HardwareSnapshot = {
   gpu: "NVIDIA GeForce RTX 4070",
@@ -35,6 +41,7 @@ function inputFor(
     hardware: baseHardware,
     source: "capframex",
     vendor: "nvidia",
+    driverPlatform: { vendor: "nvidia", os: "windows", component: "gpu" },
     frames: framesToColumns(frames),
     ...overrides,
   };
@@ -186,7 +193,7 @@ describe("runDiagnostics — per-rule fixtures", () => {
     expect(findings.map((f) => f.code)).not.toContain("gpu-driver-outdated");
   });
 
-  it("never fires gpu-driver-outdated for AMD/Intel vs the NVIDIA-only seed", () => {
+  it("self-suppresses gpu-driver-outdated when the requirement platform mismatches", () => {
     const frames = framesWithStutters(20, []);
     for (const vendor of ["amd", "intel"] as const) {
       const findings = runDiagnostics(
@@ -200,7 +207,7 @@ describe("runDiagnostics — per-rule fixtures", () => {
     }
   });
 
-  it("never fires gpu-driver-outdated for an NVIDIA Windows quad-format driver string", () => {
+  it("normalizes a current NVIDIA Windows Device Manager driver without a false positive", () => {
     const frames = framesWithStutters(20, []);
     const findings = runDiagnostics(
       inputFor(frames, {
@@ -209,6 +216,108 @@ describe("runDiagnostics — per-rule fixtures", () => {
       }),
     );
     expect(findings.map((f) => f.code)).not.toContain("gpu-driver-outdated");
+  });
+
+  it("rejects unrelated quad-format strings instead of inventing an NVIDIA version", () => {
+    expect(normalizeDriverVersion("1.2.999.1234", "nvidia", "windows", "gpu")).toBeNull();
+    expect(normalizeDriverVersion("32.0.16.1074", "nvidia", "windows", "gpu")).toBe(
+      "610.74",
+    );
+  });
+
+  const currencyCells = [
+    {
+      label: "NVIDIA / Windows",
+      vendor: "nvidia",
+      os: "windows",
+      component: "gpu",
+      captured: "609.10",
+      latest: "610.74",
+    },
+    {
+      label: "NVIDIA / Linux",
+      vendor: "nvidia",
+      os: "linux",
+      component: "gpu",
+      captured: "590.48.01",
+      latest: "595.84",
+    },
+    {
+      label: "AMD / Windows",
+      vendor: "amd",
+      os: "windows",
+      component: "gpu",
+      captured: "26.5.1",
+      latest: "26.6.1",
+    },
+    {
+      label: "Intel / Windows",
+      vendor: "intel",
+      os: "windows",
+      component: "gpu",
+      captured: "32.0.101.8800",
+      latest: "32.0.101.8861",
+    },
+    {
+      label: "AMD / Linux (Mesa)",
+      vendor: "amd",
+      os: "linux",
+      component: "mesa",
+      captured: "Mesa 26.1.3",
+      latest: "26.1.4",
+    },
+    {
+      label: "Intel / Linux (Mesa)",
+      vendor: "intel",
+      os: "linux",
+      component: "mesa",
+      captured: "Mesa 26.1.3",
+      latest: "26.1.4",
+    },
+  ] as const;
+
+  for (const cell of currencyCells) {
+    it(`fires driver-update-available for ${cell.label}`, () => {
+      const frames = framesWithStutters(20, []);
+      const platform = { vendor: cell.vendor, os: cell.os, component: cell.component };
+      const findings = runDiagnostics(
+        inputFor(frames, {
+          vendor: cell.vendor,
+          hardware: {
+            ...baseHardware,
+            gpuVendor: cell.vendor,
+            gpuDriver: cell.captured,
+          },
+          driverPlatform: platform,
+          driverCatalog: { ...platform, latestVersion: cell.latest },
+        }),
+      );
+      expect(findings.map((finding) => finding.code)).toContain("driver-update-available");
+    });
+  }
+
+  it("self-suppresses driver-update-available without a fresh catalog row", () => {
+    const findings = runDiagnostics(
+      inputFor(framesWithStutters(20, []), {
+        hardware: { ...baseHardware, gpuDriver: "500.00" },
+      }),
+    );
+    expect(findings.map((finding) => finding.code)).not.toContain("driver-update-available");
+  });
+
+  it("self-suppresses driver-update-available for a mismatched catalog cell", () => {
+    const findings = runDiagnostics(
+      inputFor(framesWithStutters(20, []), {
+        hardware: { ...baseHardware, gpuDriver: "500.00" },
+        driverCatalog: {
+          vendor: "nvidia",
+          os: "linux",
+          component: "gpu",
+          latestVersion: "610.74",
+        },
+      }),
+    );
+    expect(findings.map((finding) => finding.code)).not.toContain("driver-update-available");
   });
 });
 

@@ -92,7 +92,7 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
   if (!state) {
     return { kind: "failed", error: "run row disappeared" };
   }
-  const { run, signature, requiredDriver } = state;
+  const { run, signature, requiredDriver, driverPlatform, driverCatalog } = state;
   if (!run.framesObjectKey) {
     return { kind: "failed", error: "run has no frames object key" };
   }
@@ -149,6 +149,8 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
         source: run.captureSource,
         vendor: run.hardware.gpuVendor ?? "unknown",
         ...(requiredDriver !== null ? { game: { requiredDriver } } : {}),
+        ...(driverPlatform !== null ? { driverPlatform } : {}),
+        ...(driverCatalog !== null ? { driverCatalog } : {}),
         frames: parquet.diagnosticsColumns,
         capabilityManifest,
       });

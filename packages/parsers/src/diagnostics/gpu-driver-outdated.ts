@@ -1,21 +1,21 @@
 /**
  * GPU-driver-outdated rule (§15.4). Compares the captured driver version against
- * a curated per-game minimum (`games.required_driver`, seeded in the DB and
- * threaded in as `game.requiredDriver`). Vendor-gated and self-suppressing: with
- * no curated value, an unknown vendor, or an unparseable version, it stays
- * silent. Informational only — an old driver is advice, never a validity gate.
+ * a curated per-game minimum threaded in as `game.requiredDriver`. The same
+ * comparator also powers the Phase 6.6 latest-driver currency signal. Both are
+ * vendor/OS-selected by the repository and self-suppress when data is absent,
+ * stale, or version formats cannot be normalized safely.
  */
 
-import type { DiagnosticRule } from "./types";
+import type { GpuVendor } from "@heimdall/shared";
+import type { DiagnosticRule, DriverComponent, DriverPlatform } from "./types";
 
 /**
- * NVIDIA GeForce marketing driver format, e.g. `566.36` / `566.14` — a
- * three-digit branch and a two-plus-digit build. The curated seed (§15.4) holds
- * ONLY these, so we compare against them alone: a Windows quad-format string
- * (`31.0.15.6636`) or an AMD/Intel version has an incompatible segment layout
- * and must not be numerically compared (Phase 6.6 makes this vendor/OS-aware).
+ * NVIDIA GeForce marketing driver format, e.g. `566.36` / `610.74` — a
+ * three-digit branch and a two-plus-digit build. Other vendor/OS cells retain
+ * the numeric version token published by their own source.
  */
-const NVIDIA_MARKETING_VERSION = /^\d{3}\.\d{2,}$/;
+const NVIDIA_WINDOWS_VERSION = /^\d{3}\.\d{2,}(?:\.\d+)?$/;
+const VERSION_TOKEN = /\d+(?:\.\d+)+/;
 
 /** Split a driver string into its numeric segments (`"31.0.15.6636"` → [31,0,15,6636]). */
 function versionSegments(version: string): number[] {
@@ -44,6 +44,82 @@ export function compareDriverVersions(a: string, b: string): number {
   return 0;
 }
 
+/**
+ * Convert a captured/vendor version into a comparator-safe numeric token.
+ * NVIDIA's Windows Device Manager form (`31.0.15.6636`) is mapped to its
+ * marketing equivalent (`566.36`); every other supported cell compares the
+ * numeric version token already emitted by its source/MangoHud.
+ */
+export function normalizeDriverVersion(
+  value: string,
+  vendor: GpuVendor,
+  os: DriverPlatform,
+  component: DriverComponent,
+): string | null {
+  const token = value.match(VERSION_TOKEN)?.[0];
+  if (!token) return null;
+
+  if (vendor === "nvidia" && os === "windows" && component === "gpu") {
+    if (NVIDIA_WINDOWS_VERSION.test(token)) return token;
+    const windows = token.match(/^\d{2}\.0\.1(\d)\.(\d{4})$/);
+    if (!windows) return null;
+    const branchTail = windows[1]!;
+    const build = windows[2]!;
+    return `${branchTail}${build.slice(0, -2)}.${build.slice(-2)}`;
+  }
+
+  return token;
+}
+
+function comparableVersions(
+  captured: string,
+  expected: string,
+  vendor: GpuVendor,
+  os: DriverPlatform,
+  component: DriverComponent,
+): [string, string] | null {
+  const left = normalizeDriverVersion(captured, vendor, os, component);
+  const right = normalizeDriverVersion(expected, vendor, os, component);
+  return left && right ? [left, right] : null;
+}
+
+export const driverUpdateAvailableRule: DiagnosticRule = {
+  code: "driver-update-available",
+  version: "1.0.0",
+  requiredSensors: [],
+  evaluate({ input }) {
+    const captured = input.hardware.gpuDriver;
+    const catalog = input.driverCatalog;
+    const platform = input.driverPlatform;
+    if (!captured || !catalog || !platform || input.vendor === "unknown") return null;
+    if (
+      catalog.vendor !== input.vendor ||
+      platform.vendor !== catalog.vendor ||
+      platform.os !== catalog.os ||
+      platform.component !== catalog.component
+    ) {
+      return null;
+    }
+
+    const versions = comparableVersions(
+      captured,
+      catalog.latestVersion,
+      input.vendor,
+      catalog.os,
+      catalog.component,
+    );
+    if (!versions || compareDriverVersions(...versions) >= 0) return null;
+
+    return {
+      severity: "info",
+      title: "GPU driver update available",
+      detail:
+        `This capture uses ${captured}; the latest known ${catalog.component === "mesa" ? "Mesa" : `${input.vendor.toUpperCase()} driver`} ` +
+        `is ${catalog.latestVersion}. Updating can improve compatibility and stability.`,
+    };
+  },
+};
+
 export const gpuDriverOutdatedRule: DiagnosticRule = {
   code: "gpu-driver-outdated",
   version: "1.0.0",
@@ -51,14 +127,11 @@ export const gpuDriverOutdatedRule: DiagnosticRule = {
   evaluate({ input }) {
     const driver = input.hardware.gpuDriver;
     const required = input.game?.requiredDriver;
-    if (!driver || !required) return null;
-    // The seed is NVIDIA-only and vendorless; comparing an AMD/Intel string (or
-    // an NVIDIA Windows quad-format string) against it is a §16.2 false positive.
-    if (input.vendor !== "nvidia") return null;
-    if (!NVIDIA_MARKETING_VERSION.test(driver) || !NVIDIA_MARKETING_VERSION.test(required)) {
-      return null;
-    }
-    if (compareDriverVersions(driver, required) >= 0) return null;
+    const platform = input.driverPlatform;
+    if (!driver || !required || !platform || input.vendor === "unknown") return null;
+    if (platform.vendor !== input.vendor || platform.component !== "gpu") return null;
+    const versions = comparableVersions(driver, required, input.vendor, platform.os, "gpu");
+    if (!versions || compareDriverVersions(...versions) >= 0) return null;
 
     return {
       severity: "info",
