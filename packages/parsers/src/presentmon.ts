@@ -1,8 +1,9 @@
 /**
- * Intel PresentMon CSV parser (§8). Two console-capture generations share the
- * output shape with CapFrameX:
+ * Intel PresentMon CSV parser (§8). Three tested output profiles share the
+ * same normalized shape as CapFrameX:
  *
  * - v1.x: `MsBetweenPresents` + `TimeInSeconds`, no busy-time or telemetry.
+ * - v2.x `--v1_metrics`: the v1-compatible columns plus `msGPUActive`.
  * - v2.x: `FrameTime` (+ `CPUStartTime`), plus the GamersNexus-style
  *   bottleneck columns `CPUBusy`/`GPUBusy`, opt-in GPU telemetry
  *   (`GPUUtilization`/`GPUFrequency`/`GPUPower`/`GPUMemUsed`), and `FrameType`
@@ -31,8 +32,10 @@ import { findColumn, findCsvHeader, headerFailure, splitCsvLine, type FoundHeade
 import {
   PRESENTMON_PROFILES,
   PRESENTMON_SEMANTICS_COLUMNS,
+  PRESENTMON_V1_COMPAT_COLUMNS,
   PRESENTMON_V1_COLUMNS,
   PRESENTMON_V2_COLUMNS,
+  frameAlignedSensorMap,
 } from "./internal/columns";
 import { parseFrameRowsAt, type FrameRowsInput } from "./internal/frames";
 import { parserVersionString } from "./version";
@@ -52,14 +55,26 @@ export function parsePresentMon(input: string | Uint8Array): ParseResult<ParsedC
   if (found === undefined) return headerFailure(SOURCE, lines);
 
   const isV2 = findColumn(found.header, PRESENTMON_V2_COLUMNS.frameTimeMs) !== undefined;
-  const columns = isV2 ? PRESENTMON_V2_COLUMNS : PRESENTMON_V1_COLUMNS;
-  const captureProfile = isV2 ? PRESENTMON_PROFILES[1] : PRESENTMON_PROFILES[0];
+  const isV1MetricsCompat =
+    !isV2 &&
+    findColumn(found.header, PRESENTMON_V1_COMPAT_COLUMNS.sensors.gpuBusyMs ?? []) !== undefined;
+  const columns = isV2
+    ? PRESENTMON_V2_COLUMNS
+    : isV1MetricsCompat
+      ? PRESENTMON_V1_COMPAT_COLUMNS
+      : PRESENTMON_V1_COLUMNS;
+  const captureProfile = isV2
+    ? PRESENTMON_PROFILES.v2
+    : isV1MetricsCompat
+      ? PRESENTMON_PROFILES.v1MetricsCompat
+      : PRESENTMON_PROFILES.v1;
 
   const stream = dominantStream(lines, found);
   const generatedColumn = findColumn(found.header, ["frametype"]);
   const rows = parseFrameRowsAt(SOURCE, lines, found, columns, {
     ...(stream.rowFilter === undefined ? {} : { rowFilter: stream.rowFilter }),
     ...(generatedColumn === undefined ? {} : { generatedColumn }),
+    ...(isV2 ? presentMonV2TimeColumn(found) : {}),
   });
   if (!rows.ok) return rows;
 
@@ -73,10 +88,17 @@ export function parsePresentMon(input: string | Uint8Array): ParseResult<ParsedC
       frames: rows.value,
       parserVersion: parserVersionString(SOURCE),
       captureProfile: captureProfile.id,
+      sensorAlignment: frameAlignedSensorMap(columns),
       ...(captureSemantics ? { captureSemantics } : {}),
     },
     [...rows.warnings, ...stream.warnings],
   );
+}
+
+/** PresentMon 2.x writes CPUStartTime in milliseconds, not seconds. */
+function presentMonV2TimeColumn(found: FoundHeader): Pick<FrameRowsInput, "timeColumn"> {
+  const index = findColumn(found.header, ["cpustarttime"]);
+  return index === undefined ? {} : { timeColumn: { index, unit: "milliseconds" } };
 }
 
 /** Map a PresentMon `PresentMode` cell to a canonical presentation mode (§16a.3). */

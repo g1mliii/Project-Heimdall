@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { frameSampleSchema } from "@heimdall/shared";
 
@@ -75,6 +76,30 @@ describe("parseCapFrameX — CSV (§7.1)", () => {
 });
 
 describe("parseCapFrameX — JSON (§7.1 hardware extraction)", () => {
+  it("parses the anonymized CapFrameX 1.8.6 AMD SensorData2 capture", () => {
+    const { value, warnings } = parseOk("capframex/json/amd-sensordata2-real.json");
+    expect(value.frames).toHaveLength(120);
+    expect(warnings).toEqual([]);
+    expectClose(value.frames[0], {
+      timeMs: 0,
+      frameTimeMs: 5.3232,
+      cpuBusyMs: 5.2226,
+      gpuBusyMs: 15.5204,
+    });
+    expect(value.frames[0]!.gpuLoadPct).toBeUndefined();
+    expectClose(value.frames[2], {
+      timeMs: 25.7041999993817,
+      frameTimeMs: 6.2446,
+      cpuBusyMs: 6.1462,
+      gpuBusyMs: 15.1737,
+      gpuLoadPct: 100,
+      gpuClockMhz: 2724,
+      gpuPowerW: 316,
+      vramUsedMb: 11_756,
+      cpuLoadPct: 35.23856735229492,
+    });
+  });
+
   it("parses frames + sensors from Runs[].CaptureData", () => {
     const { value, warnings } = parseOk("capframex/json/nvidia-capture.json");
     expect(value.frames).toHaveLength(20);
@@ -94,6 +119,111 @@ describe("parseCapFrameX — JSON (§7.1 hardware extraction)", () => {
     }
   });
 
+  it("maps periodic SensorData2 channels and frame-aligned CPU/GPU active arrays", () => {
+    const result = parseCapFrameX(
+      JSON.stringify({
+        Runs: [
+          {
+            CaptureData: {
+              TimeInSeconds: [0, 0.1, 0.3],
+              MsBetweenPresents: [10, 10, 10],
+              CpuActive: [4, 5, 6],
+              GpuActive: [8, 9, 10],
+            },
+            SensorData2: [
+              {
+                MeasureTime: { Name: "MeasureTime", Type: "Time", Values: [0.02, 0.25] },
+                gpuLoad: { Name: "GPU Core", Type: "Load", Values: [50, 75] },
+                gpuClock: { Name: "GPU Core", Type: "Clock", Values: [2400, 2500] },
+                gpuPower: { Name: "GPU TBP", Type: "Power", Values: [300, 310] },
+                gpuMemory: {
+                  Name: "GPU Memory Dedicated",
+                  Type: "Data",
+                  Values: [10, 10.5],
+                },
+                cpuLoad: { Name: "CPU Total", Type: "Load", Values: [30, 40] },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const { value, warnings } = unwrapOk(result);
+    expect(warnings).toEqual([]);
+    expectClose(value.frames[0], {
+      timeMs: 0,
+      frameTimeMs: 10,
+      cpuBusyMs: 4,
+      gpuBusyMs: 8,
+    });
+    expect(value.frames[0]!.gpuLoadPct).toBeUndefined();
+    expectClose(value.frames[1], {
+      timeMs: 100,
+      frameTimeMs: 10,
+      cpuBusyMs: 5,
+      gpuBusyMs: 9,
+      gpuLoadPct: 50,
+      gpuClockMhz: 2400,
+      gpuPowerW: 300,
+      vramUsedMb: 10_240,
+      cpuLoadPct: 30,
+    });
+    expectClose(value.frames[2], {
+      timeMs: 300,
+      frameTimeMs: 10,
+      cpuBusyMs: 6,
+      gpuBusyMs: 10,
+      gpuLoadPct: 75,
+      gpuClockMhz: 2500,
+      gpuPowerW: 310,
+      vramUsedMb: 10_752,
+      cpuLoadPct: 40,
+    });
+  });
+
+  it("keeps frame parsing total when SensorData2 arrays have mismatched lengths", () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.integer({ min: 1, max: 40 }), { minLength: 1, maxLength: 100 }),
+        fc.array(fc.integer({ min: 0, max: 100 }), { maxLength: 100 }),
+        fc.array(fc.integer({ min: 0, max: 50 }), { maxLength: 100 }),
+        (frameTimes, sensorValues, timeSteps) => {
+          let sensorTime = 0;
+          const sensorTimes = timeSteps.map((step) => (sensorTime += step / 1000));
+          const result = parseCapFrameX(
+            JSON.stringify({
+              Runs: [
+                {
+                  CaptureData: {
+                    MsBetweenPresents: frameTimes,
+                    CpuActive: sensorValues,
+                    GpuActive: sensorValues.slice(0, Math.floor(sensorValues.length / 2)),
+                  },
+                  SensorData2: [
+                    {
+                      MeasureTime: {
+                        Name: "MeasureTime",
+                        Type: "Time",
+                        Values: sensorTimes,
+                      },
+                      gpuLoad: {
+                        Name: "GPU Core",
+                        Type: "Load",
+                        Values: sensorValues,
+                      },
+                    },
+                  ],
+                },
+              ],
+            }),
+          );
+          expect(result.ok).toBe(true);
+          if (result.ok) expect(result.value.frames).toHaveLength(frameTimes.length);
+        },
+      ),
+    );
+  });
+
   it("extracts the hardware snapshot and infers the GPU vendor", () => {
     const { value } = parseOk("capframex/json/nvidia-capture.json");
     expect(value.hardware).toEqual({
@@ -105,6 +235,19 @@ describe("parseCapFrameX — JSON (§7.1 hardware extraction)", () => {
       gpuDriver: "566.36",
       resolution: "2560x1440",
     });
+  });
+
+  it("keeps concatenated runs monotonic when capture timestamps exceed frame-time sums", () => {
+    const result = parseCapFrameX(
+      JSON.stringify({
+        Runs: [
+          { CaptureData: { TimeInSeconds: [0, 1], MsBetweenPresents: [10, 10] } },
+          { CaptureData: { TimeInSeconds: [0, 0.01], MsBetweenPresents: [10, 10] } },
+        ],
+      }),
+    );
+    const { value } = unwrapOk(result);
+    expect(value.frames.map((frame) => frame.timeMs)).toEqual([0, 1000, 1010, 1020]);
   });
 
   it("omits hardware when gpu/cpu are not recoverable", () => {

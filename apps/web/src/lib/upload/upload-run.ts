@@ -150,6 +150,7 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
       parserVersion,
       captureSemantics,
       captureProfile,
+      sensorAlignment,
     } = parsed.capture;
 
     // Fast local feedback for the same limits the server enforces (§11.10).
@@ -198,7 +199,10 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
       frames,
       parsed.source,
       hardware,
-      captureSemantics,
+      {
+        ...captureSemantics,
+        ...(sensorAlignment === undefined ? {} : { sensorAlignment }),
+      },
     );
     // Parser-detected details win over a declaration: unlike a user's text
     // entry, the source header/profile is direct capture evidence. Everything

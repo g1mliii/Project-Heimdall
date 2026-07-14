@@ -6,6 +6,7 @@
  */
 
 import type {
+  CapabilitySensorField,
   CaptureSource,
   FrameSample,
   HardwareSnapshot,
@@ -33,6 +34,8 @@ export interface ParsedCapture {
   hardware?: HardwareSnapshot;
   /** Detected presentation/sync semantics (PresentMon v2+); absent otherwise. */
   captureSemantics?: CaptureSemantics;
+  /** Per-field sampling alignment observed from this exact capture format. */
+  sensorAlignment?: Partial<Record<CapabilitySensorField, boolean>>;
   /** Pinned parser-recognized capture profile, e.g. `presentmon-2.x`. */
   captureProfile?: string;
   /** e.g. `"capframex@1.0.0"` — stored for reprocessing provenance (§2.2). */

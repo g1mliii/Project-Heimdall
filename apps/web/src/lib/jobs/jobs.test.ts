@@ -316,6 +316,20 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     });
   });
 
+  it("retains declared periodic sensor alignment through canonical verification", async () => {
+    const id = "run_wk_sensor_alignment";
+    const capabilityManifest = deriveCapabilityManifest(frames, "capframex", validRun.hardware, {
+      sensorAlignment: { gpuLoadPct: false, gpuPowerW: false },
+    });
+    await setupFinalizedRun(id, runFixture(id, { capabilityManifest }));
+
+    expect(await drainJobs({}, realDeps(async () => parquetBytes))).toMatchObject({ validated: 1 });
+    const verified = (await readRun(id, db.pool))?.capabilityManifest;
+    expect(verified?.sensors.gpuLoadPct).toEqual({ present: true, frameAligned: false });
+    expect(verified?.sensors.gpuPowerW).toEqual({ present: true, frameAligned: false });
+    expect(verified?.sensors.cpuBusyMs).toEqual({ present: true, frameAligned: true });
+  });
+
   it("transient storage error retries; the attempts cap terminalizes (12.5)", async () => {
     await setupFinalizedRun("run_wk_retry");
     const flaky = async () => {

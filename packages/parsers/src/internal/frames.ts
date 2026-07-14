@@ -28,7 +28,7 @@ export interface FrameRowsInput {
    * When absent, `columns.timeSeconds` is used; when that is also missing the
    * timestamp falls back to the cumulative sum of frame times.
    */
-  timeColumn?: { index: number; unit: "seconds" | "nanoseconds" };
+  timeColumn?: { index: number; unit: "seconds" | "milliseconds" | "nanoseconds" };
   /** Per-field multiplier for unit conversion (e.g. MangoHud VRAM GB→MB). */
   sensorScale?: Partial<Record<SensorColumnField, number>>;
   /**
@@ -173,7 +173,12 @@ export function parseFrameRows(input: FrameRowsInput): ParseResult<FrameSample[]
         markBad(lineIndex);
         continue;
       }
-      rawTimeMs = timeColumn.unit === "seconds" ? rawTime * 1000 : rawTime / 1e6;
+      rawTimeMs =
+        timeColumn.unit === "seconds"
+          ? rawTime * 1000
+          : timeColumn.unit === "milliseconds"
+            ? rawTime
+            : rawTime / 1e6;
     }
 
     if (lastRawMs !== undefined && rawTimeMs < lastRawMs) {

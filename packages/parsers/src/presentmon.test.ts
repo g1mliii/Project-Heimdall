@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { frameSampleSchema } from "@heimdall/shared";
 
@@ -24,6 +25,13 @@ describe("parsePresentMon — v1 (§8)", () => {
 });
 
 describe("parsePresentMon — v2 (§8, CPU/GPU busy)", () => {
+  it("parses real PresentMon 2.4.1 CPUStartTime values as milliseconds", () => {
+    const { value } = parseOk("presentmon/v2-amd-real.csv");
+    expect(value.frames).toHaveLength(200);
+    expect(value.captureProfile).toBe("presentmon-2.x");
+    expect(value.frames.at(-1)!.timeMs).toBeCloseTo(2720.0448, 6);
+  });
+
   it("captures CPUBusy/GPUBusy as bottleneck fields", () => {
     const { value, warnings } = parseOk("presentmon/v2-basic.csv");
     expect(value.frames).toHaveLength(10);
@@ -37,7 +45,7 @@ describe("parsePresentMon — v2 (§8, CPU/GPU busy)", () => {
   });
 
   it("normalizes CPUStartTime so the first frame is at t=0", () => {
-    // v2-basic's CPUStartTime column starts at 3.5s into the session.
+    // v2-basic's CPUStartTime column starts at 3500 ms into the session.
     const { value } = parseOk("presentmon/v2-basic.csv");
     expect(value.frames[0]!.timeMs).toBe(0);
     expect(value.frames[9]!.timeMs).toBeCloseTo(110, 6);
@@ -62,6 +70,25 @@ describe("parsePresentMon — v2 (§8, CPU/GPU busy)", () => {
   });
 });
 
+describe("parsePresentMon — 2.x --v1_metrics compatibility", () => {
+  it("retains msGPUActive and presentation semantics without relabeling native v1", () => {
+    const { value, warnings } = parseOk("presentmon/v2-v1-metrics-amd-real.csv");
+    expect(value.frames).toHaveLength(200);
+    expect(value.captureProfile).toBe("presentmon-2.x-v1-metrics");
+    expect(value.frames[0]!.gpuBusyMs).toBe(6.1626);
+    expect(value.captureSemantics).toEqual({
+      graphicsApi: "dxgi",
+      presentationMode: "hardware-independent-flip",
+      syncMode: "tearing",
+    });
+    expect(warnings).toEqual([]);
+
+    const nativeV1 = parseOk("presentmon/v1-basic.csv").value;
+    expect(nativeV1.captureProfile).toBe("presentmon-1.x");
+    expect(nativeV1.frames[0]!.gpuBusyMs).toBeUndefined();
+  });
+});
+
 describe("parsePresentMon — stream selection & frame generation (§8)", () => {
   const header = "Application,ProcessID,SwapChainAddress,FrameType,CPUStartTime,FrameTime";
   const row = (app: string, pid: string, swap: string, type: string, t: number, ft: number) =>
@@ -69,8 +96,8 @@ describe("parsePresentMon — stream selection & frame generation (§8)", () => 
 
   it("keeps only the dominant process/swapchain stream and warns", () => {
     const lines = [header];
-    for (let i = 0; i < 10; i++) lines.push(row("game.exe", "1234", "0xAAAA", "Application", 3.5 + i * 0.01, 10));
-    for (let i = 0; i < 4; i++) lines.push(row("dwm.exe", "888", "0xBBBB", "Application", 3.5 + i * 0.016, 16.6));
+    for (let i = 0; i < 10; i++) lines.push(row("game.exe", "1234", "0xAAAA", "Application", 3500 + i * 10, 10));
+    for (let i = 0; i < 4; i++) lines.push(row("dwm.exe", "888", "0xBBBB", "Application", 3500 + i * 16, 16.6));
     const { value, warnings } = unwrapOk(parsePresentMon(lines.join("\n")));
     expect(value.frames).toHaveLength(10);
     expect(value.frames.every((f) => f.frameTimeMs === 10)).toBe(true);
@@ -97,7 +124,7 @@ describe("parsePresentMon — stream selection & frame generation (§8)", () => 
     // The shorter overlay stream comes first, which used to determine the
     // persisted semantics even though its frame rows were discarded.
     for (let i = 0; i < 4; i++) {
-      lines.push(semanticRow("overlay.exe", "888", "0xBBBB", 3.5 + i * 0.016, "D3D11", "Composed", 1, 0));
+      lines.push(semanticRow("overlay.exe", "888", "0xBBBB", 3500 + i * 16, "D3D11", "Composed", 1, 0));
     }
     for (let i = 0; i < 10; i++) {
       lines.push(
@@ -105,7 +132,7 @@ describe("parsePresentMon — stream selection & frame generation (§8)", () => 
           "game.exe",
           "1234",
           "0xAAAA",
-          3.5 + i * 0.01,
+          3500 + i * 10,
           "D3D12",
           "Hardware Composed: Independent Flip",
           0,
@@ -130,12 +157,45 @@ describe("parsePresentMon — stream selection & frame generation (§8)", () => 
   it("marks non-Application FrameType rows as generated (DLSS3/FSR3/XeSS)", () => {
     const lines = [header];
     for (let i = 0; i < 6; i++) {
-      lines.push(row("game.exe", "1234", "0xAAAA", i % 2 === 1 ? "AMD AFMF" : "Application", 3.5 + i * 0.01, 10));
+      lines.push(row("game.exe", "1234", "0xAAAA", i % 2 === 1 ? "AMD AFMF" : "Application", 3500 + i * 10, 10));
     }
     const { value } = unwrapOk(parsePresentMon(lines.join("\n")));
     expect(value.frames.map((f) => f.generated === true)).toEqual([
       false, true, false, true, false, true,
     ]);
+  });
+});
+
+describe("parsePresentMon — timestamp properties", () => {
+  it("preserves arbitrary monotonic CPUStartTime millisecond deltas", () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 0, max: 1_000_000 }),
+        fc.array(fc.integer({ min: 1, max: 50 }), { minLength: 1, maxLength: 100 }),
+        (offsetMs, deltas) => {
+          const starts = [offsetMs];
+          for (const delta of deltas) starts.push(starts.at(-1)! + delta);
+          const csv = [
+            "Application,CPUStartTime,FrameTime",
+            ...starts.map((start) => `benchmark.exe,${start},10`),
+          ].join("\n");
+          const { value } = unwrapOk(parsePresentMon(csv));
+          expect(value.frames.map((frame) => frame.timeMs)).toEqual(
+            starts.map((start) => start - offsetMs),
+          );
+        },
+      ),
+    );
+  });
+
+  it("keeps TimeInSeconds as the v2 fallback when CPUStartTime is absent", () => {
+    const csv = [
+      "Application,TimeInSeconds,FrameTime",
+      "benchmark.exe,2.5,10",
+      "benchmark.exe,2.51,10",
+    ].join("\n");
+    const { value } = unwrapOk(parsePresentMon(csv));
+    expect(value.frames.map((frame) => frame.timeMs)).toEqual([0, 10]);
   });
 });
 

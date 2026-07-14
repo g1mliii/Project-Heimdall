@@ -12,7 +12,7 @@ import type { HardwareSnapshot } from "@heimdall/shared";
 import { failure, success, type ParsedCapture, type ParseResult } from "./errors";
 import { decodeInput, splitLines } from "./internal/decode";
 import { findColumn, findCsvHeader, headerFailure, splitCsvLine, type FoundHeader } from "./internal/csv";
-import { MANGOHUD_COLUMNS } from "./internal/columns";
+import { frameAlignedSensorMap, MANGOHUD_COLUMNS } from "./internal/columns";
 import { parseFrameRowsAt } from "./internal/frames";
 import { inferGpuVendor } from "./internal/vendor";
 import { parseVramTotalMb } from "./internal/hardware";
@@ -43,6 +43,7 @@ export function parseMangoHud(input: string | Uint8Array): ParseResult<ParsedCap
   const value: ParsedCapture = {
     source: SOURCE,
     frames: rows.value,
+    sensorAlignment: frameAlignedSensorMap(MANGOHUD_COLUMNS),
     parserVersion: parserVersionString(SOURCE),
   };
   const hardware = extractHardware(lines, found);

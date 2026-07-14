@@ -7,16 +7,14 @@ const version = fc
   .array(fc.integer({ min: 0, max: 9_999 }), { minLength: 1, maxLength: 6 })
   .map((segments) => segments.join("."));
 
-const sign = (value: number): number => Math.sign(value);
-
 describe("driver version properties", () => {
   it("is reflexive and antisymmetric for numeric versions", () => {
     fc.assert(
       fc.property(version, version, (left, right) => {
         expect(compareDriverVersions(left, left)).toBe(0);
-        expect(sign(compareDriverVersions(left, right))).toBe(
-          -sign(compareDriverVersions(right, left)),
-        );
+        const forward = compareDriverVersions(left, right);
+        const reverse = compareDriverVersions(right, left);
+        expect(forward + reverse).toBe(0);
       }),
     );
   });

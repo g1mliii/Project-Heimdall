@@ -1,8 +1,8 @@
 # Parser fixtures
 
-Golden files for `@heimdall/parsers`. Small (10–20 rows), hand-checkable, and
-**synthetic**: authored from the documented CapFrameX / PresentMon / MangoHud
-formats, not captured from real machines. Every parseable fixture has a
+Golden files for `@heimdall/parsers`. Most are small (10–20 rows), hand-checkable
+synthetic captures; the rows marked **anonymized real capture** pin observed tool
+output after machine-identifying fields are removed. Every parseable fixture has a
 colocated `*.expected.json` (`{summary, sampleCount, firstFrame, lastFrame,
 hardware?}`) whose numbers were computed by hand — see the frame-time design
 notes below.
@@ -16,9 +16,12 @@ notes below.
 | `capframex/csv/intel-missing-sensors.csv` | CapFrameX CSV | synthetic | frame times only → `missing-sensors` warning |
 | `capframex/csv/columns-reordered.csv` | CapFrameX CSV | synthetic | same data as nvidia, shuffled column order |
 | `capframex/json/nvidia-capture.json` | CapFrameX capture JSON | synthetic | `Info` block → `HardwareSnapshot` |
+| `capframex/json/amd-sensordata2-real.json` | CapFrameX 1.8.6.2 capture JSON | anonymized real capture | AMD `SensorData2` periodic channels + frame-aligned `CpuActive`/`GpuActive`; source Info reported 26.3.1 while the OS driver store was AMD 26.6.1 (`32.0.31019.2002`) |
 | `presentmon/v1-basic.csv` | PresentMon 1.x | synthetic | `MsBetweenPresents`/`TimeInSeconds`, no sensors |
 | `presentmon/v2-basic.csv` | PresentMon 2.x | synthetic | `FrameTime` + `CPUBusy`/`GPUBusy`; `CPUStartTime` offset from 0 |
 | `presentmon/v2-gpu-telemetry.csv` | PresentMon 2.x | synthetic | opt-in `GPUUtilization/GPUFrequency/GPUPower/GPUMemUsed` |
+| `presentmon/v2-amd-real.csv` | PresentMon 2.4.1 | anonymized real capture | AMD v2 output; proves `CPUStartTime` is milliseconds and busy fields are frame-aligned |
+| `presentmon/v2-v1-metrics-amd-real.csv` | PresentMon 2.4.1 `--v1_metrics` | anonymized real capture | compatibility profile with `msGPUActive` and presentation semantics |
 | `mangohud/nvidia-basic.csv` | MangoHud | synthetic | sysinfo block + `elapsed` ns timestamps |
 | `malformed/*` | — | synthetic | each maps to one typed `ParseErrorCode` |
 
@@ -35,7 +38,8 @@ notes below.
 ## Real-export wanted-list (flips sensor-matrix cells to `verified-real`)
 
 The `SENSOR_AVAILABILITY` matrix (`src/sensor-availability.ts`) is seeded from
-documented behavior with every cell `provenance: "synthetic"`. Landing a real
+documented behavior. AMD CapFrameX and PresentMon cells now have real provenance;
+the remaining cells stay `synthetic`. Landing a real
 export here **and flipping its cell to `verified-real` in the same PR**
 completes the §7.3 spike for that cell. Wanted, in priority order:
 
@@ -45,11 +49,12 @@ completes the §7.3 spike for that cell. Wanted, in priority order:
 2. **CapFrameX CSV — AMD**: confirm board-power availability (`gpuPowerW` is
    seeded `sometimes`).
 3. **CapFrameX CSV — Intel Arc**: confirm clock/power coverage.
-4. **CapFrameX capture JSON** (any vendor): confirm `Info` key names and
-   whether sensor arrays are frame-aligned or 250 ms-sampled.
+4. **CapFrameX capture JSON** (NVIDIA / Intel remaining): AMD 1.8.6.2 now confirms
+   `Info`, periodic `SensorData2`, and frame-aligned `CpuActive`/`GpuActive`.
 5. **CapFrameX CSV — German locale**: confirm `;` + decimal-comma export shape.
-6. **PresentMon 2.x with `--track_gpu`-style telemetry** (each vendor):
-   confirm telemetry column names/units, `CPUStartTime` epoch.
+6. **PresentMon 2.x with `--track_gpu`-style telemetry** (each vendor): AMD 2.4.1
+   now confirms millisecond `CPUStartTime` plus `CPUBusy`/`GPUBusy`; opt-in GPU
+   telemetry columns and the NVIDIA/Intel cells still need real exports.
 7. **PresentMon 1.x** (any vendor): confirm header shape.
 8. **MangoHud** (NVIDIA / AMD / Intel): confirm `gpu_vram_used` unit (we
    assume GiB → ×1024 to MB), `ram` sysinfo unit (we assume MB above 256), and

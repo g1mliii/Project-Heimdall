@@ -39,7 +39,7 @@ export function serializePresentMonV2Csv(frames: readonly FrameSample[]): string
       [
         "game.exe",
         "1234",
-        String(f.timeMs / 1000),
+        String(f.timeMs),
         String(f.frameTimeMs),
         cell(f.cpuBusyMs),
         cell(f.gpuBusyMs),

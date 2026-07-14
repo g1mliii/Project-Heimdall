@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { captureSourceSchema, type FrameSample } from "@heimdall/shared";
 
 import {
+  deriveCapabilityManifest,
   detectAvailableSensors,
   expectedSensors,
   SENSOR_AVAILABILITY,
@@ -27,8 +28,7 @@ describe("SENSOR_AVAILABILITY matrix completeness (§7.3)", () => {
   it("keeps provenance honest: a verified-real cell must carry matching evidence + a golden fixture on disk (16d.1)", () => {
     // Flipping a cell to verified-real requires landing the real export in
     // fixtures/ in the same PR (see fixtures/README.md flip procedure). This
-    // passes vacuously while every cell is synthetic and becomes load-bearing
-    // the moment one flips: provenance can never outrun the data.
+    // becomes load-bearing as cells flip: provenance can never outrun the data.
     const allFixtures = new Set(listFixtureFiles());
     for (const source of captureSourceSchema.options) {
       for (const vendor of VENDORS) {
@@ -77,6 +77,56 @@ describe("detectAvailableSensors — per-run truth", () => {
     ];
     expect(detectAvailableSensors(frames)).toEqual(["gpuLoadPct", "cpuBusyMs"]);
     expect(detectAvailableSensors([])).toEqual([]);
+  });
+
+  it("marks real CapFrameX AMD periodic sensors separately from frame-aligned busy times", () => {
+    const result = parseCapFrameX(readFixture("capframex/json/amd-sensordata2-real.json"));
+    if (!result.ok) throw new Error(result.error.code);
+    const manifest = deriveCapabilityManifest(
+      result.value.frames,
+      result.value.source,
+      result.value.hardware,
+      { sensorAlignment: result.value.sensorAlignment },
+    );
+    expect(manifest.sensors.gpuLoadPct).toEqual({ present: true, frameAligned: false });
+    expect(manifest.sensors.gpuPowerW).toEqual({ present: true, frameAligned: false });
+    expect(manifest.sensors.cpuBusyMs).toEqual({ present: true, frameAligned: true });
+    expect(manifest.sensors.gpuBusyMs).toEqual({ present: true, frameAligned: true });
+  });
+
+  it("uses exact capture alignment for AMD CSV and non-AMD SensorData2 JSON", () => {
+    const csv = parseCapFrameX(readFixture("capframex/csv/amd-decimal-comma.csv"));
+    if (!csv.ok) throw new Error(csv.error.code);
+    const csvManifest = deriveCapabilityManifest(
+      csv.value.frames,
+      csv.value.source,
+      { gpu: "AMD Radeon GPU", cpu: "AMD CPU", gpuVendor: "amd" },
+      { sensorAlignment: csv.value.sensorAlignment },
+    );
+    expect(csvManifest.sensors.gpuPowerW).toEqual({ present: true, frameAligned: true });
+
+    const json = parseCapFrameX(
+      JSON.stringify({
+        Info: { GPU: "NVIDIA GeForce GPU", Processor: "CPU" },
+        Runs: [
+          {
+            CaptureData: { TimeInSeconds: [0, 0.1], MsBetweenPresents: [10, 10] },
+            SensorData2: {
+              MeasureTime: { Name: "MeasureTime", Type: "Time", Values: [0.05] },
+              gpuLoad: { Name: "GPU Core", Type: "Load", Values: [80] },
+            },
+          },
+        ],
+      }),
+    );
+    if (!json.ok) throw new Error(json.error.code);
+    const jsonManifest = deriveCapabilityManifest(
+      json.value.frames,
+      json.value.source,
+      json.value.hardware,
+      { sensorAlignment: json.value.sensorAlignment },
+    );
+    expect(jsonManifest.sensors.gpuLoadPct).toEqual({ present: true, frameAligned: false });
   });
 
   it("matches what the parsers actually produced for the fixtures", () => {

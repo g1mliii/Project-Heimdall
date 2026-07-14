@@ -41,7 +41,7 @@ function generatedPresentMonFile(): File {
   ];
   for (let i = 0; i < 10; i += 1) {
     lines.push(
-      `game.exe,1234,0xAAAA,${i % 2 === 0 ? "Application" : "AMD AFMF"},${3.5 + i * 0.01},10`,
+      `game.exe,1234,0xAAAA,${i % 2 === 0 ? "Application" : "AMD AFMF"},${3500 + i * 10},10`,
     );
   }
   return new File([lines.join("\n")], "presentmon-generated.csv");
@@ -187,6 +187,25 @@ describe("uploadCapture engine", () => {
       await hashManagementToken(result.managementToken),
     );
     expect(JSON.stringify(log.finalizeBody)).not.toContain(result.managementToken);
+  });
+
+  it("uploads exact periodic-vs-frame-aligned evidence from CapFrameX JSON", async () => {
+    const log: TransportLog = {};
+    const result = await uploadCapture(
+      fixtureFile("capframex/json/amd-sensordata2-real.json"),
+      {
+        game: "Benchmark Game",
+        visibility: "unlisted",
+        transport: mockTransport(log),
+      },
+    );
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    const manifest = createRunRequestSchema.parse(log.createBody).capabilityManifest!;
+    expect(manifest.sensors.gpuLoadPct).toEqual({ present: true, frameAligned: false });
+    expect(manifest.sensors.gpuPowerW).toEqual({ present: true, frameAligned: false });
+    expect(manifest.sensors.cpuBusyMs).toEqual({ present: true, frameAligned: true });
+    expect(manifest.sensors.gpuBusyMs).toEqual({ present: true, frameAligned: true });
   });
 
   it("sends parser-derived capability semantics and normalized methodology metadata (§16a/§16c)", async () => {

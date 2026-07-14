@@ -101,7 +101,7 @@ const CAPFRAMEX_COMMON: Record<SensorField, SensorAvailability> = {
   gpuPowerW: "expected",
   vramUsedMb: "expected",
   cpuLoadPct: "expected",
-  cpuBusyMs: "never",
+  cpuBusyMs: "sometimes", // CaptureData.CpuActive exists on recent JSON captures
   gpuBusyMs: "sometimes", // MsGPUActive exists on recent versions only
 };
 
@@ -133,8 +133,42 @@ export const SENSOR_AVAILABILITY: Record<
 > = {
   capframex: {
     nvidia: cell(CAPFRAMEX_COMMON),
-    amd: cell(
+    amd: verifiedCell(
       { ...CAPFRAMEX_COMMON, gpuPowerW: "sometimes" },
+      {
+        source: "capframex",
+        gpuVendor: "amd",
+        driver: "AMD Software 26.6.1 (Windows driver 32.0.31019.2002)",
+        toolVersion: "CapFrameX 1.8.6.2",
+        headers: [
+          "SensorData2./gpu-amd/1/load/0",
+          "SensorData2./gpu-amd/1/clock/0",
+          "SensorData2./gpu-amd/1/power/1",
+          "SensorData2./gpu-amd/1/data/0",
+          "SensorData2./amdcpu/0/load/0",
+          "CaptureData.CpuActive",
+          "CaptureData.GpuActive",
+        ],
+        units: {
+          gpuLoadPct: "%",
+          gpuClockMhz: "MHz",
+          gpuPowerW: "W",
+          vramUsedMb: "GiB (normalized to MiB)",
+          cpuLoadPct: "%",
+          cpuBusyMs: "ms",
+          gpuBusyMs: "ms",
+        },
+        frameAligned: {
+          gpuLoadPct: false,
+          gpuClockMhz: false,
+          gpuPowerW: false,
+          vramUsedMb: false,
+          cpuLoadPct: false,
+          cpuBusyMs: true,
+          gpuBusyMs: true,
+        },
+        fixture: "capframex/json/amd-sensordata2-real.json",
+      },
       "AMD board power depends on driver/telemetry version",
     ),
     intel: cell(
@@ -144,7 +178,16 @@ export const SENSOR_AVAILABILITY: Record<
   },
   presentmon: {
     nvidia: cell(PRESENTMON_COMMON),
-    amd: cell(PRESENTMON_COMMON),
+    amd: verifiedCell(PRESENTMON_COMMON, {
+      source: "presentmon",
+      gpuVendor: "amd",
+      driver: "AMD Software 26.6.1 (Windows driver 32.0.31019.2002)",
+      toolVersion: "PresentMon 2.4.1",
+      headers: ["CPUBusy", "GPUBusy"],
+      units: { cpuBusyMs: "ms", gpuBusyMs: "ms" },
+      frameAligned: { cpuBusyMs: true, gpuBusyMs: true },
+      fixture: "presentmon/v2-amd-real.csv",
+    }),
     intel: cell(
       { ...PRESENTMON_COMMON, gpuPowerW: "expected" },
       "PresentMon is Intel's own tool; Arc telemetry is first-class when enabled",
@@ -212,6 +255,8 @@ export function deriveVramCapacity(hardware?: HardwareSnapshot): VramCapacity {
 export type DeclaredCaptureSemantics = CaptureSemantics & {
   /** Explicit state the worker cannot reconstruct when hardware lacks a total. */
   vramCapacity?: VramCapacity;
+  /** Sampling alignment observed from this exact parser/capture profile. */
+  sensorAlignment?: Partial<Record<SensorField, boolean>>;
 };
 
 export function deriveCapabilityManifest(
@@ -253,16 +298,17 @@ export function buildCapabilityManifest(input: {
   const sensors = Object.fromEntries(
     SENSOR_FIELDS.map((field): [SensorField, CaptureCapability] => {
       const isPresent = present.has(field);
-      // CSV/JSON row-per-frame sources are frame-aligned by construction; a
-      // real fixture can explicitly prove a periodically sampled column. Only
-      // a `verified-real` cell is allowed to override the safe row-per-frame
-      // default; synthetic expectations never turn a real column into a claim.
+      const declaredFrameAligned = declared?.sensorAlignment?.[field];
+      // Exact parser evidence wins because one source/vendor can expose both
+      // row-aligned CSV and periodic JSON fields. Matrix evidence is the safe
+      // fallback for legacy callers that cannot carry per-capture alignment.
       const frameAligned =
         isPresent &&
-        !(
-          matrixCell?.provenance === "verified-real" &&
-          matrixCell.evidence?.frameAligned[field] === false
-        );
+        (declaredFrameAligned ??
+          !(
+            matrixCell?.provenance === "verified-real" &&
+            matrixCell.evidence?.frameAligned[field] === false
+          ));
       return [field, { present: isPresent, frameAligned }];
     }),
   ) as CapabilityManifest["sensors"];

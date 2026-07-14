@@ -10,7 +10,7 @@
 import { createPublicKey, verify as cryptoVerify } from "node:crypto";
 import { GENERATED_FRAME_TECH, RUN_STATUS, normalizeMethodologyManifest } from "@heimdall/shared";
 import type { CapabilityManifest, DiagnosticFinding, GeneratedFrameTech, RunSummary } from "@heimdall/shared";
-import { buildCapabilityManifest, runDiagnostics } from "@heimdall/parsers";
+import { buildCapabilityManifest, runDiagnostics, SENSOR_FIELDS } from "@heimdall/parsers";
 import { readRunForVerification, type Queryable } from "../db";
 import { applyVerificationResult, type ClaimedJob } from "../repo/jobs";
 import { computeFrameParquetSummary } from "../parquet/frame-metadata";
@@ -135,6 +135,12 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
                 presentationMode: run.capabilityManifest.presentationMode,
                 syncMode: run.capabilityManifest.syncMode,
                 vramCapacity: run.capabilityManifest.vramCapacity,
+                sensorAlignment: Object.fromEntries(
+                  SENSOR_FIELDS.map((field) => [
+                    field,
+                    run.capabilityManifest!.sensors[field].frameAligned,
+                  ]),
+                ),
               },
             }
           : {}),
