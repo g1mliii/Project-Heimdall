@@ -660,7 +660,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       const cells = [
         ["nvidia", "Windows 11", "gpu", "610.74"],
         ["nvidia", "Arch Linux", "gpu", "595.84"],
-        ["amd", "Windows 10", "gpu", "26.6.1"],
+        ["amd", "Windows 10", "gpu", "26.6.4"],
         ["amd", "Bazzite Linux", "mesa", "26.1.4"],
         ["intel", "Windows 11", "gpu", "32.0.101.8861"],
         ["intel", "Ubuntu Linux", "mesa", "26.1.4"],
