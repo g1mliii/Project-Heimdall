@@ -61,6 +61,11 @@ export function parseAnyCapture(
     if (result.ok) {
       return { ok: true, source, capture: result.value, warnings: result.warnings };
     }
+    // The stream cap is a recognized PresentMon shape failure. Falling through
+    // would let overlapping frame-time columns be accepted by another parser.
+    if (result.error.source === "presentmon" && result.error.code === "too-many-streams") {
+      return { ok: false, error: result.error };
+    }
     // Keep the most informative rejection: a source that recognized the shape
     // but choked mid-file beats a blanket "unrecognized-format".
     if (!bestError || (bestError.code === "unrecognized-format" && result.error.code !== "unrecognized-format")) {

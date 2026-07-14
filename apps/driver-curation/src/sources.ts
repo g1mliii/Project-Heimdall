@@ -27,6 +27,32 @@ export const SOURCE_URLS = {
 const MAX_REQUIREMENTS_PER_SOURCE = 100;
 const VERSION = /^\d+(?:\.\d+){1,4}$/;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const NAMED_MONTHS: Record<string, number> = {
+  jan: 1,
+  january: 1,
+  feb: 2,
+  february: 2,
+  mar: 3,
+  march: 3,
+  apr: 4,
+  april: 4,
+  may: 5,
+  jun: 6,
+  june: 6,
+  jul: 7,
+  july: 7,
+  aug: 8,
+  august: 8,
+  sep: 9,
+  sept: 9,
+  september: 9,
+  oct: 10,
+  october: 10,
+  nov: 11,
+  november: 11,
+  dec: 12,
+  december: 12,
+};
 
 function validVersion(
   value: string,
@@ -44,11 +70,40 @@ function validVersion(
 function isoDate(value: string): string {
   const cleaned = value
     .replace(/(\d+)(st|nd|rd|th)/gi, "$1")
-    .replace(/^[A-Za-z]{3}\s+/, "")
+    .replace(/^(?:mon|tue|wed|thu|fri|sat|sun)\.?,?\s+/i, "")
     .replace(/\.$/, "")
     .trim();
-  const date = new Date(cleaned);
-  if (Number.isNaN(date.valueOf())) throw new Error(`invalid release date: ${value}`);
+  let parts: readonly [year: number, month: number, day: number] | undefined;
+  const iso = cleaned.match(/^(?<year>\d{4})-(?<month>\d{1,2})-(?<day>\d{1,2})$/);
+  const numeric = cleaned.match(/^(?<month>\d{1,2})\/(?<day>\d{1,2})\/(?<year>\d{4})$/);
+  const named = cleaned.match(/^(?<month>[a-z]+)\s+(?<day>\d{1,2}),\s*(?<year>\d{4})$/i);
+  if (iso?.groups) {
+    parts = [Number(iso.groups.year), Number(iso.groups.month), Number(iso.groups.day)];
+  } else if (numeric?.groups) {
+    parts = [
+      Number(numeric.groups.year),
+      Number(numeric.groups.month),
+      Number(numeric.groups.day),
+    ];
+  } else if (named?.groups) {
+    const namedMonth = named.groups.month;
+    const month = namedMonth === undefined ? undefined : NAMED_MONTHS[namedMonth.toLowerCase()];
+    if (month !== undefined) {
+      parts = [Number(named.groups.year), month, Number(named.groups.day)];
+    }
+  }
+  if (parts === undefined || parts.some((part) => !Number.isInteger(part))) {
+    throw new Error(`invalid release date: ${value}`);
+  }
+  const [year, month, day] = parts;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    throw new Error(`invalid release date: ${value}`);
+  }
   return date.toISOString().slice(0, 10);
 }
 
@@ -60,7 +115,9 @@ function decodeEntities(value: string): string {
     lt: "<",
     nbsp: " ",
     quot: '"',
+    lsquo: "'",
     reg: "",
+    rsquo: "'",
     trade: "",
   };
   return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (entity, body: string) => {
@@ -474,9 +531,9 @@ export function parseAmdReleaseNotes(
   const latestVersion = validVersion(versionMatch[1], "amd", "windows", "gpu");
   const releasedAt = isoDate(dateMatch[1]);
   const games = sectionItems(lines, /^New Game Support$/i, [
-    /^Fixed Issues$/i,
-    /^Known Issues$/i,
-    /^New Product Support$/i,
+    /^Fixed Issues:?$/i,
+    /^Known Issues:?$/i,
+    /^New Product Support:?$/i,
   ]);
   const requirementBatch = boundedRequirements(
     "amd",

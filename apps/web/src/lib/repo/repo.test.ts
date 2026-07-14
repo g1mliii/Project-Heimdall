@@ -692,6 +692,26 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       });
     });
 
+    it("maps Windows NT 10/11 runtime strings to the supported driver platform", async () => {
+      for (const [id, os] of [
+        ["run_driver_os_windows_nt", "Microsoft Windows NT 10.0.22631"],
+        ["run_driver_os_windows_nt_underscore", "Windows_NT 10.0"],
+      ] as const) {
+        await insertRun(
+          {
+            ...pendingRun(id),
+            hardware: { ...validRun.hardware, os },
+          },
+          db.pool,
+        );
+        expect((await readRunForVerification(id, db.pool))?.driverPlatform).toEqual({
+          vendor: "nvidia",
+          os: "windows",
+          component: "gpu",
+        });
+      }
+    });
+
     it("selects the seeded catalog for every supported vendor and OS cell", async () => {
       await db.pool.query(
         "update driver_catalog set fetched_at = now(), released_at = current_date - interval '8 days'",

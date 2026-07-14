@@ -63,6 +63,18 @@ describe("parseAnyCapture", () => {
     });
   });
 
+  it("does not reinterpret a stream-capped PresentMon capture as another source", () => {
+    const lines = ["Application,ProcessID,SwapChainAddress,TimeInSeconds,MsBetweenPresents"];
+    for (let index = 0; index <= 1_024; index++) {
+      lines.push(`game-${index}.exe,${index},0x${index},${index / 100},10`);
+    }
+
+    expect(parseAnyCapture(lines.join("\n"))).toMatchObject({
+      ok: false,
+      error: { code: "too-many-streams", source: "presentmon" },
+    });
+  });
+
   it.each(["le", "be"] as const)("detects a UTF-16%s PresentMon v1 capture", (endian) => {
     const input = encodeUtf16WithBom(
       [

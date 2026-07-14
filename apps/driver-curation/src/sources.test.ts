@@ -64,6 +64,28 @@ describe("driver source contracts", () => {
     expect(batch.requirements.map((row) => row.title)).toEqual(["Foo", "Bar", "Baz"]);
   });
 
+  it("rejects malformed release dates instead of rolling them into another day", () => {
+    const lookup = (releaseDateTime: string) =>
+      JSON.stringify({
+        Success: "1",
+        IDS: [
+          {
+            downloadInfo: {
+              Version: "610.74",
+              ReleaseDateTime: releaseDateTime,
+              DetailsURL: "https://www.nvidia.com/en-us/drivers/details/274187/",
+            },
+          },
+        ],
+      });
+
+    for (const invalid of ["February 31, 2026", "6/31/2026"]) {
+      expect(() => parseNvidiaLookup(lookup(invalid), "windows", fetchedAt)).toThrow(
+        "invalid release date",
+      );
+    }
+  });
+
   it("preserves conjunctions and dotted titles in NVIDIA game-ready notes", () => {
     const batch = parseNvidiaLookup(
       JSON.stringify({
@@ -76,6 +98,7 @@ describe("driver source contracts", () => {
               DetailsURL: "https://www.nvidia.com/en-us/drivers/details/274187/",
               ReleaseNotes:
                 "Game Ready for Indiana Jones and the Great Circle\n" +
+                "Game Ready for Assassin&rsquo;s Creed Black Flag Resynced\n" +
                 "Enhanced gaming experience including S.T.A.L.K.E.R. 2: Heart of Chornobyl.",
             },
           },
@@ -87,6 +110,7 @@ describe("driver source contracts", () => {
 
     expect(batch.requirements.map((row) => row.title)).toEqual([
       "Indiana Jones and the Great Circle",
+      "Assassin's Creed Black Flag Resynced",
       "S.T.A.L.K.E.R. 2: Heart of Chornobyl",
     ]);
   });
@@ -131,6 +155,20 @@ describe("driver source contracts", () => {
       sourceUrl,
     });
     expect(batch.requirements).toEqual([]);
+  });
+
+  it("stops AMD game-ready extraction at colon-suffixed issue headings", () => {
+    const batch = parseAmdReleaseNotes(
+      `<h1>AMD Software: Adrenalin Edition 26.6.5 Driver Release Notes</h1>
+       <p>Last Updated: July 1st, 2026.</p>
+       <h3>New Game Support</h3><ul><li>Expected Game</li></ul>
+       <h3>Fixed Issues:</h3><ul><li>Fixed Issue Game</li></ul>
+       <h3>Known Issues:</h3><ul><li>Known Issue Game</li></ul>`,
+      fetchedAt,
+      "https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-5.html",
+    );
+
+    expect(batch.requirements.map((row) => row.title)).toEqual(["Expected Game"]);
   });
 
   it("uses Changelog.gg only to discover the latest AMD currency row", async () => {

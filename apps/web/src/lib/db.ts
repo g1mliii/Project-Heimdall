@@ -91,7 +91,7 @@ export const DRIVER_UPDATE_GRACE_DAYS = DIAGNOSTICS.driverUpdateGraceDays;
 /** Free-form OS snapshots mapped conservatively to the two supported families. */
 const DRIVER_OS_SQL = `case
   when trim(lower(coalesce(r.os_build, ''))) ~ '^(microsoft )?windows$'
-    or lower(coalesce(r.os_build, '')) ~ '(^|[^a-z0-9])(windows|win)[ _-]?(10|11)([^a-z0-9]|$)' then 'windows'
+    or lower(coalesce(r.os_build, '')) ~ '(^|[^a-z0-9])(?:(?:microsoft[ _-]+)?(?:windows|win)(?:[ _-]+nt)?[ _-]*(?:10|11)(?:\\.\\d+)?)(?:[^a-z0-9]|$)' then 'windows'
   when lower(coalesce(r.os_build, '')) ~ '(^|[^a-z0-9])(linux|ubuntu|debian|fedora|arch( linux)?|steam ?os|pop!?_?os|manjaro|nobara|bazzite|opensuse|mint)([^a-z0-9]|$)' then 'linux'
   else null
 end`;
