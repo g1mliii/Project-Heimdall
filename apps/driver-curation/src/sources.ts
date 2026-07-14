@@ -529,6 +529,8 @@ export function parseAmdReleaseNotes(
   const dateMatch = joined.match(/Last Updated:\s*([^\n]+)/i);
   if (!versionMatch?.[1] || !dateMatch?.[1]) throw new Error("AMD release shape changed");
   const latestVersion = validVersion(versionMatch[1], "amd", "windows", "gpu");
+  const canonicalSourceUrl = amdReleaseNotesUrl(sourceUrl, latestVersion);
+  if (!canonicalSourceUrl) throw new Error("AMD release-note URL did not match parsed version");
   const releasedAt = isoDate(dateMatch[1]);
   const games = sectionItems(lines, /^New Game Support$/i, [
     /^Fixed Issues:?$/i,
@@ -539,7 +541,7 @@ export function parseAmdReleaseNotes(
     "amd",
     latestVersion,
     releasedAt,
-    sourceUrl,
+    canonicalSourceUrl,
     fetchedAt,
     games,
   );
@@ -551,7 +553,7 @@ export function parseAmdReleaseNotes(
         component: "gpu",
         latestVersion,
         releasedAt,
-        sourceUrl,
+        sourceUrl: canonicalSourceUrl,
         fetchedAt,
       },
     ],

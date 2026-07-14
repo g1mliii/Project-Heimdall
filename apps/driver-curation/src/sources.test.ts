@@ -140,6 +140,17 @@ describe("driver source contracts", () => {
     ]);
   });
 
+  it("rejects an AMD release note when its URL does not match the parsed version", async () => {
+    const raw = await fixture("amd-release.html");
+    expect(() =>
+      parseAmdReleaseNotes(
+        raw,
+        fetchedAt,
+        "https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-4.html",
+      ),
+    ).toThrow("AMD release-note URL did not match parsed version");
+  });
+
   it("parses AMD's confirmed 26.6.4 hotfix without inventing game requirements", async () => {
     const sourceUrl =
       "https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-4.html";

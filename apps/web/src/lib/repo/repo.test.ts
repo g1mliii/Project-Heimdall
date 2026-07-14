@@ -692,10 +692,12 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       });
     });
 
-    it("maps Windows NT 10/11 runtime strings to the supported driver platform", async () => {
+    it("maps Windows NT and bracketed 10/11 runtime strings to the supported driver platform", async () => {
       for (const [id, os] of [
         ["run_driver_os_windows_nt", "Microsoft Windows NT 10.0.22631"],
         ["run_driver_os_windows_nt_underscore", "Windows_NT 10.0"],
+        ["run_driver_os_windows_ver_10", "Microsoft Windows [Version 10.0.22631.3447]"],
+        ["run_driver_os_windows_ver_11", "Microsoft Windows [Version 11.0.26100.1234]"],
       ] as const) {
         await insertRun(
           {
