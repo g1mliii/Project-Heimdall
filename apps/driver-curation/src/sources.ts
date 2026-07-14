@@ -9,12 +9,16 @@ import type {
   SourceBatch,
 } from "./types";
 
+const CHANGELOG_AMD_LIMIT = 25;
+
 export const SOURCE_URLS = {
   nvidiaWindows:
     "https://gfwsl.geforce.com/services_toolkit/services/com/nvidia/services/AjaxDriverService.php?func=DriverManualLookup&psid=120&pfid=942&osID=57&languageCode=1033&beta=0&isWHQL=1&dltype=-1&dch=1&upCRD=0&qnf=0&ctk=null&sort1=1&numberOfResults=1",
   nvidiaLinuxLatest: "https://download.nvidia.com/XFree86/Linux-x86_64/latest.txt",
   amdIndex:
     "https://www.amd.com/en/resources/support-articles/release-notes/rn-rad-win-vulkan.html",
+  amdChangelog:
+    `https://changelog.gg/api/v1/entities/driver/amd-radeon-adrenalin-driver/records?limit=${CHANGELOG_AMD_LIMIT}`,
   intelWindows:
     "https://www.intel.com/content/www/us/en/download/785597/intel-arc-graphics-windows.html",
   mesaIndex: "https://docs.mesa3d.org/relnotes.html",
@@ -259,7 +263,180 @@ export function parseAmdIndex(raw: string): string {
   if (source.protocol !== "https:" || source.hostname !== "www.amd.com") {
     throw new Error("AMD release-note link left the vendor host");
   }
-  return source.href;
+  const versionParts = source.pathname.match(/RN-RAD-WIN-(\d+)-(\d+)-(\d+)\.html$/i);
+  const version = versionParts?.slice(1).join(".");
+  const validated = version ? amdReleaseNotesUrl(source.href, version) : null;
+  if (!validated) throw new Error("AMD release-note link was not canonical");
+  return validated;
+}
+
+function jsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function canonicalAmdUrl(value: string, acceptsPath: (pathname: string) => boolean): URL | null {
+  let source: URL;
+  try {
+    source = new URL(value);
+  } catch {
+    return null;
+  }
+  if (
+    source.origin !== "https://www.amd.com" ||
+    source.username !== "" ||
+    source.password !== "" ||
+    source.search !== "" ||
+    source.hash !== "" ||
+    !acceptsPath(source.pathname)
+  ) {
+    return null;
+  }
+  return source;
+}
+
+function amdReleaseNotesUrl(value: string, version: string): string | null {
+  const expectedPath = `/en/resources/support-articles/release-notes/RN-RAD-WIN-${version.replaceAll(".", "-")}.html`;
+  return (
+    canonicalAmdUrl(
+      value,
+      (pathname) => pathname.toLowerCase() === expectedPath.toLowerCase(),
+    )?.href ?? null
+  );
+}
+
+function amdDriverPageUrl(value: string): string | null {
+  return (
+    canonicalAmdUrl(
+      value,
+      (pathname) => pathname.startsWith("/en/support/downloads/drivers.html/graphics/"),
+    )?.href ?? null
+  );
+}
+
+export interface AmdChangelogDiscovery {
+  detailsUrl: string;
+  releasedAt: string;
+  verificationUrl: string;
+  version: string;
+}
+
+/** Parse Changelog.gg as discovery metadata; it is never persisted directly. */
+export function parseAmdChangelog(
+  raw: string,
+  fetchedAt: string,
+): AmdChangelogDiscovery {
+  const parsed: unknown = JSON.parse(raw);
+  if (!jsonObject(parsed) || parsed.ok !== true || !jsonObject(parsed.data)) {
+    throw new Error("Changelog.gg AMD response shape changed");
+  }
+  const records = parsed.data.records;
+  if (!Array.isArray(records)) throw new Error("Changelog.gg AMD records were missing");
+  if (records.length > CHANGELOG_AMD_LIMIT || parsed.data.nextCursor !== null) {
+    throw new Error("Changelog.gg AMD records exceeded the bounded page");
+  }
+  const fetchedDate = fetchedAt.slice(0, 10);
+  let latest: AmdChangelogDiscovery | undefined;
+
+  for (const record of records) {
+    if (!jsonObject(record) || !jsonObject(record.driverUpdate)) continue;
+    const update = record.driverUpdate;
+    if (
+      record.channel !== "stable" ||
+      record.updateType !== "release" ||
+      update.vendor !== "amd" ||
+      update.channel !== "adrenalin" ||
+      typeof record.version !== "string" ||
+      !VERSION.test(record.version) ||
+      update.version !== record.version ||
+      typeof record.publishedAt !== "string" ||
+      update.releaseDate !== record.publishedAt ||
+      !ISO_DATE.test(record.publishedAt) ||
+      record.publishedAt > fetchedDate ||
+      typeof record.sourceUrl !== "string" ||
+      update.releaseNotesUrl !== record.sourceUrl ||
+      typeof update.sourceUrl !== "string"
+    ) {
+      continue;
+    }
+    let releasedAt: string;
+    try {
+      releasedAt = isoDate(record.publishedAt);
+    } catch {
+      continue;
+    }
+    if (releasedAt !== record.publishedAt) continue;
+    let latestVersion: string;
+    try {
+      latestVersion = validVersion(record.version, "amd", "windows", "gpu");
+    } catch {
+      continue;
+    }
+    if (latestVersion !== record.version) continue;
+    const sourceUrl = amdReleaseNotesUrl(record.sourceUrl, latestVersion);
+    const verificationUrl = amdDriverPageUrl(update.sourceUrl);
+    if (!sourceUrl || !verificationUrl) continue;
+    const candidate: AmdChangelogDiscovery = {
+      detailsUrl: sourceUrl,
+      releasedAt,
+      verificationUrl,
+      version: latestVersion,
+    };
+    if (
+      !latest ||
+      candidate.releasedAt > latest.releasedAt ||
+      (candidate.releasedAt === latest.releasedAt &&
+        compareDriverVersions(candidate.version, latest.version) > 0)
+    ) {
+      latest = candidate;
+    }
+  }
+
+  if (!latest) throw new Error("Changelog.gg AMD response had no valid stable release");
+  return latest;
+}
+
+export function parseAmdDriverPage(raw: string, fetchedAt: string): SourceBatch {
+  const lines = htmlLines(raw);
+  const detailsUrl = parseAmdIndex(raw);
+  let latest: DriverCatalogRecord | undefined;
+  for (let index = 0; index < lines.length; index++) {
+    if (!/^AMD Software:\s*Adrenalin Edition$/i.test(lines[index]!)) continue;
+    const window = lines.slice(index + 1, index + 16);
+    const versionValue = window
+      .map((line) => line.match(/^Adrenalin\s+(\d+(?:\.\d+){2})\b/i)?.[1])
+      .find(Boolean);
+    const dateIndex = window.findIndex((line) => /^Release Date$/i.test(line));
+    const dateValue = dateIndex >= 0 ? window[dateIndex + 1] : undefined;
+    if (!versionValue || !dateValue || !ISO_DATE.test(dateValue)) continue;
+    let latestVersion: string;
+    let releasedAt: string;
+    try {
+      latestVersion = validVersion(versionValue, "amd", "windows", "gpu");
+      releasedAt = isoDate(dateValue);
+    } catch {
+      continue;
+    }
+    if (releasedAt !== dateValue || !amdReleaseNotesUrl(detailsUrl, latestVersion)) continue;
+    const candidate: DriverCatalogRecord = {
+      vendor: "amd",
+      os: "windows",
+      component: "gpu",
+      latestVersion,
+      releasedAt,
+      sourceUrl: detailsUrl,
+      fetchedAt,
+    };
+    if (
+      !latest ||
+      candidate.releasedAt > latest.releasedAt ||
+      (candidate.releasedAt === latest.releasedAt &&
+        compareDriverVersions(candidate.latestVersion, latest.latestVersion) > 0)
+    ) {
+      latest = candidate;
+    }
+  }
+  if (!latest) throw new Error("AMD driver page shape changed");
+  return { catalog: [latest], requirements: [], dropped: 0 };
 }
 
 function sectionItems(
@@ -424,16 +601,19 @@ export function parseFallbackCsv(raw: string): SourceBatch {
     const checkedIso = `${isoDate(checkedAt)}T00:00:00.000Z`;
     const normalizedVersion = validVersion(version, vendor as "amd" | "intel", "windows", "gpu");
     const source = new URL(sourceUrl);
-    const expectedHost = vendor === "amd" ? "www.amd.com" : "www.intel.com";
-    if (source.protocol !== "https:" || source.hostname !== expectedHost) {
-      throw new Error("fallback source URL left the vendor host");
-    }
+    const validatedSource =
+      vendor === "amd"
+        ? amdReleaseNotesUrl(source.href, normalizedVersion)
+        : source.protocol === "https:" && source.hostname === "www.intel.com"
+          ? source.href
+          : null;
+    if (!validatedSource) throw new Error("fallback source URL left the vendor host");
     const base = {
       vendor: vendor as "amd" | "intel",
       os: "windows" as const,
       latestVersion: normalizedVersion,
       releasedAt: isoDate(releasedAt),
-      sourceUrl: source.href,
+      sourceUrl: validatedSource,
       fetchedAt: checkedIso,
     };
     if (kind === "catalog") {
@@ -469,6 +649,31 @@ export interface DriverSource {
   load: SourceLoader;
 }
 
+export async function loadAmdChangelog({ fetchImpl, now }: SourceDeps): Promise<SourceBatch> {
+  const fetchedAt = now.toISOString();
+  const raw = await fetchText(SOURCE_URLS.amdChangelog, {
+    allowedHosts: ["changelog.gg"],
+    fetchImpl,
+    maxBytes: 512 * 1024,
+  });
+  const discovery = parseAmdChangelog(raw, fetchedAt);
+  const details = await fetchText(discovery.verificationUrl, {
+    allowedHosts: ["www.amd.com"],
+    fetchImpl,
+  });
+  const batch = parseAmdDriverPage(details, fetchedAt);
+  const catalog = batch.catalog[0];
+  if (
+    !catalog ||
+    catalog.latestVersion !== discovery.version ||
+    catalog.releasedAt !== discovery.releasedAt ||
+    catalog.sourceUrl !== discovery.detailsUrl
+  ) {
+    throw new Error("Changelog.gg AMD metadata did not match the official driver page");
+  }
+  return batch;
+}
+
 export const LIVE_DRIVER_SOURCES = [
   {
     name: "nvidia-windows",
@@ -496,6 +701,10 @@ export const LIVE_DRIVER_SOURCES = [
       });
       return parseNvidiaLinuxLatest(latest, details, fetchedAt);
     },
+  },
+  {
+    name: "amd-windows-changelog-discovery",
+    load: loadAmdChangelog,
   },
   {
     name: "amd-windows",

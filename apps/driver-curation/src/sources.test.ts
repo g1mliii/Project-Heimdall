@@ -1,8 +1,11 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
+  loadAmdChangelog,
+  parseAmdChangelog,
+  parseAmdDriverPage,
   parseAmdIndex,
   parseAmdReleaseNotes,
   parseFallbackCsv,
@@ -81,6 +84,120 @@ describe("driver source contracts", () => {
     expect(batch.requirements).toEqual([]);
   });
 
+  it("uses Changelog.gg only to discover the latest AMD currency row", async () => {
+    expect(parseAmdChangelog(await fixture("changelog-amd.json"), fetchedAt)).toEqual({
+      detailsUrl:
+        "https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-4.html",
+      releasedAt: "2026-06-29",
+      verificationUrl:
+        "https://www.amd.com/en/support/downloads/drivers.html/graphics/radeon-rx/radeon-rx-7000-series/amd-radeon-rx-7600.html",
+      version: "26.6.4",
+    });
+  });
+
+  it("rejects Changelog.gg records that do not preserve an AMD source URL", () => {
+    const raw = JSON.stringify({
+      ok: true,
+      data: {
+        nextCursor: null,
+        records: [
+          {
+            channel: "stable",
+            publishedAt: "2026-06-29",
+            sourceUrl: "https://example.com/RN-RAD-WIN-26-6-4.html",
+            updateType: "release",
+            version: "26.6.4",
+            driverUpdate: {
+              channel: "adrenalin",
+              releaseDate: "2026-06-29",
+              releaseNotesUrl: "https://example.com/RN-RAD-WIN-26-6-4.html",
+              sourceUrl:
+                "https://www.amd.com/en/support/downloads/drivers.html/graphics/radeon-rx/radeon-rx-7000-series/amd-radeon-rx-7600.html",
+              vendor: "amd",
+              version: "26.6.4",
+            },
+          },
+        ],
+      },
+    });
+    expect(() => parseAmdChangelog(raw, fetchedAt)).toThrow("no valid stable release");
+  });
+
+  it("rejects invalid or paginated Changelog.gg discovery metadata", async () => {
+    const fixtureValue = JSON.parse(await fixture("changelog-amd.json")) as {
+      data: { nextCursor: string | null; records: Array<Record<string, unknown>> };
+    };
+    fixtureValue.data.nextCursor = "more";
+    expect(() => parseAmdChangelog(JSON.stringify(fixtureValue), fetchedAt)).toThrow(
+      "exceeded the bounded page",
+    );
+
+    fixtureValue.data.nextCursor = null;
+    const first = fixtureValue.data.records[0]!;
+    first.publishedAt = "2026-02-31";
+    (first.driverUpdate as Record<string, unknown>).releaseDate = "2026-02-31";
+    for (const record of fixtureValue.data.records.slice(1)) record.channel = "beta";
+    expect(() => parseAmdChangelog(JSON.stringify(fixtureValue), fetchedAt)).toThrow(
+      "no valid stable release",
+    );
+
+    const invalidVersion = JSON.parse(await fixture("changelog-amd.json")) as {
+      data: { records: Array<Record<string, unknown>> };
+    };
+    const invalidFirst = invalidVersion.data.records[0]!;
+    invalidFirst.version = "26.6.4 beta";
+    (invalidFirst.driverUpdate as Record<string, unknown>).version = "26.6.4 beta";
+    for (const record of invalidVersion.data.records.slice(1)) record.channel = "beta";
+    expect(() => parseAmdChangelog(JSON.stringify(invalidVersion), fetchedAt)).toThrow(
+      "no valid stable release",
+    );
+  });
+
+  it("persists Changelog.gg discovery only after the AMD page confirms it", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(await fixture("changelog-amd.json")))
+      .mockResolvedValueOnce(new Response(await fixture("amd-driver-page.html")));
+    const batch = await loadAmdChangelog({ fetchImpl, now: new Date(fetchedAt) });
+    expect(batch.catalog[0]).toMatchObject({
+      latestVersion: "26.6.4",
+      releasedAt: "2026-06-29",
+    });
+    expect(batch.requirements).toEqual([]);
+  });
+
+  it("requires Changelog.gg metadata to match the fetched AMD driver page", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(await fixture("changelog-amd.json")))
+      .mockResolvedValueOnce(
+        new Response(
+          (await fixture("amd-driver-page.html"))
+            .replaceAll("26.6.4", "26.6.2")
+            .replaceAll("26-6-4", "26-6-2")
+            .replace("2026-06-29", "2026-06-22"),
+        ),
+      );
+    await expect(
+      loadAmdChangelog({ fetchImpl, now: new Date(fetchedAt) }),
+    ).rejects.toThrow("did not match the official driver page");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(String(fetchImpl.mock.calls[1]?.[0])).toBe(
+      "https://www.amd.com/en/support/downloads/drivers.html/graphics/radeon-rx/radeon-rx-7000-series/amd-radeon-rx-7600.html",
+    );
+  });
+
+  it("parses AMD's official product driver page as a currency-only source", async () => {
+    const batch = parseAmdDriverPage(await fixture("amd-driver-page.html"), fetchedAt);
+    expect(batch.catalog[0]).toMatchObject({
+      latestVersion: "26.6.4",
+      releasedAt: "2026-06-29",
+      sourceUrl:
+        "https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-4.html",
+    });
+    expect(batch.requirements).toEqual([]);
+  });
+
   it("accepts AMD's vendor-relative release-note links", () => {
     expect(
       parseAmdIndex(
@@ -144,7 +261,7 @@ describe("driver source contracts", () => {
   it("preserves fallback checked-at freshness instead of stamping now", () => {
     const batch = parseFallbackCsv(
       "kind,vendor,os,component,version,released_at,checked_at,source_url,title\n" +
-        "catalog,amd,windows,gpu,26.6.1,2026-06-02,2026-07-01,https://www.amd.com/release,\n",
+        "catalog,amd,windows,gpu,26.6.1,2026-06-02,2026-07-01,https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-1.html,\n",
     );
     expect(batch.catalog[0]?.fetchedAt).toBe("2026-07-01T00:00:00.000Z");
   });

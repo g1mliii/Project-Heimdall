@@ -62,8 +62,9 @@ share one comparator and can never disagree.
 ## Confirmed sources per cell
 
 The implementation fixtures are reduced copies of responses fetched from these
-official sources on 2026-07-13. A source is not allowed to update the catalog
-unless its version, release date, and vendor-hosted details URL all validate.
+official sources, plus the discovery API described below, on 2026-07-13. A
+source is not allowed to update the catalog unless its version, release date,
+and vendor-hosted details URL all validate.
 
 ### Currency (latest driver)
 
@@ -79,14 +80,21 @@ unless its version, release date, and vendor-hosted details URL all validate.
   `https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-<ver>.html`
   (version in URL; game-ready releases list newly-supported games). AMD's Vulkan
   support index can lag hotfix releases — it still listed `26.6.1` when the
-  official `26.6.4` page was current — so the dated fallback is refreshed from
-  the direct vendor page instead of treating that index as authoritative.
+  official `26.6.4` page was current. Changelog.gg's public driver-record API is
+  therefore used as a discovery-only input: the Worker accepts only stable AMD
+  records whose version, release date, and `sourceUrl` agree and whose URL is the
+  matching AMD-hosted release-note path. The Worker then fetches the AMD product
+  download page named by that record and requires its version, release date, and
+  release-note link to agree before it persists anything. This avoids depending
+  on the release-note page for currency when that page times out. Only AMD's
+  independently parsed release notes supply game-ready mappings. The official
+  index remains independent, and the dated fallback remains the final safety net.
 - **Intel (Win):** Arc & Iris Xe graphics driver release notes on intel.com;
   Intel Driver & Support Assistant surface.
 - **AMD/Intel (Linux) = Mesa:** latest Mesa release from
   `https://docs.mesa3d.org/` / the `mesa/mesa` GitLab tags (e.g. `25.2.x`).
-- **Fallback:** only the committed AMD/Intel CSV is accepted. Community mirrors
-  are deliberately excluded from the automated trust path.
+- **Fallback:** only the committed AMD/Intel CSV is accepted. Third-party data
+  never replaces an official source URL or supplies game-ready requirements.
 
 ### Game-ready minimum (per game, Windows)
 
@@ -176,7 +184,9 @@ and `gpu` for NVIDIA.
   expected headings disappear, while the dated CSV fallback preserves known
   coverage without being re-stamped indefinitely. AMD `26.6.4` is a confirmed
   hotfix with no New Game Support section, so it advances only the currency
-  catalog; the `26.6.1` per-game requirements remain intact.
+  catalog; the `26.6.1` per-game requirements remain intact. Changelog.gg adds
+  one bounded public-API request inside the existing weekly job, so it consumes
+  no additional Cloudflare Cron Trigger and fails independently.
 - MangoHud's sysinfo `driver` column preserves strings such as
   `Mesa 26.1.4`; a golden parser fixture locks that contract.
 - The Worker uses manual redirects with an HTTPS host allowlist, a 15-second
@@ -198,5 +208,6 @@ application.
 - [Cloudflare Workers limits](https://developers.cloudflare.com/workers/platform/limits/) · [Cron Triggers](https://developers.cloudflare.com/workers/configuration/cron-triggers/)
 - [NVIDIA GeForce drivers](https://www.nvidia.com/en-us/geforce/drivers/) · [Game Ready Drivers](https://www.nvidia.com/en-us/geforce/game-ready-drivers/) · [GFE supported games](https://www.nvidia.com/en-us/geforce/geforce-experience/games/)
 - [AMD Adrenalin 26.6.4 release notes](https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-4.html)
+- [Changelog.gg AMD driver records](https://changelog.gg/drivers/amd-radeon-adrenalin-driver) · [public API schema](https://changelog.gg/openapi.json) · [methodology](https://changelog.gg/methodology)
 - [Intel Arc Graphics Windows driver](https://www.intel.com/content/www/us/en/download/785597/intel-arc-graphics-windows.html)
 - [Mesa release notes](https://docs.mesa3d.org/relnotes.html)
