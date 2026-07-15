@@ -237,11 +237,13 @@ describe("uploadCapture engine", () => {
     });
     expect(createBody.methodologyManifest).toMatchObject({
       resolution: "2560x1440",
-      graphicsApi: "dxgi",
       captureProfile: "presentmon-2.x",
       frameGeneration: "none",
       hags: "unknown",
     });
+    // The fixture's Runtime is DXGI, which names the present runtime rather than
+    // the graphics API, so no API is claimed from it.
+    expect(createBody.methodologyManifest?.graphicsApi).toBeUndefined();
     expect(createBody).toMatchObject({
       benchmarkSetId: BENCHMARK_SET_ID,
       benchmarkSetSecret: BENCHMARK_SET_SECRET,
@@ -270,7 +272,7 @@ describe("uploadCapture engine", () => {
     );
   });
 
-  it("uses PresentMon's detected VSync state over a stale declaration", async () => {
+  it("keeps a declared VSync state and reports detected sync as capture semantics", async () => {
     const log: TransportLog = {};
     const result = await uploadCapture(vsyncPresentMonFile(), {
       game: "Test Game",
@@ -286,8 +288,13 @@ describe("uploadCapture engine", () => {
 
     expect(result.ok, JSON.stringify(result)).toBe(true);
     const body = createRunRequestSchema.parse(log.createBody);
+    // Sync detection reads ONE present row, which routinely reports
+    // SyncInterval=1 while the swapchain settles. It is real capture evidence
+    // and belongs on the capability manifest — but `vsync` is a comparability
+    // column, so overwriting the declaration would silently split this run out
+    // of its own benchmark set on a single unlucky first frame.
     expect(body.capabilityManifest?.syncMode).toBe("vsync");
-    expect(body.methodologyManifest?.framePacing.vsync).toBe(true);
+    expect(body.methodologyManifest?.framePacing.vsync).toBe(false);
   });
 
   it("round trip: the uploaded parquet recomputes to the exact client summary (§11.5 basis)", async () => {

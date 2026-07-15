@@ -739,6 +739,19 @@ export async function loadAmdChangelog({ fetchImpl, now }: SourceDeps): Promise<
   return batch;
 }
 
+/**
+ * Every source that can independently establish a catalog row.
+ *
+ * The two AMD Windows entries look duplicative — both end up parsing a
+ * www.amd.com page for the same record, which `mergeBatches` then collapses via
+ * `preferNewer` — but the overlap is the point, not an oversight. `curateDrivers`
+ * merges only the sources that succeed, so the pair are independent discovery
+ * paths: `amd-windows-changelog-discovery` cross-checks changelog.gg against the
+ * official page, while `amd-windows` walks AMD's own index. Either can survive a
+ * layout change that breaks the other, and a catalog that goes stale past
+ * `driverCatalogMaxAgeDays` silently suppresses every driver advisory. Two
+ * fetches a run is a cheap price for that; do not "deduplicate" them.
+ */
 export const LIVE_DRIVER_SOURCES = [
   {
     name: "nvidia-windows",

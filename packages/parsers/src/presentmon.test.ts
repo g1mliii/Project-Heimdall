@@ -76,8 +76,9 @@ describe("parsePresentMon — 2.x --v1_metrics compatibility", () => {
     expect(value.frames).toHaveLength(200);
     expect(value.captureProfile).toBe("presentmon-2.x-v1-metrics");
     expect(value.frames[0]!.gpuBusyMs).toBe(6.1626);
+    // No graphicsApi: `Runtime` reports DXGI, which spans D3D10/11/12 and so is
+    // not evidence of an API. Inventing one here would pool DX11 with DX12.
     expect(value.captureSemantics).toEqual({
-      graphicsApi: "dxgi",
       presentationMode: "hardware-independent-flip",
       syncMode: "tearing",
     });

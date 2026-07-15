@@ -383,6 +383,22 @@ describe("runDiagnostics — confidence-graded bottleneck attribution (§16b / 1
     ]);
   });
 
+  it("does NOT attribute an uncapped run to a cap just because frames land in a cadence band", () => {
+    // The configured cadences are dense enough that the 72 and 75 FPS bands form
+    // one contiguous 13.00–14.24 ms span, so an uncapped run jittering in that
+    // range puts ~86% of its frames "at" some cap — past bottleneckDominantFraction.
+    // Only the capture-wide stability gate separates that from a real limiter:
+    // no single cadence holds these frames (57% < frameCapMinStableFraction).
+    const jitter = [13.0, 13.2, 13.4, 13.6, 13.8, 14.0, 14.2];
+    const frames = Array.from({ length: 63 }, (_, i) => ({
+      timeMs: i * 13.6,
+      frameTimeMs: jitter[i % jitter.length]!,
+      cpuBusyMs: 5,
+      gpuBusyMs: 11.5,
+    }));
+    expect(runDiagnostics(inputFor(frames)).map((f) => f.code)).toEqual(["likely-gpu-bound"]);
+  });
+
   it("fires telemetry-insufficient when busy telemetry is present but sparse", () => {
     const frames = busyFrames(120, (i) => (i < 10 ? { cpuBusyMs: 12, gpuBusyMs: 5 } : {}));
     const findings = runDiagnostics(inputFor(frames));

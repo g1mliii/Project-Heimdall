@@ -692,6 +692,23 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       });
     });
 
+    it("falls back to the capture tool's platform when no OS was declared", async () => {
+      // No parser populates os_build and an anonymous upload need not declare an
+      // OS, so this is the common case — and a null platform defeats the
+      // requirement/catalog joins, silently suppressing BOTH driver advisories.
+      // PresentMon only ships for Windows, which makes it evidence, not a guess.
+      const id = "run_driver_os_absent";
+      await insertRun(
+        { ...pendingRun(id), hardware: { ...validRun.hardware, os: undefined } },
+        db.pool,
+      );
+      expect((await readRunForVerification(id, db.pool))?.driverPlatform).toEqual({
+        vendor: "nvidia",
+        os: "windows",
+        component: "gpu",
+      });
+    });
+
     it("maps Windows NT and bracketed 10/11 runtime strings to the supported driver platform", async () => {
       for (const [id, os] of [
         ["run_driver_os_windows_nt", "Microsoft Windows NT 10.0.22631"],

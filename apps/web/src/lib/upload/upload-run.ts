@@ -162,13 +162,8 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
     } = parsed.capture;
 
     // Fast local feedback for the same limits the server enforces (§11.10).
-    if (frames.length > INGEST_LIMITS.maxFramesPerRun) {
-      return {
-        ok: false,
-        code: "too-many-frames",
-        message: `capture has ${frames.length} frames (limit ${INGEST_LIMITS.maxFramesPerRun})`,
-      };
-    }
+    // The upper bound needs no check here: `parseAnyCapture` is capped at
+    // `maxFramesPerRun` above and fails the parse before it can return more.
     if (frames.length < INGEST_LIMITS.minFramesPerRun) {
       return {
         ok: false,
@@ -212,15 +207,13 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
         ...(sensorAlignment === undefined ? {} : { sensorAlignment }),
       },
     );
-    // Parser-detected details win over a declaration: unlike a user's text
-    // entry, the source header/profile is direct capture evidence. Everything
-    // else remains explicitly declared and therefore optional.
-    const detectedVsync =
-      captureSemantics?.syncMode === "vsync"
-        ? true
-        : captureSemantics?.syncMode === "tearing"
-          ? false
-          : undefined;
+    // Parser-detected details win over a declaration only where the source is
+    // direct capture evidence about the whole capture. `syncMode` is NOT: it is
+    // read from a single present row, which routinely reports SyncInterval=1
+    // while the swapchain settles, so it must never overwrite a declared
+    // `framePacing.vsync` — that would silently rewrite a comparability column
+    // and split the run out of its own benchmark set. It still reaches the
+    // capability manifest as capture semantics.
     const normalizedMethodology = normalizeMethodologyManifest(
       options.methodology === undefined
         ? undefined
@@ -237,9 +230,6 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
         ? undefined
         : {
             ...normalizedMethodology,
-            ...(detectedVsync === undefined
-              ? {}
-              : { framePacing: { ...normalizedMethodology.framePacing, vsync: detectedVsync } }),
             ...(captureSemantics?.graphicsApi === undefined
               ? {}
               : { graphicsApi: captureSemantics.graphicsApi }),

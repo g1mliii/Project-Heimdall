@@ -201,17 +201,30 @@ function parseSensorData2(value: unknown): PeriodicSensors {
   return result;
 }
 
-/** Attach the latest periodic sample at-or-before this frame, without looking ahead. */
+/**
+ * Attach the latest periodic sample at-or-before this frame, without looking ahead.
+ *
+ * `MeasureTime` and `TimeInSeconds` share an origin (both count from capture
+ * start), but frames are re-based to 0 via `baselineMs`, so the series must be
+ * re-based by the same amount to stay on one timeline. A capture started
+ * mid-session (`TimeInSeconds[0]` well above 0) would otherwise compare frame
+ * times near 0 against sample times in the thousands and attach nothing at all —
+ * while the sensor still reported as present.
+ */
 function attachPeriodicSensors(
   frame: FrameSample,
   sensors: readonly PeriodicSensorEntry[],
   localTimeMs: number,
+  baselineMs: number,
   cursors: Partial<Record<SensorColumnField, number>>,
 ): void {
   for (const [field, series] of sensors) {
     if (frame[field] !== undefined || series.values.length === 0) continue;
     let cursor = cursors[field] ?? -1;
-    while (cursor + 1 < series.timesMs.length && series.timesMs[cursor + 1]! <= localTimeMs) {
+    while (
+      cursor + 1 < series.timesMs.length &&
+      series.timesMs[cursor + 1]! - baselineMs <= localTimeMs
+    ) {
       cursor++;
     }
     cursors[field] = cursor;
@@ -330,7 +343,10 @@ function parseJson(text: string, maxFrames?: number): ParseResult<ParsedCapture>
         const value = guardSensor(field, numberAt(array, i));
         if (value !== undefined) frame[field] = value;
       }
-      attachPeriodicSensors(frame, periodicEntries, localTimeMs, periodicCursors);
+      // `baselineMs` is set from the first accepted frame above, so it is
+      // resolved by the time any sample is attached; a run without
+      // `TimeInSeconds` counts from 0 already and needs no shift.
+      attachPeriodicSensors(frame, periodicEntries, localTimeMs, baselineMs ?? 0, periodicCursors);
 
       runCumulativeMs += frameTimeMs;
       runEndMs = Math.max(runEndMs, frame.timeMs + frameTimeMs);

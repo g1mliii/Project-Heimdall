@@ -186,13 +186,22 @@ export function detectPresentMonSemantics(
   return undefined;
 }
 
-/** Normalize the small runtime vocabulary PresentMon writes into methodology. */
+/**
+ * Normalize the small runtime vocabulary PresentMon writes into methodology.
+ *
+ * `Runtime` names the PRESENT runtime, not the graphics API: DXGI is what every
+ * D3D10/11/12 title presents through, so it cannot tell DX11 from DX12 and is
+ * NOT evidence of an API. Returning it verbatim would pool DX11 and DX12 runs
+ * into one comparability bucket — exactly what the graphics-API key exists to
+ * prevent. Only a value that names an API on its own is mapped; anything else
+ * degrades to "undeclared" (§16d.1) and the user declares the API instead.
+ */
 function toGraphicsApi(raw: string): string | undefined {
   const value = raw.trim().toLowerCase();
-  if (value === "") return undefined;
   if (value === "d3d12" || value === "direct3d 12") return "dx12";
   if (value === "d3d11" || value === "direct3d 11") return "dx11";
-  return value;
+  if (value === "d3d9" || value === "direct3d 9") return "dx9";
+  return undefined;
 }
 
 /**
@@ -242,35 +251,73 @@ function dominantStream(
   // Retain at most one row per bounded stream so semantics detection does not
   // need to rescan a potentially 500k-frame capture after grouping it.
   const firstRows = new Map<string, readonly string[]>();
+  let totalCount = 0;
+  let evicted = false;
   for (let i = found.index + 1; i < lines.length; i++) {
     const line = lines[i]!;
     if (line.trim() === "") continue;
     const cells = splitCsvLine(line, found.dialect.delimiter);
+    totalCount++;
     const key = keyOf(cells);
     const previous = counts.get(key);
-    if (previous === undefined) {
-      if (counts.size >= MAX_TRACKED_STREAMS) {
-        return {
-          warnings: [],
-          error: `Capture contains more than ${MAX_TRACKED_STREAMS} process/swapchain streams.`,
-        };
-      }
-      counts.set(key, 1);
-      firstRows.set(key, cells);
-    } else {
+    if (previous !== undefined) {
       counts.set(key, previous + 1);
+      continue;
     }
+    if (counts.size >= MAX_TRACKED_STREAMS) {
+      // Misra-Gries: charge an untracked stream against every tracked one
+      // rather than rejecting the capture. A long system-wide session can pass
+      // MAX_TRACKED_STREAMS on transient swapchains alone, and failing there
+      // would make it unuploadable. Any stream holding more than
+      // 1/(MAX_TRACKED_STREAMS + 1) of all rows — which a real capture's game
+      // stream always does — cannot be evicted by this, so the dominant stream
+      // is still tracked when the scan ends. Amortized O(1) per row: each pass
+      // consumes MAX_TRACKED_STREAMS counts against a total of `totalCount`.
+      evicted = true;
+      for (const [tracked, count] of counts) {
+        if (count > 1) {
+          counts.set(tracked, count - 1);
+        } else {
+          counts.delete(tracked);
+          firstRows.delete(tracked);
+        }
+      }
+      continue;
+    }
+    counts.set(key, 1);
+    firstRows.set(key, cells);
   }
 
-  if (counts.size <= 1) {
+  if (!evicted && counts.size <= 1) {
     return { warnings: [], firstRow: firstRows.values().next().value };
+  }
+  if (counts.size === 0) {
+    // Every tracked stream was evicted, so no stream holds a large enough share
+    // to be the dominant one. There is nothing to attribute this capture to.
+    return {
+      warnings: [],
+      error:
+        `Capture contains more than ${MAX_TRACKED_STREAMS} process/swapchain streams ` +
+        `and none of them dominates.`,
+    };
+  }
+
+  // Eviction leaves the surviving counts as lower bounds, so recount them
+  // exactly before picking a winner and reporting how much was dropped.
+  if (evicted) {
+    for (const key of counts.keys()) counts.set(key, 0);
+    for (let i = found.index + 1; i < lines.length; i++) {
+      const line = lines[i]!;
+      if (line.trim() === "") continue;
+      const key = keyOf(splitCsvLine(line, found.dialect.delimiter));
+      const count = counts.get(key);
+      if (count !== undefined) counts.set(key, count + 1);
+    }
   }
 
   let dominant = "";
   let dominantCount = 0;
-  let totalCount = 0;
   for (const [key, count] of counts) {
-    totalCount += count;
     if (count > dominantCount) {
       dominant = key;
       dominantCount = count;
@@ -285,7 +332,9 @@ function dominantStream(
       {
         code: "multiple-streams",
         message:
-          `Capture contains ${counts.size} process/swapchain streams; ` +
+          (evicted
+            ? `Capture contains over ${MAX_TRACKED_STREAMS} process/swapchain streams; `
+            : `Capture contains ${counts.size} process/swapchain streams; `) +
           `kept the dominant one and dropped ${dropped} row(s) from the others.`,
         count: dropped,
       },

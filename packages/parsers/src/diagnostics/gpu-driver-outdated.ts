@@ -7,7 +7,12 @@
  */
 
 import type { GpuVendor } from "@heimdall/shared";
-import type { DiagnosticRule, DriverComponent, DriverPlatform } from "./types";
+import type {
+  DiagnosticRule,
+  DiagnosticsInput,
+  DriverComponent,
+  DriverPlatform,
+} from "./types";
 
 /**
  * NVIDIA GeForce marketing driver format, e.g. `566.36` / `610.74` — a
@@ -97,6 +102,24 @@ function comparableVersions(
   return left && right ? [left, right] : null;
 }
 
+/**
+ * The game-ready shortfall, when a curated per-game minimum outranks the
+ * captured driver. Shared by both rules below so they agree on exactly one
+ * definition of "older than this game wants".
+ */
+function requiredDriverShortfall(
+  input: DiagnosticsInput,
+): { driver: string; required: string } | null {
+  const driver = input.hardware.gpuDriver;
+  const required = input.game?.requiredDriver;
+  const platform = input.driverPlatform;
+  if (!driver || !required || !platform || input.vendor === "unknown") return null;
+  if (platform.vendor !== input.vendor || platform.component !== "gpu") return null;
+  const versions = comparableVersions(driver, required, input.vendor, platform.os, "gpu");
+  if (!versions || compareDriverVersions(...versions) >= 0) return null;
+  return { driver, required };
+}
+
 export const driverUpdateAvailableRule: DiagnosticRule = {
   code: "driver-update-available",
   version: "1.0.0",
@@ -106,6 +129,11 @@ export const driverUpdateAvailableRule: DiagnosticRule = {
     const catalog = input.driverCatalog;
     const platform = input.driverPlatform;
     if (!captured || !catalog || !platform || input.vendor === "unknown") return null;
+    // Both rules say "update your driver"; a driver below the curated per-game
+    // minimum is also below the catalog's latest, so firing both would render
+    // two overlapping recommendations. The game-ready finding names a concrete
+    // target version, so the generic one stands down for it.
+    if (requiredDriverShortfall(input) !== null) return null;
     if (
       catalog.vendor !== input.vendor ||
       platform.vendor !== catalog.vendor ||
@@ -139,13 +167,9 @@ export const gpuDriverOutdatedRule: DiagnosticRule = {
   version: "1.0.0",
   requiredSensors: [],
   evaluate({ input }) {
-    const driver = input.hardware.gpuDriver;
-    const required = input.game?.requiredDriver;
-    const platform = input.driverPlatform;
-    if (!driver || !required || !platform || input.vendor === "unknown") return null;
-    if (platform.vendor !== input.vendor || platform.component !== "gpu") return null;
-    const versions = comparableVersions(driver, required, input.vendor, platform.os, "gpu");
-    if (!versions || compareDriverVersions(...versions) >= 0) return null;
+    const shortfall = requiredDriverShortfall(input);
+    if (shortfall === null) return null;
+    const { driver, required } = shortfall;
 
     return {
       severity: "info",

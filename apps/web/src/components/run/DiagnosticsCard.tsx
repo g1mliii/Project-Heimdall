@@ -5,6 +5,11 @@
  * pass — but ONLY once the run is verified: diagnostics are written by the
  * verification worker, so a not-yet-verified run has an empty array that must
  * read as "pending", never as a green all-clear (design/ui_kits/web/RunPage.jsx).
+ *
+ * Only `warn`/`bad` findings are issues. The §16b attribution rules always emit
+ * an `info` finding (a healthy run still gets "Likely GPU-bound"), so counting
+ * every finding would badge every capture carrying busy-time telemetry as having
+ * an issue and make the all-clear unreachable.
  */
 
 import type * as React from "react";
@@ -21,14 +26,16 @@ export function DiagnosticsCard({
   // Diagnostics land atomically with the verification verdict; a still-pending
   // run has run no checks yet, so an empty array there means "not run", not "clean".
   const verified = status === RUN_STATUS.validated || status === RUN_STATUS.flagged;
-  const count = diagnostics.length;
+  const issueCount = diagnostics.filter(
+    (diagnostic) => diagnostic.severity === "warn" || diagnostic.severity === "bad",
+  ).length;
 
   let badge: React.ReactNode;
   if (!verified) badge = <Badge tone="neutral">Pending</Badge>;
-  else if (count > 0)
+  else if (issueCount > 0)
     badge = (
       <Badge tone="warn">
-        {count} issue{count === 1 ? "" : "s"}
+        {issueCount} issue{issueCount === 1 ? "" : "s"}
       </Badge>
     );
   else badge = <Badge tone="good">No issues</Badge>;
@@ -43,18 +50,25 @@ export function DiagnosticsCard({
               Automated checks for VRAM saturation, CPU bottlenecks, RAM below rated speed, and
               outdated GPU drivers run once this run finishes verifying.
             </Diagnostic>
-          ) : count === 0 ? (
-            <Diagnostic severity="good" title="No issues detected">
-              Heimdall checked this run for VRAM saturation, CPU bottlenecks, RAM below rated
-              speed, and outdated GPU drivers — nothing to flag.
-            </Diagnostic>
           ) : (
-            diagnostics.map((diagnostic) => (
-              <Diagnostic key={diagnostic.id} severity={diagnostic.severity} title={diagnostic.title}>
-                {diagnostic.confidence ? `${diagnostic.confidence} confidence — ` : ""}
-                {diagnostic.detail}
-              </Diagnostic>
-            ))
+            <>
+              {issueCount === 0 ? (
+                <Diagnostic severity="good" title="No issues detected">
+                  Heimdall checked this run for VRAM saturation, CPU bottlenecks, RAM below rated
+                  speed, and outdated GPU drivers — nothing to flag.
+                </Diagnostic>
+              ) : null}
+              {diagnostics.map((diagnostic) => (
+                <Diagnostic
+                  key={diagnostic.id}
+                  severity={diagnostic.severity}
+                  title={diagnostic.title}
+                >
+                  {diagnostic.confidence ? `${diagnostic.confidence} confidence — ` : ""}
+                  {diagnostic.detail}
+                </Diagnostic>
+              ))}
+            </>
           )}
         </div>
       </Card.Body>

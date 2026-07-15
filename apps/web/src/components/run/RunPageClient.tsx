@@ -23,6 +23,7 @@ import { SmoothnessBars } from "./SmoothnessBars";
 import { DiagnosticsCard } from "./DiagnosticsCard";
 import { HardwareCard } from "./HardwareCard";
 import { BenchmarkSetCard } from "./BenchmarkSetCard";
+import { IncompleteProfileCard } from "./IncompleteProfileCard";
 import styles from "./RunPageClient.module.css";
 
 export type FramesLoader = (id: string, signal?: AbortSignal) => Promise<ApiResult<FrameSeries>>;
@@ -202,6 +203,8 @@ export function RunPageClient({
               stats={benchmarkSet}
               currentRunIsWarmup={run.isWarmup === true}
             />
+          ) : run.benchmarkSetId ? (
+            <IncompleteProfileCard manifest={run.methodologyManifest} />
           ) : null}
         </div>
       </div>

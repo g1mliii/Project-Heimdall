@@ -151,7 +151,6 @@ describe("detectPresentMonSemantics (§16a.2)", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value.captureSemantics).toEqual({
-        graphicsApi: "dxgi",
         presentationMode: "hardware-independent-flip",
         syncMode: "tearing",
       });
@@ -163,7 +162,12 @@ describe("detectPresentMonSemantics (§16a.2)", () => {
     const result = parsePresentMon(readFixture("presentmon/v1-basic.csv"));
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.captureSemantics).toMatchObject({ graphicsApi: "dxgi" });
+      // The fixture's Runtime is DXGI — the present runtime every D3D10/11/12
+      // title shares, so it names no API and none may be claimed from it.
+      expect(result.value.captureSemantics?.graphicsApi).toBeUndefined();
+      expect(result.value.captureSemantics).toMatchObject({
+        presentationMode: "hardware-independent-flip",
+      });
       expect(result.value.captureProfile).toBe("presentmon-1.x");
     }
   });

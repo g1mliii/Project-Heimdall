@@ -88,11 +88,30 @@ export const REQUIRED_DRIVER_MAX_AGE_DAYS = DIAGNOSTICS.driverRequirementMaxAgeD
 export const DRIVER_CATALOG_MAX_AGE_DAYS = DIAGNOSTICS.driverCatalogMaxAgeDays;
 export const DRIVER_UPDATE_GRACE_DAYS = DIAGNOSTICS.driverUpdateGraceDays;
 
-/** Free-form OS snapshots mapped conservatively to the two supported families. */
+/**
+ * Free-form OS snapshots mapped conservatively to the two supported families,
+ * falling back to the capture tool's own platform.
+ *
+ * A null here defeats the `requirement.os = driver_platform.os` and
+ * `catalog.os = driver_platform.os` joins, which silently suppresses BOTH driver
+ * advisories — and `os_build` is absent far more often than not, since no parser
+ * populates it and an anonymous upload need not declare an OS. So when the
+ * snapshot says NOTHING, fall back to the capture tool, which is real evidence
+ * rather than a guess: PresentMon and CapFrameX ship as Windows-only builds and
+ * MangoHud is a Linux overlay.
+ *
+ * Text that IS present but unrecognized (`macOS 15`, `Windows 7`) is the
+ * opposite: it is evidence of a platform this catalog does not cover. It must
+ * still map to null, and must NOT be overridden by the capture tool.
+ */
 const DRIVER_OS_SQL = `case
   when trim(lower(coalesce(r.os_build, ''))) ~ '^(microsoft )?windows$'
     or lower(coalesce(r.os_build, '')) ~ '(^|[^a-z0-9])(?:(?:microsoft[ _-]+)?(?:windows|win)(?:[ _-]+nt[ _-]*|[ _-]*\\[\\s*version\\s+|[ _-]*)(?:10|11)(?:\\.\\d+)?)(?:[^a-z0-9]|$)' then 'windows'
   when lower(coalesce(r.os_build, '')) ~ '(^|[^a-z0-9])(linux|ubuntu|debian|fedora|arch( linux)?|steam ?os|pop!?_?os|manjaro|nobara|bazzite|opensuse|mint)([^a-z0-9]|$)' then 'linux'
+  when nullif(trim(coalesce(r.os_build, '')), '') is null
+    and r.capture_source in ('presentmon', 'capframex') then 'windows'
+  when nullif(trim(coalesce(r.os_build, '')), '') is null
+    and r.capture_source = 'mangohud' then 'linux'
   else null
 end`;
 

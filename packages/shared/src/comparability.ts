@@ -16,6 +16,7 @@
 
 import type {
   GeneratedFrameTech,
+  MethodologyManifest,
   RayTracingMode,
   SceneType,
   UpscalerMode,
@@ -165,3 +166,51 @@ export function comparabilityProfileSql(alias = "runs"): string {
 
 /** Field count, exported so the drift-guard test pins TS↔SQL column parity. */
 export const COMPARABILITY_KEY_FIELD_COUNT = KEY_FIELDS.length;
+
+/** The declared-profile fields {@link comparabilityProfileSql} gates on. */
+export type ComparabilityProfileField = Extract<
+  (typeof KEY_FIELDS)[number],
+  { profileRequired: true }
+>["inputKey"];
+
+const PROFILE_FIELDS = KEY_FIELDS.filter(
+  (field): field is Extract<(typeof KEY_FIELDS)[number], { profileRequired: true }> =>
+    "profileRequired" in field,
+).map((field) => field.inputKey);
+
+/**
+ * The manifest value behind each declared-profile run column. Keyed by
+ * `ComparabilityProfileField`, so adding `profileRequired` to a new key fails to
+ * compile until that key can also be explained to the user — a gate nobody can
+ * see is why an incomplete profile used to render nothing at all.
+ */
+const PROFILE_FIELD_VALUE: Record<
+  ComparabilityProfileField,
+  (manifest: MethodologyManifest) => string | boolean | undefined
+> = {
+  resolution: (manifest) => manifest.resolution,
+  scene: (manifest) => manifest.scene,
+  settingsPreset: (manifest) => manifest.settingsPreset,
+  upscaler: (manifest) => manifest.upscaler,
+  rayTracing: (manifest) => manifest.rayTracing,
+  graphicsApi: (manifest) => manifest.graphicsApi,
+  vsync: (manifest) => manifest.framePacing.vsync,
+  vrr: (manifest) => manifest.framePacing.vrr,
+  sceneType: (manifest) => manifest.sceneType,
+};
+
+/**
+ * Which declared-profile fields this manifest leaves undeclared — the exact
+ * reason {@link comparabilityProfileSql} would reject the run. Empty means the
+ * profile is complete, so a missing benchmark set has some other cause (too few
+ * repeats, unresolved game/GPU, or a non-public run).
+ */
+export function missingComparabilityProfileFields(
+  manifest: MethodologyManifest | undefined,
+): ComparabilityProfileField[] {
+  if (manifest === undefined) return [...PROFILE_FIELDS];
+  return PROFILE_FIELDS.filter((field) => {
+    const value = PROFILE_FIELD_VALUE[field](manifest);
+    return value === undefined || value === "";
+  });
+}
