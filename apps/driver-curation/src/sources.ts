@@ -113,6 +113,8 @@ function decodeEntities(value: string): string {
     apos: "'",
     gt: ">",
     lt: "<",
+    mdash: "—",
+    ndash: "–",
     nbsp: " ",
     quot: '"',
     lsquo: "'",
@@ -577,6 +579,7 @@ export function parseIntelDownload(
   const releasedAt = isoDate(releaseDate);
   const games = sectionItems(lines, /Game On Driver support.*for:?$/i, [
     /^OS Support:?$/i,
+    /^Fixed Issues:?$/i,
     /^Game performance improvements/i,
     /^Known Issues/i,
   ]);

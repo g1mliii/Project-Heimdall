@@ -115,6 +115,28 @@ describe("driver source contracts", () => {
     ]);
   });
 
+  it("decodes dash entities in NVIDIA game-ready titles", () => {
+    const batch = parseNvidiaLookup(
+      JSON.stringify({
+        Success: "1",
+        IDS: [
+          {
+            downloadInfo: {
+              Version: "610.74",
+              ReleaseDateTime: "Tue Jul 07, 2026",
+              DetailsURL: "https://www.nvidia.com/en-us/drivers/details/274187/",
+              ReleaseNotes: "Game Ready for Foo &ndash; Bar, Baz &mdash; Quux",
+            },
+          },
+        ],
+      }),
+      "windows",
+      fetchedAt,
+    );
+
+    expect(batch.requirements.map((row) => row.title)).toEqual(["Foo – Bar", "Baz — Quux"]);
+  });
+
   it("parses NVIDIA's confirmed Linux latest.txt + directory-index contract", async () => {
     const batch = parseNvidiaLinuxLatest(
       await fixture("nvidia-linux-latest.txt"),
@@ -336,6 +358,18 @@ describe("driver source contracts", () => {
       releasedAt: "2026-07-07",
     });
     expect(batch.requirements[0]?.title).toBe("Echoes of Aincrad");
+  });
+
+  it("stops Intel game-ready extraction before fixed issues", () => {
+    const batch = parseIntelDownload(
+      `<p>Intel® Graphics Driver 32.0.101.8861</p><p>Date: 7/7/2026</p>
+       <h2>Intel® Game On Driver support on Intel® Arc™ GPUs for:</h2>
+       <ul><li>Supported Game</li></ul><h2>Fixed Issues:</h2><ul><li>Issue Text Game</li></ul>`,
+      fetchedAt,
+      "https://www.intel.com/content/www/us/en/download/785597/intel-arc-graphics-windows.html",
+    );
+
+    expect(batch.requirements.map((row) => row.title)).toEqual(["Supported Game"]);
   });
 
   it("selects the newest stable Mesa release and maps it to AMD + Intel", async () => {

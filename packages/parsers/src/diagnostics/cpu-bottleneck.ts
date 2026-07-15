@@ -18,6 +18,16 @@ export const cpuBottleneckRule: DiagnosticRule = {
   version: "1.0.0",
   requiredSensors: ["cpuLoadPct", "gpuLoadPct"],
   evaluate({ input, frameCount }) {
+    const sensors = input.capabilityManifest?.sensors;
+    // SensorData2 utilization samples are periodically polled, not tied to a
+    // specific presented frame. They remain useful for display/telemetry, but
+    // must not drive a per-frame bottleneck finding.
+    if (
+      sensors &&
+      (!sensors.cpuLoadPct.frameAligned || !sensors.gpuLoadPct.frameAligned)
+    ) {
+      return null;
+    }
     const cpu = input.frames.cpuLoadPct;
     const gpu = input.frames.gpuLoadPct;
     if (!cpu || !gpu) return null;

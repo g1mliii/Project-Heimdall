@@ -173,7 +173,7 @@ export function UploadClient() {
       ...(scene.trim() === "" ? {} : { scene: scene.trim() }),
       ...(resolution.trim() === "" ? {} : { resolution: resolution.trim() }),
       ...(settingsPreset.trim() === "" ? {} : { settingsPreset: settingsPreset.trim() }),
-      ...(graphicsApi.trim() === "" ? {} : { graphicsApi: graphicsApi.trim() }),
+      ...(graphicsApi.trim() === "" ? {} : { graphicsApi: graphicsApi.trim().toLowerCase() }),
       upscaler,
       rayTracing,
       framePacing: {

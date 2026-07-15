@@ -86,9 +86,12 @@ test("fixture run renders: badges, tiles, confidence, chart, stubs (§13)", asyn
   await expect(page.getByText("Avg GPU load")).toBeVisible();
   await expect(page.getByText("Peak VRAM")).toBeVisible();
 
-  // Diagnostics card renders the real rules-engine findings for this run
-  // (RAM below rated + game-ready minimum + latest-known driver), with a count badge.
-  await expect(page.getByText(`${e2eDiagnostics.length} issues`)).toBeVisible();
+  // The card counts actionable warn/bad findings, while retaining informational
+  // driver-currency context in the rendered diagnostic list.
+  const issueCount = e2eDiagnostics.filter(
+    (diagnostic) => diagnostic.severity === "warn" || diagnostic.severity === "bad",
+  ).length;
+  await expect(page.getByText(`${issueCount} issue${issueCount === 1 ? "" : "s"}`)).toBeVisible();
   await expect(page.getByText("RAM is running below its rated speed")).toBeVisible();
   await expect(page.getByText("GPU driver is older than recommended")).toBeVisible();
   await expect(page.getByText("GPU driver update available")).toBeVisible();

@@ -142,6 +142,22 @@ describe("runDiagnostics — per-rule fixtures", () => {
     expect(runDiagnostics(inputFor(frames)).map((f) => f.code)).not.toContain("cpu-bottleneck");
   });
 
+  it("does NOT diagnose a CPU bottleneck from periodically sampled utilization", () => {
+    const frames = Array.from({ length: 40 }, (_, i) => ({
+      timeMs: i * 13,
+      frameTimeMs: 13,
+      cpuLoadPct: 98,
+      gpuLoadPct: 50,
+    }));
+    const manifest = deriveCapabilityManifest(frames, "capframex", baseHardware, {
+      sensorAlignment: { cpuLoadPct: false, gpuLoadPct: false },
+    });
+
+    expect(
+      runDiagnostics(inputFor(frames, { capabilityManifest: manifest })).map((finding) => finding.code),
+    ).not.toContain("cpu-bottleneck");
+  });
+
   it("fires ram-below-rated when configured speed trails rated", () => {
     const frames = framesWithStutters(20, []);
     const findings = runDiagnostics(
