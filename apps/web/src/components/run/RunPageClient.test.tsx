@@ -224,6 +224,32 @@ describe("RunPageClient states", () => {
     expect(ram.closest(".hd-diag")).toHaveClass("hd-diag--warn");
   });
 
+  it("counts driver advice but not attribution context as an issue", () => {
+    const diagnosticRun: Run = {
+      ...run,
+      diagnostics: [
+        {
+          id: "d1",
+          code: "gpu-driver-outdated",
+          severity: "info",
+          title: "GPU driver is older than recommended",
+          detail: "Install the current driver for the tested game.",
+        },
+        {
+          id: "d2",
+          code: "likely-gpu-bound",
+          severity: "info",
+          title: "Likely GPU-bound",
+          detail: "The GPU was the limiting component during this run.",
+        },
+      ],
+    };
+    render(<RunPageClient run={diagnosticRun} loadFrames={okLoader} />);
+
+    expect(screen.getByText("1 issue")).toBeInTheDocument();
+    expect(screen.queryByText("No issues detected")).not.toBeInTheDocument();
+  });
+
   it("shows a pending diagnostics state (never a false all-clear) before verification", () => {
     const pendingRun: Run = { ...run, status: RUN_STATUS.pending, diagnostics: [] };
     render(<RunPageClient run={pendingRun} loadFrames={okLoader} />);

@@ -243,16 +243,20 @@ describe("driver source contracts", () => {
     expect(() => parseAmdChangelog(raw, fetchedAt)).toThrow("no valid stable release");
   });
 
-  it("rejects invalid or paginated Changelog.gg discovery metadata", async () => {
+  it("accepts a bounded Changelog.gg page with a continuation cursor", async () => {
     const fixtureValue = JSON.parse(await fixture("changelog-amd.json")) as {
       data: { nextCursor: string | null; records: Array<Record<string, unknown>> };
     };
     fixtureValue.data.nextCursor = "more";
-    expect(() => parseAmdChangelog(JSON.stringify(fixtureValue), fetchedAt)).toThrow(
-      "exceeded the bounded page",
-    );
+    expect(parseAmdChangelog(JSON.stringify(fixtureValue), fetchedAt)).toMatchObject({
+      version: "26.6.4",
+    });
+  });
 
-    fixtureValue.data.nextCursor = null;
+  it("rejects invalid Changelog.gg discovery metadata", async () => {
+    const fixtureValue = JSON.parse(await fixture("changelog-amd.json")) as {
+      data: { records: Array<Record<string, unknown>> };
+    };
     const first = fixtureValue.data.records[0]!;
     first.publishedAt = "2026-02-31";
     (first.driverUpdate as Record<string, unknown>).releaseDate = "2026-02-31";
@@ -358,6 +362,18 @@ describe("driver source contracts", () => {
       releasedAt: "2026-07-07",
     });
     expect(batch.requirements[0]?.title).toBe("Echoes of Aincrad");
+  });
+
+  it("decodes uppercase hexadecimal HTML entities in game titles", () => {
+    const batch = parseIntelDownload(
+      `<p>Intel® Graphics Driver 32.0.101.8861</p><p>Date: 7/7/2026</p>
+       <h2>Intel® Game On Driver support on Intel® Arc™ GPUs for:</h2>
+       <ul><li>Assassin&#X2019;s Creed*</li></ul><h2>OS Support:</h2>`,
+      fetchedAt,
+      "https://www.intel.com/content/www/us/en/download/785597/intel-arc-graphics-windows.html",
+    );
+
+    expect(batch.requirements[0]?.title).toBe("Assassin’s Creed");
   });
 
   it("stops Intel game-ready extraction before fixed issues", () => {

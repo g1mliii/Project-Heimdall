@@ -86,10 +86,15 @@ test("fixture run renders: badges, tiles, confidence, chart, stubs (§13)", asyn
   await expect(page.getByText("Avg GPU load")).toBeVisible();
   await expect(page.getByText("Peak VRAM")).toBeVisible();
 
-  // The card counts actionable warn/bad findings, while retaining informational
-  // driver-currency context in the rendered diagnostic list.
+  // Driver advice is actionable; bottleneck-attribution info remains context only.
   const issueCount = e2eDiagnostics.filter(
-    (diagnostic) => diagnostic.severity === "warn" || diagnostic.severity === "bad",
+    (diagnostic) =>
+      ![
+        "likely-cpu-bound",
+        "likely-gpu-bound",
+        "frame-capped-or-display-limited",
+        "telemetry-insufficient",
+      ].includes(diagnostic.code),
   ).length;
   await expect(page.getByText(`${issueCount} issue${issueCount === 1 ? "" : "s"}`)).toBeVisible();
   await expect(page.getByText("RAM is running below its rated speed")).toBeVisible();

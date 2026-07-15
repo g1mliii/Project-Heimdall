@@ -6,15 +6,25 @@
  * verification worker, so a not-yet-verified run has an empty array that must
  * read as "pending", never as a green all-clear (design/ui_kits/web/RunPage.jsx).
  *
- * Only `warn`/`bad` findings are issues. The §16b attribution rules always emit
- * an `info` finding (a healthy run still gets "Likely GPU-bound"), so counting
- * every finding would badge every capture carrying busy-time telemetry as having
- * an issue and make the all-clear unreachable.
+ * Attribution rules emit informational context (for example, "Likely GPU-bound")
+ * even for a healthy run. Driver-currency advice is also informational in
+ * severity, but it is actionable and must prevent a false all-clear.
  */
 
 import type * as React from "react";
 import { Badge, Card, Diagnostic } from "@heimdall/ui";
 import { RUN_STATUS, type Diagnostic as DiagnosticData, type RunStatus } from "@heimdall/shared";
+
+const ATTRIBUTION_INFO_CODES = new Set([
+  "likely-cpu-bound",
+  "likely-gpu-bound",
+  "frame-capped-or-display-limited",
+  "telemetry-insufficient",
+]);
+
+function isIssue(diagnostic: DiagnosticData): boolean {
+  return !ATTRIBUTION_INFO_CODES.has(diagnostic.code);
+}
 
 export function DiagnosticsCard({
   diagnostics,
@@ -26,9 +36,7 @@ export function DiagnosticsCard({
   // Diagnostics land atomically with the verification verdict; a still-pending
   // run has run no checks yet, so an empty array there means "not run", not "clean".
   const verified = status === RUN_STATUS.validated || status === RUN_STATUS.flagged;
-  const issueCount = diagnostics.filter(
-    (diagnostic) => diagnostic.severity === "warn" || diagnostic.severity === "bad",
-  ).length;
+  const issueCount = diagnostics.filter(isIssue).length;
 
   let badge: React.ReactNode;
   if (!verified) badge = <Badge tone="neutral">Pending</Badge>;

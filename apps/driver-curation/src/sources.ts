@@ -123,8 +123,13 @@ function decodeEntities(value: string): string {
     trade: "",
   };
   return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (entity, body: string) => {
-    if (body.startsWith("#x")) return String.fromCodePoint(Number.parseInt(body.slice(2), 16));
-    if (body.startsWith("#")) return String.fromCodePoint(Number.parseInt(body.slice(1), 10));
+    if (body.startsWith("#")) {
+      const hexadecimal = body[1]?.toLowerCase() === "x";
+      const codePoint = Number.parseInt(body.slice(hexadecimal ? 2 : 1), hexadecimal ? 16 : 10);
+      return Number.isInteger(codePoint) && codePoint <= 0x10ffff
+        ? String.fromCodePoint(codePoint)
+        : entity;
+    }
     return named[body.toLowerCase()] ?? entity;
   });
 }
@@ -396,7 +401,7 @@ export function parseAmdChangelog(
   }
   const records = parsed.data.records;
   if (!Array.isArray(records)) throw new Error("Changelog.gg AMD records were missing");
-  if (records.length > CHANGELOG_AMD_LIMIT || parsed.data.nextCursor !== null) {
+  if (records.length > CHANGELOG_AMD_LIMIT) {
     throw new Error("Changelog.gg AMD records exceeded the bounded page");
   }
   const fetchedDate = fetchedAt.slice(0, 10);
