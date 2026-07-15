@@ -94,7 +94,7 @@ test("fixture run renders: badges, tiles, confidence, chart, stubs (§13)", asyn
   await expect(page.getByText(`${issueCount} issue${issueCount === 1 ? "" : "s"}`)).toBeVisible();
   await expect(page.getByText("RAM is running below its rated speed")).toBeVisible();
   await expect(page.getByText("GPU driver is older than recommended")).toBeVisible();
-  await expect(page.getByText("GPU driver update available")).toBeVisible();
+  await expect(page.getByText("GPU driver update available")).toHaveCount(0);
   await expect(page.getByText("Coming soon")).toHaveCount(0);
 });
 
