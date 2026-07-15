@@ -150,6 +150,16 @@ describe("parsePresentMon — stream selection & frame generation (§8)", () => 
     });
   });
 
+  it("retains an explicit Vulkan runtime as graphics API evidence", () => {
+    const csv = [
+      "Application,CPUStartTime,FrameTime,PresentRuntime",
+      "game.exe,3500,10,Vulkan",
+      "game.exe,3510,10,Vulkan",
+    ].join("\n");
+
+    expect(unwrapOk(parsePresentMon(csv)).value.captureSemantics).toEqual({ graphicsApi: "vulkan" });
+  });
+
   it("does not warn when a single stream is present", () => {
     const { warnings } = parseOk("presentmon/v2-basic.csv");
     expect(warnings.find((w) => w.code === "multiple-streams")).toBeUndefined();
@@ -159,6 +169,25 @@ describe("parsePresentMon — stream selection & frame generation (§8)", () => 
     const lines = [header];
     for (let i = 0; i <= 1_024; i++) {
       lines.push(row(`app-${i}.exe`, String(i), `0x${i}`, "Application", 3_500 + i, 10));
+    }
+
+    expect(parsePresentMon(lines.join("\n"))).toMatchObject({
+      ok: false,
+      error: { code: "too-many-streams", source: "presentmon" },
+    });
+  });
+
+  it("rejects an evicted survivor that does not clear the dominance bound", () => {
+    const lines = [header];
+    // Each complete 1,025-stream round clears the Misra-Gries table. The final
+    // 20-row stream survives but represents less than 1 / 1,025 of the capture.
+    for (let round = 0; round < 20; round++) {
+      for (let i = 0; i <= 1_024; i++) {
+        lines.push(row(`app-${i}.exe`, String(i), `0x${i}`, "Application", round * 2_000 + i, 10));
+      }
+    }
+    for (let i = 0; i < 20; i++) {
+      lines.push(row("residue.exe", "9999", "0xFFFF", "Application", 50_000 + i, 10));
     }
 
     expect(parsePresentMon(lines.join("\n"))).toMatchObject({

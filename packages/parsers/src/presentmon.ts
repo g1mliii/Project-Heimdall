@@ -201,6 +201,7 @@ function toGraphicsApi(raw: string): string | undefined {
   if (value === "d3d12" || value === "direct3d 12") return "dx12";
   if (value === "d3d11" || value === "direct3d 11") return "dx11";
   if (value === "d3d9" || value === "direct3d 9") return "dx9";
+  if (value === "vulkan") return "vulkan";
   return undefined;
 }
 
@@ -223,6 +224,15 @@ function detectSyncMode(tearingCell?: string, syncIntervalCell?: string): SyncMo
  * stream with the most rows. Returns no filter when the columns are absent or
  * only one stream is present.
  */
+function noDominantStreamError(): { warnings: ParseWarning[]; error: string } {
+  return {
+    warnings: [],
+    error:
+      `Capture contains more than ${MAX_TRACKED_STREAMS} process/swapchain streams ` +
+      "and none of them dominates.",
+  };
+}
+
 function dominantStream(
   lines: readonly string[],
   found: FoundHeader,
@@ -294,12 +304,7 @@ function dominantStream(
   if (counts.size === 0) {
     // Every tracked stream was evicted, so no stream holds a large enough share
     // to be the dominant one. There is nothing to attribute this capture to.
-    return {
-      warnings: [],
-      error:
-        `Capture contains more than ${MAX_TRACKED_STREAMS} process/swapchain streams ` +
-        `and none of them dominates.`,
-    };
+    return noDominantStreamError();
   }
 
   // Eviction leaves the surviving counts as lower bounds, so recount them
@@ -322,6 +327,14 @@ function dominantStream(
       dominant = key;
       dominantCount = count;
     }
+  }
+
+  // Misra-Gries only guarantees retention for a stream above this share. A
+  // lower-count survivor can be an arbitrary residue of the eviction pass, so
+  // selecting it would silently turn a multi-stream capture into unrelated
+  // frame data.
+  if (evicted && dominantCount * (MAX_TRACKED_STREAMS + 1) <= totalCount) {
+    return noDominantStreamError();
   }
 
   const dropped = totalCount - dominantCount;
