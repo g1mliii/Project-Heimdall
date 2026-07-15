@@ -28,7 +28,11 @@ export async function fetchText(
   }: SafeFetchOptions,
 ): Promise<string> {
   const assertAllowed = (candidate: URL): void => {
-    if (candidate.protocol !== "https:" || !allowedHosts.includes(candidate.hostname)) {
+    if (
+      candidate.protocol !== "https:" ||
+      candidate.port !== "" ||
+      !allowedHosts.includes(candidate.hostname)
+    ) {
       throw new Error(`source URL is not allowlisted: ${candidate.origin}`);
     }
   };

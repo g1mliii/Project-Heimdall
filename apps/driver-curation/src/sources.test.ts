@@ -115,6 +115,31 @@ describe("driver source contracts", () => {
     ]);
   });
 
+  it("does not split lowercase title words in NVIDIA games-including prose", () => {
+    const batch = parseNvidiaLookup(
+      JSON.stringify({
+        Success: "1",
+        IDS: [
+          {
+            downloadInfo: {
+              Version: "610.74",
+              ReleaseDateTime: "Tue Jul 07, 2026",
+              DetailsURL: "https://www.nvidia.com/en-us/drivers/details/274187/",
+              ReleaseNotes:
+                "Enhanced gaming experience for games including Indiana Jones and the Great Circle.",
+            },
+          },
+        ],
+      }),
+      "windows",
+      fetchedAt,
+    );
+
+    expect(batch.requirements.map((row) => row.title)).toEqual([
+      "Indiana Jones and the Great Circle",
+    ]);
+  });
+
   it("decodes dash entities in NVIDIA game-ready titles", () => {
     const batch = parseNvidiaLookup(
       JSON.stringify({
@@ -197,6 +222,19 @@ describe("driver source contracts", () => {
        <h3>New Game Support</h3><ul><li>Expected Game</li></ul>
        <h3>Fixed Issues:</h3><ul><li>Fixed Issue Game</li></ul>
        <h3>Known Issues:</h3><ul><li>Known Issue Game</li></ul>`,
+      fetchedAt,
+      "https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-5.html",
+    );
+
+    expect(batch.requirements.map((row) => row.title)).toEqual(["Expected Game"]);
+  });
+
+  it("parses a colon-suffixed AMD game-support heading", () => {
+    const batch = parseAmdReleaseNotes(
+      `<h1>AMD Software: Adrenalin Edition 26.6.5 Driver Release Notes</h1>
+       <p>Last Updated: July 1st, 2026.</p>
+       <h3>New Game Support:</h3><ul><li>Expected Game</li></ul>
+       <h3>Fixed Issues:</h3><ul><li>Fixed Issue Game</li></ul>`,
       fetchedAt,
       "https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-5.html",
     );

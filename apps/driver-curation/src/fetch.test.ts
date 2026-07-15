@@ -14,6 +14,17 @@ describe("fetchText", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("rejects non-default HTTPS ports before fetching", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    await expect(
+      fetchText("https://vendor.example:8443/source", {
+        allowedHosts: ["vendor.example"],
+        fetchImpl,
+      }),
+    ).rejects.toThrow("not allowlisted");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("validates every redirect before following it", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       new Response(null, {

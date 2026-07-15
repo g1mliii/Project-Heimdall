@@ -178,7 +178,7 @@ function uniqueTitles(values: readonly string[]): string[] {
 
 function splitTitleList(value: string, splitListConjunction = false): string[] {
   const separator = splitListConjunction
-    ? /\s*,\s*(?:and\s+)?|\s+and\s+(?=[A-Z0-9])/i
+    ? /\s*,\s*(?:[aA][nN][dD]\s+)?|\s+[aA][nN][dD]\s+(?=[A-Z0-9])/
     : /\s*,\s*(?:and\s+)?/i;
   return value
     .replace(/^.*?including\s+/i, "")
@@ -539,7 +539,7 @@ export function parseAmdReleaseNotes(
   const canonicalSourceUrl = amdReleaseNotesUrl(sourceUrl, latestVersion);
   if (!canonicalSourceUrl) throw new Error("AMD release-note URL did not match parsed version");
   const releasedAt = isoDate(dateMatch[1]);
-  const games = sectionItems(lines, /^New Game Support$/i, [
+  const games = sectionItems(lines, /^New Game Support:?$/i, [
     /^Fixed Issues:?$/i,
     /^Known Issues:?$/i,
     /^New Product Support:?$/i,
