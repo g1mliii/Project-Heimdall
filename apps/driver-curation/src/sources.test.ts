@@ -187,6 +187,22 @@ describe("driver source contracts", () => {
     ]);
   });
 
+  it("ends AMD game support at a 'Fixed Issues and Improvements' heading", async () => {
+    const url = parseAmdIndex(await fixture("amd-index.html"));
+    // AMD ships this section header both bare and suffixed. The suffixed form
+    // must still stop the section, or the fixed-issue bullets below it — which
+    // name games verbatim — get harvested as new game support.
+    const raw = (await fixture("amd-release.html")).replace(
+      ">Fixed Issues<",
+      ">Fixed Issues and Improvements<",
+    );
+    const batch = parseAmdReleaseNotes(raw, fetchedAt, url);
+    expect(batch.requirements.map((row) => row.title)).toEqual([
+      "F1 25: 2026 Season Pack",
+      "World of Tanks: HEAT",
+    ]);
+  });
+
   it("rejects an AMD release note when its URL does not match the parsed version", async () => {
     const raw = await fixture("amd-release.html");
     expect(() =>
