@@ -36,20 +36,41 @@ function requirementKey(row: GameRequirementCandidate): string {
   return [row.vendor, row.os, normalizeAliasName(row.title)].join(":");
 }
 
-function versionOf(row: DriverCatalogRecord | GameRequirementCandidate): string {
-  return "latestVersion" in row ? row.latestVersion : row.minVersion;
-}
-
-function preferNewer<T extends DriverCatalogRecord | GameRequirementCandidate>(
-  previous: T | undefined,
-  incoming: T,
-): T {
+/** The catalog tracks the newest driver a vendor shipped, so a later release wins. */
+function preferNewer(
+  previous: DriverCatalogRecord | undefined,
+  incoming: DriverCatalogRecord,
+): DriverCatalogRecord {
   if (!previous) return incoming;
   if (incoming.releasedAt !== previous.releasedAt) {
     return incoming.releasedAt > previous.releasedAt ? incoming : previous;
   }
-  const versionComparison = compareDriverVersions(versionOf(incoming), versionOf(previous));
+  const versionComparison = compareDriverVersions(incoming.latestVersion, previous.latestVersion);
   if (versionComparison !== 0) return versionComparison > 0 ? incoming : previous;
+  return incoming.fetchedAt >= previous.fetchedAt ? incoming : previous;
+}
+
+/**
+ * `minVersion` is the OLDEST driver known to support a title, so an EARLIER
+ * release wins — the mirror of the catalog rule, not an oversight.
+ *
+ * Vendors re-list already-supported titles in later notes (NVIDIA's "best
+ * gaming experience for games including …" prose re-names flagship titles for
+ * months after their Game Ready release). Taking the newest mention would
+ * ratchet the requirement up to whatever driver shipped that week and tell a
+ * user who captured on the title's actual Game Ready driver that theirs is too
+ * old — again every week the title reappears.
+ */
+function preferEarlier(
+  previous: GameRequirementCandidate | undefined,
+  incoming: GameRequirementCandidate,
+): GameRequirementCandidate {
+  if (!previous) return incoming;
+  if (incoming.releasedAt !== previous.releasedAt) {
+    return incoming.releasedAt < previous.releasedAt ? incoming : previous;
+  }
+  const versionComparison = compareDriverVersions(incoming.minVersion, previous.minVersion);
+  if (versionComparison !== 0) return versionComparison < 0 ? incoming : previous;
   return incoming.fetchedAt >= previous.fetchedAt ? incoming : previous;
 }
 
@@ -63,7 +84,7 @@ export function mergeBatches(batches: readonly SourceBatch[]): CurationBatch {
     }
     for (const row of batch.requirements) {
       const key = requirementKey(row);
-      requirements.set(key, preferNewer(requirements.get(key), row));
+      requirements.set(key, preferEarlier(requirements.get(key), row));
     }
   }
   return { catalog: [...catalog.values()], requirements: [...requirements.values()] };

@@ -230,7 +230,7 @@ describe.skipIf(!canRun)("driver curation persistence", () => {
     ]);
   });
 
-  it("keeps the highest same-day version after aliases resolve to one game", async () => {
+  it("keeps the newest catalog version but the oldest requirement when aliases resolve to one game", async () => {
     await db.pool.query(
       `insert into games (slug, name)
        values ('same-day-driver-version-alias-game-deluxe-edition',
@@ -276,7 +276,7 @@ describe.skipIf(!canRun)("driver curation persistence", () => {
       ],
     });
     expect(first).toMatchObject({ catalogUpserted: 1, requirementsMatched: 2, requirementsUpserted: 1 });
-    await expectHighestDriverVersions(db);
+    await expectResolvedDriverVersions(db);
 
     await persistCurationWith(execute, {
       catalog: [
@@ -303,11 +303,57 @@ describe.skipIf(!canRun)("driver curation persistence", () => {
         },
       ],
     });
-    await expectHighestDriverVersions(db);
+    await expectResolvedDriverVersions(db);
+  });
+
+  it("does not raise min_version when a later driver re-lists a supported title", async () => {
+    await db.pool.query(
+      `insert into games (slug, name)
+       values ('relisted-boilerplate-flagship-title', 'Relisted Boilerplate Flagship Title')`,
+    );
+    const execute = async (text: string, params: readonly unknown[]) =>
+      (await db.pool.query(text, [...params])).rows;
+    const requirement = (minVersion: string, releasedAt: string, fetchedAt: string) => ({
+      vendor: "nvidia" as const,
+      os: "windows" as const,
+      minVersion,
+      title: "Relisted Boilerplate Flagship Title",
+      releasedAt,
+      sourceUrl: `https://www.nvidia.com/en-us/drivers/details/${minVersion.replace(".", "")}/`,
+      fetchedAt,
+    });
+    const stored = async () =>
+      (
+        await db.pool.query<{ min_version: string; fetched_at: Date }>(
+          `select requirement.min_version, requirement.fetched_at
+             from game_driver_requirements requirement
+             join games g on g.id = requirement.game_id
+            where g.slug = 'relisted-boilerplate-flagship-title'`,
+        )
+      ).rows[0];
+
+    // 605.10 is the driver that actually added Game Ready support.
+    await persistCurationWith(execute, {
+      catalog: [],
+      requirements: [requirement("605.10", "2026-05-01", "2026-05-01T00:00:00.000Z")],
+    });
+    expect(await stored()).toMatchObject({ min_version: "605.10" });
+
+    // Weeks later NVIDIA's "best gaming experience for games including …" prose
+    // re-names the same title. The minimum has not moved; only our evidence that
+    // the requirement is still live has.
+    await persistCurationWith(execute, {
+      catalog: [],
+      requirements: [requirement("610.74", "2026-07-10", "2026-07-10T00:00:00.000Z")],
+    });
+    const after = await stored();
+    expect(after).toMatchObject({ min_version: "605.10" });
+    expect(after?.fetched_at.toISOString()).toBe("2026-07-10T00:00:00.000Z");
   });
 });
 
-async function expectHighestDriverVersions(db: TestDb): Promise<void> {
+async function expectResolvedDriverVersions(db: TestDb): Promise<void> {
+  // The catalog tracks the newest driver the vendor shipped.
   await expect(
     db.pool.query<{ latest_version: string }>(
       `select latest_version
@@ -316,6 +362,8 @@ async function expectHighestDriverVersions(db: TestDb): Promise<void> {
           and gpu_series = 'same-day-alias-test'`,
     ),
   ).resolves.toMatchObject({ rows: [{ latest_version: "611.00" }] });
+  // min_version is the oldest driver known to support the game, so the lower of
+  // the two same-day aliases wins — and no later pass raises it.
   await expect(
     db.pool.query<{ min_version: string }>(
       `select requirement.min_version
@@ -324,5 +372,5 @@ async function expectHighestDriverVersions(db: TestDb): Promise<void> {
         where g.slug = 'same-day-driver-version-alias-game-deluxe-edition'
           and requirement.vendor = 'nvidia' and requirement.os = 'windows'`,
     ),
-  ).resolves.toMatchObject({ rows: [{ min_version: "611.00" }] });
+  ).resolves.toMatchObject({ rows: [{ min_version: "610.99" }] });
 }

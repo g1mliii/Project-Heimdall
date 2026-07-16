@@ -31,7 +31,7 @@ const batch = (catalog: DriverCatalogRecord[]): SourceBatch => ({
 });
 
 describe("curateDrivers", () => {
-  it("keeps the higher version when sources disagree on the same release date", () => {
+  it("keeps the higher catalog version but the lower requirement when sources disagree on the same release date", () => {
     const higher: SourceBatch = {
       catalog: [{ ...row("nvidia", "windows", "gpu"), latestVersion: "610.75" }],
       requirements: [
@@ -62,9 +62,38 @@ describe("curateDrivers", () => {
 
     const merged = mergeBatches([higher, lower]);
 
+    // The catalog tracks the newest driver shipped; min_version is the oldest
+    // driver known to support the title, so the two rules point opposite ways.
     expect(merged.catalog[0]?.latestVersion).toBe("610.75");
     expect(merged.requirements).toHaveLength(1);
-    expect(merged.requirements[0]?.minVersion).toBe("610.75");
+    expect(merged.requirements[0]?.minVersion).toBe("610.74");
+    expect(merged.requirements[0]?.sourceUrl).toBe("https://example.com/lower");
+  });
+
+  it("does not raise a requirement when a later release re-lists the same title", () => {
+    const requirement = (minVersion: string, releasedAt: string) => ({
+      vendor: "nvidia" as const,
+      os: "windows" as const,
+      minVersion,
+      title: "Example Game",
+      releasedAt,
+      sourceUrl: `https://example.com/${minVersion}`,
+      fetchedAt: now.toISOString(),
+    });
+    const gameReady: SourceBatch = {
+      catalog: [],
+      requirements: [requirement("605.10", "2026-05-01")],
+      dropped: 0,
+    };
+    const boilerplate: SourceBatch = {
+      catalog: [],
+      requirements: [requirement("610.74", "2026-07-10")],
+      dropped: 0,
+    };
+
+    expect(mergeBatches([gameReady, boilerplate]).requirements[0]?.minVersion).toBe("605.10");
+    // Order of arrival must not decide the answer.
+    expect(mergeBatches([boilerplate, gameReady]).requirements[0]?.minVersion).toBe("605.10");
   });
 
   it("isolates source failures and keeps all six currency cells through fallback", async () => {
