@@ -331,6 +331,20 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     expect(verified?.sensors.gpuPowerW).toEqual({ present: true, frameAligned: false });
   });
 
+  it("fails closed for unverified CapFrameX alignment during canonical verification", async () => {
+    const id = "run_wk_unverified_sensor_alignment";
+    const hardware = { ...validRun.hardware, gpuVendor: "nvidia" as const };
+    const capabilityManifest = deriveCapabilityManifest(frames, "capframex", hardware, {
+      sensorAlignment: { cpuLoadPct: true, gpuLoadPct: true },
+    });
+    await setupFinalizedRun(id, runFixture(id, { hardware, capabilityManifest }));
+
+    expect(await drainJobs({}, realDeps(async () => parquetBytes))).toMatchObject({ validated: 1 });
+    const verified = (await readRun(id, db.pool))?.capabilityManifest;
+    expect(verified?.sensors.cpuLoadPct).toEqual({ present: true, frameAligned: false });
+    expect(verified?.sensors.gpuLoadPct).toEqual({ present: true, frameAligned: false });
+  });
+
   it("transient storage error retries; the attempts cap terminalizes (12.5)", async () => {
     await setupFinalizedRun("run_wk_retry");
     const flaky = async () => {

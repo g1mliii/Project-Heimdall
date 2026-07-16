@@ -224,6 +224,20 @@ export function detectAvailableSensors(frames: readonly FrameSample[]): SensorFi
 const HAGS_AFFECTED_FIELDS: readonly SensorField[] = ["gpuBusyMs"];
 
 /**
+ * CapFrameX's SensorData2 telemetry is periodically polled and then expanded
+ * across frames. Its CaptureData busy-time fields are separately derived from
+ * the presented-frame stream, so only the SensorData2-style fields need a
+ * conservative fallback when the original capture profile is unavailable.
+ */
+const CAPFRAMEX_PERIODIC_SENSOR_FIELDS = new Set<SensorField>([
+  "gpuLoadPct",
+  "gpuClockMhz",
+  "gpuPowerW",
+  "vramUsedMb",
+  "cpuLoadPct",
+]);
+
+/**
  * Derive the explicit VRAM-capacity state (§16a.4) from a hardware snapshot.
  * A bare `undefined` total is reported as `{ state: "unknown" }` so downstream
  * rules can tell "parser didn't look" from a real capacity. Unified-memory is
@@ -289,8 +303,22 @@ export function buildCapabilityManifest(input: {
   hardware?: HardwareSnapshot;
   /** Declared/detected capture semantics preserved across the recompute. */
   declared?: DeclaredCaptureSemantics;
+  /**
+   * The verification worker only has normalized Parquet, not the original
+   * CapFrameX profile that distinguishes row-aligned CSV from periodic
+   * SensorData2 telemetry. When enabled, those periodic-capable fields are
+   * always unaligned: a matrix cell can describe another capture profile and
+   * declared alignment is not server-owned evidence.
+   */
+  conservativeCapFrameXAlignment?: boolean;
 }): CapabilityManifest {
-  const { source, frameGenerationObserved, hardware, declared } = input;
+  const {
+    source,
+    frameGenerationObserved,
+    hardware,
+    declared,
+    conservativeCapFrameXAlignment = false,
+  } = input;
   const present = new Set(input.presentSensors);
   const matrixCell = hardware?.gpuVendor
     ? SENSOR_AVAILABILITY[source][hardware.gpuVendor]
@@ -302,13 +330,16 @@ export function buildCapabilityManifest(input: {
       // Exact parser evidence wins because one source/vendor can expose both
       // row-aligned CSV and periodic JSON fields. Matrix evidence is the safe
       // fallback for legacy callers that cannot carry per-capture alignment.
+      const conservativePeriodicField =
+        conservativeCapFrameXAlignment &&
+        source === "capframex" &&
+        CAPFRAMEX_PERIODIC_SENSOR_FIELDS.has(field);
+      const fallbackFrameAligned = !(
+        matrixCell?.provenance === "verified-real" &&
+        matrixCell.evidence?.frameAligned[field] === false
+      );
       const frameAligned =
-        isPresent &&
-        (declaredFrameAligned ??
-          !(
-            matrixCell?.provenance === "verified-real" &&
-            matrixCell.evidence?.frameAligned[field] === false
-          ));
+        isPresent && !conservativePeriodicField && (declaredFrameAligned ?? fallbackFrameAligned);
       return [field, { present: isPresent, frameAligned }];
     }),
   ) as CapabilityManifest["sensors"];

@@ -114,6 +114,22 @@ describe("deriveCapabilityManifest (§16a.3)", () => {
     expect(fromPresence).toEqual(fromFrames);
   });
 
+  it("fails closed for CapFrameX when verification lacks a trusted capture profile", () => {
+    const manifest = buildCapabilityManifest({
+      source: "capframex",
+      presentSensors: ["cpuLoadPct", "gpuLoadPct", "cpuBusyMs", "gpuBusyMs"],
+      frameGenerationObserved: false,
+      hardware,
+      conservativeCapFrameXAlignment: true,
+      declared: { sensorAlignment: { cpuLoadPct: true, gpuLoadPct: true } },
+    });
+
+    expect(manifest.sensors.cpuLoadPct).toEqual({ present: true, frameAligned: false });
+    expect(manifest.sensors.gpuLoadPct).toEqual({ present: true, frameAligned: false });
+    expect(manifest.sensors.cpuBusyMs).toEqual({ present: true, frameAligned: true });
+    expect(manifest.sensors.gpuBusyMs).toEqual({ present: true, frameAligned: true });
+  });
+
   it("uses verified matrix evidence when a present sensor is not frame-aligned", () => {
     const original = SENSOR_AVAILABILITY.capframex.nvidia;
     if (original === undefined) throw new Error("expected CapFrameX/NVIDIA matrix cell");

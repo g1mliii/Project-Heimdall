@@ -131,6 +131,7 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
         presentSensors: parquet.presentSensors,
         frameGenerationObserved: parquet.frameGenerationObserved,
         hardware: run.hardware,
+        conservativeCapFrameXAlignment: true,
         ...(run.capabilityManifest
           ? {
               declared: {
