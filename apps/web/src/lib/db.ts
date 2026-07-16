@@ -251,6 +251,7 @@ interface DiagnosticRow extends pg.QueryResultRow {
   evidence: Diagnostic["evidence"] | null;
   rule_version: string | null;
   confidence: Diagnostic["confidence"] | null;
+  evaluated_at: Date | null;
 }
 
 /**
@@ -299,8 +300,8 @@ export function diagnosticInsertSql(
   const evidenceParameter = codeParameter + 4;
   const ruleVersionParameter = codeParameter + 5;
   const confidenceParameter = codeParameter + 6;
-  return `insert into diagnostics (run_id, code, severity, title, detail, evidence, rule_version, confidence)
-     select $${runIdParameter}, code, severity, title, detail, evidence::jsonb, rule_version, confidence
+  return `insert into diagnostics (run_id, code, severity, title, detail, evidence, rule_version, confidence, evaluated_at)
+     select $${runIdParameter}, code, severity, title, detail, evidence::jsonb, rule_version, confidence, now()
        from unnest($${codeParameter}::text[], $${severityParameter}::text[], $${titleParameter}::text[], $${detailParameter}::text[], $${evidenceParameter}::text[], $${ruleVersionParameter}::text[], $${confidenceParameter}::text[])
          as finding(code, severity, title, detail, evidence, rule_version, confidence)${guardSql ? `\n      where ${guardSql}` : ""}`;
 }
@@ -329,7 +330,7 @@ export async function readDiagnostics(
   db: Queryable = getPool(),
 ): Promise<Diagnostic[]> {
   const rows = await query<DiagnosticRow>(
-    `select id, code, severity, title, detail, evidence, rule_version, confidence
+    `select id, code, severity, title, detail, evidence, rule_version, confidence, evaluated_at
        from diagnostics
       where run_id = $1
       order by id`,
@@ -349,6 +350,7 @@ export async function readDiagnostics(
     if (row.evidence !== null) diagnostic.evidence = row.evidence;
     if (row.rule_version !== null) diagnostic.ruleVersion = row.rule_version;
     if (row.confidence !== null) diagnostic.confidence = row.confidence;
+    if (row.evaluated_at !== null) diagnostic.evaluatedAt = row.evaluated_at.toISOString();
     return diagnostic;
   });
 }
@@ -549,6 +551,10 @@ interface VerificationRunRow extends RunRow {
   driver_os: DiagnosticsDriverPlatform["os"] | null;
   driver_component: DiagnosticsDriverPlatform["component"] | null;
   latest_driver: string | null;
+  required_driver_source_url: string | null;
+  required_driver_fetched_at: Date | null;
+  latest_driver_source_url: string | null;
+  latest_driver_fetched_at: Date | null;
 }
 
 /**
@@ -563,6 +569,7 @@ export async function readRunForVerification(
   run: Run;
   signature: string | null;
   requiredDriver: string | null;
+  requiredDriverProvenance: { sourceUrl?: string; fetchedAt?: string } | null;
   driverPlatform: DiagnosticsDriverPlatform | null;
   driverCatalog: DiagnosticsDriverCatalog | null;
 } | null> {
@@ -572,7 +579,11 @@ export async function readRunForVerification(
         requirement.min_version as required_driver,
         driver_platform.os as driver_os,
         ${DRIVER_COMPONENT_SQL} as driver_component,
-        catalog.latest_version as latest_driver
+        catalog.latest_version as latest_driver,
+        requirement.source_url as required_driver_source_url,
+        requirement.fetched_at as required_driver_fetched_at,
+        catalog.source_url as latest_driver_source_url,
+        catalog.fetched_at as latest_driver_fetched_at
        ${RUN_WITH_SUMMARY_FROM}
        ${DRIVER_PLATFORM_JOIN_SQL}
        ${REQUIRED_DRIVER_JOIN_SQL}
@@ -606,7 +617,27 @@ export async function readRunForVerification(
     driverPlatform,
     driverCatalog:
       driverPlatform && row.latest_driver
-        ? { ...driverPlatform, latestVersion: row.latest_driver }
+        ? {
+            ...driverPlatform,
+            latestVersion: row.latest_driver,
+            ...(row.latest_driver_source_url === null
+              ? {}
+              : { sourceUrl: row.latest_driver_source_url }),
+            ...(row.latest_driver_fetched_at === null
+              ? {}
+              : { fetchedAt: row.latest_driver_fetched_at.toISOString() }),
+          }
         : null,
+    requiredDriverProvenance:
+      row.required_driver === null
+        ? null
+        : {
+            ...(row.required_driver_source_url === null
+              ? {}
+              : { sourceUrl: row.required_driver_source_url }),
+            ...(row.required_driver_fetched_at === null
+              ? {}
+              : { fetchedAt: row.required_driver_fetched_at.toISOString() }),
+          },
   };
 }

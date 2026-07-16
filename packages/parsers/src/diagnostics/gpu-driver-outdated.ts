@@ -122,7 +122,7 @@ function requiredDriverShortfall(
 
 export const driverUpdateAvailableRule: DiagnosticRule = {
   code: "driver-update-available",
-  version: "1.0.0",
+  version: "1.1.0",
   requiredSensors: [],
   evaluate({ input }) {
     const captured = input.hardware.gpuDriver;
@@ -158,13 +158,20 @@ export const driverUpdateAvailableRule: DiagnosticRule = {
       detail:
         `This capture uses ${captured}; the latest known ${catalog.component === "mesa" ? "Mesa" : `${input.vendor.toUpperCase()} driver`} ` +
         `is ${catalog.latestVersion}. Updating can improve compatibility and stability.`,
+      evidence: {
+        provenance: {
+          ...(catalog.sourceUrl === undefined ? {} : { sourceUrl: catalog.sourceUrl }),
+          latestVersion: catalog.latestVersion,
+          ...(catalog.fetchedAt === undefined ? {} : { catalogFetchedAt: catalog.fetchedAt }),
+        },
+      },
     };
   },
 };
 
 export const gpuDriverOutdatedRule: DiagnosticRule = {
   code: "gpu-driver-outdated",
-  version: "1.0.0",
+  version: "1.1.0",
   requiredSensors: [],
   evaluate({ input }) {
     const shortfall = requiredDriverShortfall(input);
@@ -177,6 +184,17 @@ export const gpuDriverOutdatedRule: DiagnosticRule = {
       detail:
         `This game runs best on GPU driver ${required} or newer, but this capture is on ` +
         `${driver}. Updating your driver can improve stability and performance.`,
+      evidence: {
+        provenance: {
+          ...(input.game?.requiredDriverSourceUrl === undefined
+            ? {}
+            : { sourceUrl: input.game.requiredDriverSourceUrl }),
+          latestVersion: required,
+          ...(input.game?.requiredDriverFetchedAt === undefined
+            ? {}
+            : { catalogFetchedAt: input.game.requiredDriverFetchedAt }),
+        },
+      },
     };
   },
 };

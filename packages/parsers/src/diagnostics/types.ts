@@ -51,6 +51,8 @@ export interface DiagnosticsFrameColumns {
 export interface DiagnosticsGame {
   /** Minimum GPU driver version recommended for this game, if curated. */
   requiredDriver?: string;
+  requiredDriverSourceUrl?: string;
+  requiredDriverFetchedAt?: string;
 }
 
 export type DriverPlatform = "windows" | "linux";
@@ -66,6 +68,8 @@ export interface DiagnosticsDriverPlatform {
 /** Fresh latest-driver fact selected server-side for this run's platform. */
 export interface DiagnosticsDriverCatalog extends DiagnosticsDriverPlatform {
   latestVersion: string;
+  sourceUrl?: string;
+  fetchedAt?: string;
 }
 
 /** Everything a rule needs about one run. */

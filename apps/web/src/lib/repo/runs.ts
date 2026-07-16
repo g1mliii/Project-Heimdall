@@ -7,9 +7,8 @@
 import { benchmarkSetConfidence } from "@heimdall/parsers";
 import type { BenchmarkSetStats } from "@heimdall/parsers";
 import {
-  aggregateEligibilitySql,
+  cohortEligibilitySql,
   comparabilityMatchSql,
-  comparabilityProfileSql,
   comparabilitySelectSql,
   isAggregateEligible,
   RUN_STATUS,
@@ -100,10 +99,10 @@ export async function readVisibleBenchmarkSet(
          from runs base
         where base.id = $2
           and base.benchmark_set_id = $1
-          and ${aggregateEligibilitySql("base")}
-          and ${comparabilityProfileSql("base")}
-          and base.game_id is not null
-          and base.gpu_hardware_id is not null
+          and ${cohortEligibilitySql("base", {
+            allowWarmups: true,
+            allowBenchmarkSetMembers: true,
+          })}
      )
      select count(*) filter (where not r.is_warmup) as sample_count,
             count(*) filter (where r.is_warmup) as warmup_run_count,
@@ -115,10 +114,10 @@ export async function readVisibleBenchmarkSet(
        join runs r on r.benchmark_set_id = $1
          and ${comparabilityMatchSql("r", "base")}
        join run_summaries s on s.run_id = r.id
-      where ${aggregateEligibilitySql("r")}
-        and ${comparabilityProfileSql("r")}
-        and r.game_id is not null
-        and r.gpu_hardware_id is not null`,
+      where ${cohortEligibilitySql("r", {
+        allowWarmups: true,
+        allowBenchmarkSetMembers: true,
+      })}`,
     [run.benchmarkSetId, run.id],
     db,
   );

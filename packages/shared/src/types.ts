@@ -318,6 +318,12 @@ export interface DiagnosticEvidence {
   metrics?: Record<string, number>;
   /** Capture-semantics / source caveats that qualified the finding. */
   caveats?: string[];
+  /** Curated source basis for time-sensitive driver findings (§16e.3). */
+  provenance?: {
+    sourceUrl?: string;
+    latestVersion?: string;
+    catalogFetchedAt?: string;
+  };
 }
 
 /** A single auto-diagnostic result produced by the rules engine (Phase 6/6.5). */
@@ -336,6 +342,8 @@ export interface Diagnostic {
   ruleVersion?: string;
   /** Confidence label for likelihood-graded findings (§16b); absent = asserted. */
   confidence?: ConfidenceLevel;
+  /** When this stored finding was last evaluated against its rule inputs. */
+  evaluatedAt?: string;
 }
 
 /** A newly produced diagnostic before Postgres assigns its identity. */

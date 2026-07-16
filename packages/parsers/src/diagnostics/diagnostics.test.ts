@@ -182,12 +182,22 @@ describe("runDiagnostics — per-rule fixtures", () => {
     const findings = runDiagnostics(
       inputFor(frames, {
         hardware: { ...baseHardware, gpuDriver: "566.14" },
-        game: { requiredDriver: "566.36" },
+        game: {
+          requiredDriver: "566.36",
+          requiredDriverSourceUrl: "https://example.com/game-ready",
+          requiredDriverFetchedAt: "2026-07-14T12:00:00.000Z",
+        },
       }),
     );
     expect(findings.map((f) => f.code)).toEqual(["gpu-driver-outdated"]);
     const driver = findings.find((f) => f.code === "gpu-driver-outdated");
     expect(driver?.severity).toBe("info");
+    expect(driver?.ruleVersion).toBe("1.1.0");
+    expect(driver?.evidence?.provenance).toEqual({
+      sourceUrl: "https://example.com/game-ready",
+      latestVersion: "566.36",
+      catalogFetchedAt: "2026-07-14T12:00:00.000Z",
+    });
   });
 
   it("self-suppresses gpu-driver-outdated with no curated value", () => {
@@ -327,10 +337,22 @@ describe("runDiagnostics — per-rule fixtures", () => {
             gpuDriver: cell.captured,
           },
           driverPlatform: platform,
-          driverCatalog: { ...platform, latestVersion: cell.latest },
+          driverCatalog: {
+            ...platform,
+            latestVersion: cell.latest,
+            sourceUrl: "https://example.com/latest-driver",
+            fetchedAt: "2026-07-14T12:00:00.000Z",
+          },
         }),
       );
       expect(findings.map((finding) => finding.code)).toContain("driver-update-available");
+      const finding = findings.find((candidate) => candidate.code === "driver-update-available");
+      expect(finding?.ruleVersion).toBe("1.1.0");
+      expect(finding?.evidence?.provenance).toEqual({
+        sourceUrl: "https://example.com/latest-driver",
+        latestVersion: cell.latest,
+        catalogFetchedAt: "2026-07-14T12:00:00.000Z",
+      });
     });
   }
 

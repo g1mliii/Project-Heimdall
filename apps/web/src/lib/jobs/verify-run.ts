@@ -13,7 +13,13 @@ import type { CapabilityManifest, DiagnosticFinding, GeneratedFrameTech, RunSumm
 import { buildCapabilityManifest, runDiagnostics } from "@heimdall/parsers";
 import { readRunForVerification, type Queryable } from "../db";
 import { applyVerificationResult, type ClaimedJob } from "../repo/jobs";
+import {
+  applyReprocessResult,
+  REPROCESS_KIND,
+  type ClaimedReprocessJob,
+} from "../repo/reprocess";
 import { computeFrameParquetSummary } from "../parquet/frame-metadata";
+import { buildDiagnosticMetadata } from "./diagnostic-input";
 
 export interface VerifyDeps {
   db: Queryable;
@@ -26,6 +32,7 @@ export interface VerifyDeps {
 export type VerifyOutcome =
   | { kind: "validated" }
   | { kind: "flagged"; reason: string }
+  | { kind: "reprocessed"; summaryDrift: string | null }
   /** Transient (storage hiccup): job goes back to pending. */
   | { kind: "retry"; error: string }
   /** Terminal (corrupt/impossible data): job and finalized run are flagged. */
@@ -85,14 +92,25 @@ function verifyEd25519(publicKeyBase64: string, data: Uint8Array, signatureBase6
   }
 }
 
-export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<VerifyOutcome> {
+export async function verifyRunJob(
+  job: ClaimedJob | ClaimedReprocessJob,
+  deps: VerifyDeps,
+  { mode = "verification" }: { mode?: "verification" | "reprocess" } = {},
+): Promise<VerifyOutcome> {
   const { db } = deps;
 
   const state = await readRunForVerification(job.runId, db);
   if (!state) {
     return { kind: "failed", error: "run row disappeared" };
   }
-  const { run, signature, requiredDriver, driverPlatform, driverCatalog } = state;
+  const {
+    run,
+    signature,
+    requiredDriver,
+    requiredDriverProvenance,
+    driverPlatform,
+    driverCatalog,
+  } = state;
   if (!run.framesObjectKey) {
     return { kind: "failed", error: "run has no frames object key" };
   }
@@ -147,13 +165,15 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
       // they can hold up to 16 MiB; only compact findings need to survive the
       // subsequent awaited database write.
       findings = runDiagnostics({
+        ...buildDiagnosticMetadata({
+          hardware: run.hardware,
+          captureSource: run.captureSource,
+          requiredDriver,
+          requiredDriverProvenance,
+          driverPlatform,
+          driverCatalog,
+        }),
         summary: recomputed,
-        hardware: run.hardware,
-        source: run.captureSource,
-        vendor: run.hardware.gpuVendor ?? "unknown",
-        ...(requiredDriver !== null ? { game: { requiredDriver } } : {}),
-        ...(driverPlatform !== null ? { driverPlatform } : {}),
-        ...(driverCatalog !== null ? { driverCatalog } : {}),
         frames: parquet.diagnosticsColumns,
         capabilityManifest,
       });
@@ -184,6 +204,32 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
     run.hardware,
     generatedFrameTech,
   );
+
+  if (mode === "reprocess") {
+    if (!("kind" in job) || job.kind !== REPROCESS_KIND.full) {
+      return { kind: "failed", error: "invalid full-reprocess claim" };
+    }
+    // A replay compares old server-canonical output with the current version
+    // only as observability. Version drift must never manufacture a fraud flag.
+    await applyReprocessResult(
+      job.runId,
+      {
+        summary: recomputed,
+        signatureValid,
+        diagnostics: findings,
+        capabilityManifest,
+        methodologyManifest: methodologyManifest ?? null,
+        generatedFrameTech,
+      },
+      job,
+      db,
+    );
+    return { kind: "reprocessed", summaryDrift: mismatch };
+  }
+
+  if ("kind" in job) {
+    return { kind: "failed", error: "reprocess claim used in verification mode" };
+  }
 
   // Either way the recompute becomes the stored truth — "corrected and
   // flagged" (§12.4) is exactly the flagged arm of this write. Findings land in

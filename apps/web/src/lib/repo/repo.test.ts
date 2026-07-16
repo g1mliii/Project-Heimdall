@@ -5,7 +5,8 @@
 
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { RUN_STATUS, RUN_VISIBILITY, validRun, validSummary } from "@heimdall/shared";
+import { deriveCapabilityManifest } from "@heimdall/parsers";
+import { RUN_STATUS, RUN_VISIBILITY, validFrames, validRun, validSummary } from "@heimdall/shared";
 import type { Run } from "@heimdall/shared";
 import {
   insertRun,
@@ -35,6 +36,11 @@ import {
 import { resolveGameId, resolveHardwareId } from "./catalog";
 
 const canRun = testDbAvailable("repo.test");
+const establishedCapability = deriveCapabilityManifest(
+  validFrames,
+  validRun.captureSource,
+  validRun.hardware,
+);
 
 function pendingRun(id: string): Run {
   return {
@@ -526,6 +532,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
         framesObjectKey: `runs/${id}.parquet`,
         benchmarkSetId: setId,
         hardware: { ...validRun.hardware, canonicalGpuId: gpuId },
+        capabilityManifest: establishedCapability,
         ...(isWarmup ? { isWarmup: true } : {}),
         methodologyManifest: {
           version: 1,

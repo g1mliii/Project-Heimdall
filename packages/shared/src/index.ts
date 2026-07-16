@@ -16,6 +16,7 @@ export * from "./parquet";
 export * from "./naming";
 export * from "./comparability";
 export * from "./methodology";
+export * from "./eligibility";
 
 export { PHYSICS } from "./integrity";
 export {
