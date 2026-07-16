@@ -8,6 +8,7 @@ import { isDeepStrictEqual } from "node:util";
 import { DIAGNOSTIC_RULES, DRIVER_RULES } from "@heimdall/parsers";
 import {
   CAPABILITY_MANIFEST_VERSION,
+  DIAGNOSTICS,
   type CapabilityManifest,
   type DiagnosticFinding,
   type GeneratedFrameTech,
@@ -163,7 +164,13 @@ export interface DriverRefreshEnqueueResult {
  * the watermark open until every candidate is either queued or tombstoned.
  */
 export async function enqueueDriverRefreshJobs(
-  { limit = 1_000, catalogMaxAgeDays = 30 }: { limit?: number; catalogMaxAgeDays?: number } = {},
+  {
+    limit = 1_000,
+    // Must track the read path: readRunForVerification drops a catalog row once
+    // it falls outside this window, so a sweep on a different TTL would either
+    // miss the expiry or churn runs whose findings did not change.
+    catalogMaxAgeDays = DIAGNOSTICS.driverCatalogMaxAgeDays,
+  }: { limit?: number; catalogMaxAgeDays?: number } = {},
   db: Queryable = getPool(),
 ): Promise<DriverRefreshEnqueueResult> {
   const boundedLimit = Math.max(1, Math.min(limit, 10_000));
@@ -172,9 +179,21 @@ export async function enqueueDriverRefreshJobs(
     sweep_requested: boolean;
     sweep_complete: boolean;
   }>(
+    // The two driver rules read two INDEPENDENT tables: driverUpdateAvailable
+    // from driver_catalog, gpuDriverOutdated from game_driver_requirements.
+    // Watermarking only the catalog meant an empty/unpopulated driver_catalog
+    // left the watermark null, `requested` permanently false, and no driver
+    // work ever ran — including for requirement-driven findings that need no
+    // catalog at all. Track both sources, and expire against both.
     `with catalog_state as materialized (
-       select max(fetched_at) as catalog_watermark
-         from driver_catalog
+       select greatest(
+                (select max(fetched_at) from driver_catalog),
+                (select max(fetched_at) from game_driver_requirements)
+              ) as catalog_watermark
+     ), expiring_sources as materialized (
+       select fetched_at from driver_catalog
+       union all
+       select fetched_at from game_driver_requirements
      ), stored as materialized (
        select value, updated_at
          from reprocess_watermarks
@@ -185,7 +204,7 @@ export async function enqueueDriverRefreshJobs(
                 and (
                   catalog_state.catalog_watermark is distinct from stored.value
                   or exists (
-                    select 1 from driver_catalog expiring
+                    select 1 from expiring_sources expiring
                      where stored.updated_at is not null
                        and expiring.fetched_at + make_interval(days => $1) > stored.updated_at
                        and expiring.fetched_at + make_interval(days => $1) <= now()
@@ -193,7 +212,7 @@ export async function enqueueDriverRefreshJobs(
                 ) as requested,
               case
                 when exists (
-                  select 1 from driver_catalog expiring
+                  select 1 from expiring_sources expiring
                    where stored.updated_at is not null
                      and expiring.fetched_at + make_interval(days => $1) > stored.updated_at
                      and expiring.fetched_at + make_interval(days => $1) <= now()
@@ -209,12 +228,17 @@ export async function enqueueDriverRefreshJobs(
          from runs r
          cross join sweep
         where sweep.requested
-          and r.status <> 'hidden'
+          and ${REPROCESSABLE_STATUS_SQL("r")}
           and (r.driver_evaluated_at is null or r.driver_evaluated_at < sweep.evaluate_before)
+          -- Only a LIVE job blocks re-enqueue. A tombstone must not, or five
+          -- transient failures would freeze this run's driver findings forever:
+          -- claimNextReprocessJob already skips failed rows, so the row would
+          -- sit unclaimable and un-replaceable with no operator escape hatch.
           and not exists (
             select 1 from reprocess_jobs existing
              where existing.run_id = r.id
                and existing.kind = '${REPROCESS_KIND.driver}'
+               and existing.failed_at is null
           )
         order by r.driver_evaluated_at nulls first, r.id
         limit $2 + 1
@@ -223,7 +247,18 @@ export async function enqueueDriverRefreshJobs(
        select id, '${REPROCESS_KIND.driver}'
          from candidates
         limit $2
-       on conflict (run_id, kind) do nothing
+       -- Revive a tombstone rather than skipping it. Unlike the full lane -- where
+       -- capability_manifest_version can never advance for a run that always
+       -- fails, so retrying would loop forever -- this sweep only fires when a
+       -- source watermark actually moves. That bounds retries to real new
+       -- evidence, which is exactly when a stale failure deserves another look.
+       on conflict (run_id, kind) do update
+          set failed_at = null,
+              attempts = 0,
+              locked_at = null,
+              not_before = now(),
+              last_error = null
+        where reprocess_jobs.failed_at is not null
        returning run_id
      ), sweep_status as (
        select sweep.requested,

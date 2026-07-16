@@ -117,9 +117,18 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
   });
 
   async function settleDriverWatermark(): Promise<void> {
+    // Must mirror enqueueDriverRefreshJobs' watermark: both driver sources, or
+    // the stored value never matches and every sweep re-requests.
     await db.pool.query(
       `insert into reprocess_watermarks (key, value, updated_at)
-       select 'driver-catalog', max(fetched_at), now() from driver_catalog`,
+       select 'driver-catalog',
+              greatest(
+                (select max(fetched_at) from driver_catalog),
+                (select max(fetched_at) from game_driver_requirements)
+              ),
+              now()
+       on conflict (key) do update
+         set value = excluded.value, updated_at = excluded.updated_at`,
     );
   }
 
@@ -407,6 +416,48 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
     // The same run becomes eligible the moment it carries a verdict.
     await db.pool.query("update runs set status = 'validated' where id = $1", [pending]);
     expect(await enqueueFullReprocessJobs({}, db.pool)).toBe(1);
+  });
+
+  it("revives a driver tombstone when a source watermark moves again", async () => {
+    const id = "run_driver_tombstone_revive";
+    await insertRun(runFixture(id), db.pool);
+    await settleDriverWatermark();
+    await db.pool.query(
+      "update driver_catalog set fetched_at = now() + interval '1 hour', released_at = current_date",
+    );
+    expect((await enqueueDriverRefreshJobs({}, db.pool)).enqueued).toBe(1);
+
+    // Exhaust the attempts on transient errors: the row tombstones, and
+    // claimNextReprocessJob will never hand it out again.
+    const job = await claimNextReprocessJob(REPROCESS_KIND.driver, {}, db.pool);
+    await failReprocessJob(job!, "transient database hiccup", true, db.pool);
+    await settleDriverWatermark();
+    expect((await enqueueDriverRefreshJobs({}, db.pool)).enqueued).toBe(0);
+
+    // A later catalog refresh is genuinely new evidence — the frozen run must
+    // come back rather than stay excluded forever.
+    await db.pool.query(
+      "update driver_catalog set fetched_at = now() + interval '2 hours', released_at = current_date",
+    );
+    expect((await enqueueDriverRefreshJobs({}, db.pool)).enqueued).toBe(1);
+    const revived = await claimNextReprocessJob(REPROCESS_KIND.driver, {}, db.pool);
+    expect(revived?.runId).toBe(id);
+  });
+
+  it("sweeps driver findings from game_driver_requirements with an empty catalog", async () => {
+    const id = "run_driver_requirements_only";
+    await insertRun(runFixture(id), db.pool);
+    await settleDriverWatermark();
+    // gpuDriverOutdatedRule reads game_driver_requirements and needs no catalog
+    // at all. Watermarking only driver_catalog left an empty catalog blocking
+    // every driver refresh, including this one.
+    await db.pool.query("delete from driver_catalog");
+    await db.pool.query(
+      "update game_driver_requirements set fetched_at = now() + interval '1 hour'",
+    );
+    const sweep = await enqueueDriverRefreshJobs({}, db.pool);
+    expect(sweep.sweepRequested).toBe(true);
+    expect(sweep.enqueued).toBe(1);
   });
 
   it("reclaims an interrupted full job without duplicate diagnostics", async () => {
