@@ -102,6 +102,10 @@ export async function readVisibleBenchmarkSet(
           and ${cohortEligibilitySql("base", {
             allowWarmups: true,
             allowBenchmarkSetMembers: true,
+            // A run's own repeatability panel is not a public cohort. Requiring
+            // the current manifest version here would blank the card for every
+            // legacy run until an operator ran the CLI-only full lane.
+            requireCurrentCapabilityManifest: false,
           })}
      )
      select count(*) filter (where not r.is_warmup) as sample_count,
@@ -117,6 +121,9 @@ export async function readVisibleBenchmarkSet(
       where ${cohortEligibilitySql("r", {
         allowWarmups: true,
         allowBenchmarkSetMembers: true,
+        // Must match the `base` CTE: gating members on the manifest version
+        // would drop legacy repeats from their own set's count and variance.
+        requireCurrentCapabilityManifest: false,
       })}`,
     [run.benchmarkSetId, run.id],
     db,

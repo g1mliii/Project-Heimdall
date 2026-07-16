@@ -389,6 +389,26 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
     expect(tombstone.rows[0]?.failed_at).toBeInstanceOf(Date);
   });
 
+  it("never enumerates a pending run, so verification still compares client vs server", async () => {
+    const pending = "run_reprocess_pending";
+    // A pending run is the exact shape the backfill targets — legacy capability
+    // manifest, stored Parquet — but its run_summaries row still holds the
+    // CLIENT's numbers, and verifyRunJob decides validated/flagged by comparing
+    // them against the server recompute. Reprocessing it first would overwrite
+    // that row with the server value, making the comparison server-vs-server and
+    // laundering a tampered upload to validated.
+    await insertRun(
+      runFixture(pending, { capabilityManifest: undefined, status: RUN_STATUS.pending }),
+      db.pool,
+    );
+    await settleDriverWatermark();
+    expect(await enqueueFullReprocessJobs({}, db.pool)).toBe(0);
+
+    // The same run becomes eligible the moment it carries a verdict.
+    await db.pool.query("update runs set status = 'validated' where id = $1", [pending]);
+    expect(await enqueueFullReprocessJobs({}, db.pool)).toBe(1);
+  });
+
   it("reclaims an interrupted full job without duplicate diagnostics", async () => {
     const id = "run_reprocess_restart";
     await insertRun(runFixture(id, { capabilityManifest: undefined }), db.pool);

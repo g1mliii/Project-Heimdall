@@ -49,6 +49,26 @@ const CURRENT_RULE_CODES = DIAGNOSTIC_RULES.map((rule) => rule.code);
 const CURRENT_RULE_VERSIONS = DIAGNOSTIC_RULES.map((rule) => rule.version);
 export const DRIVER_RULE_CODES = DRIVER_RULES.map((rule) => rule.code);
 
+/**
+ * Only a run that already carries a verification verdict may be reprocessed.
+ *
+ * `pending` is excluded for integrity, not tidiness. A pending run's
+ * `run_summaries` row still holds the CLIENT's provisional numbers, and
+ * `verifyRunJob` decides `validated` vs `flagged` by calling
+ * `summaryMismatch(run.summary, recomputed)` — client against server. A
+ * reprocess job overwrites `run_summaries` with the server recompute (it never
+ * touches `status`), so a backfill that reaches a pending run first would leave
+ * verification comparing the server's numbers against themselves: mismatch is
+ * always null, and a tampered upload launders straight to `validated`. See
+ * CLAUDE.md — integrity is server-side, and the client is never trusted.
+ *
+ * Nothing is lost by waiting: a pending run's own verification job derives the
+ * canonical summary/capability/diagnostics from the same Parquet anyway, at the
+ * current versions. `hidden` stays excluded as moderation/deletion safety.
+ */
+const REPROCESSABLE_STATUS_SQL = (alias: string) =>
+  `${alias}.status in ('validated', 'flagged')`;
+
 /** Exported so the scale regression can EXPLAIN the exact operator query. */
 export const FULL_REPROCESS_ENQUEUE_SQL = `with current_rules as materialized (
        select code, version
@@ -57,7 +77,7 @@ export const FULL_REPROCESS_ENQUEUE_SQL = `with current_rules as materialized (
        select r.id, r.created_at
          from runs r
         where r.frames_object_key is not null
-          and r.status <> 'hidden'
+          and ${REPROCESSABLE_STATUS_SQL("r")}
           and (
             r.capability_manifest_version is null
             or r.capability_manifest_version < $4
@@ -99,7 +119,7 @@ export const FULL_REPROCESS_ENQUEUE_SQL = `with current_rules as materialized (
          from stale_diagnostic_ids stale
          join runs r on r.id = stale.run_id
         where r.frames_object_key is not null
-          and r.status <> 'hidden'
+          and ${REPROCESSABLE_STATUS_SQL("r")}
           and not exists (
             select 1 from reprocess_jobs existing
              where existing.run_id = r.id

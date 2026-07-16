@@ -6,7 +6,14 @@
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { deriveCapabilityManifest } from "@heimdall/parsers";
-import { RUN_STATUS, RUN_VISIBILITY, validFrames, validRun, validSummary } from "@heimdall/shared";
+import {
+  CAPABILITY_MANIFEST_VERSION,
+  RUN_STATUS,
+  RUN_VISIBILITY,
+  validFrames,
+  validRun,
+  validSummary,
+} from "@heimdall/shared";
 import type { Run } from "@heimdall/shared";
 import {
   insertRun,
@@ -601,6 +608,24 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       });
       expect(summary?.stdDevAvgFps).toBeCloseTo(0.5, 8);
       expect(summary?.coefficientOfVariation).toBeCloseTo(0.5 / 100.5, 8);
+
+      // A legacy set — capability manifest predating the current version, i.e.
+      // exactly the population Phase 6.7 backfills — keeps its repeatability
+      // panel. The manifest version gates public cohorts, not a run's own set;
+      // gating here would blank the card until an operator ran the CLI-only
+      // full lane, with nothing on the page explaining why.
+      await db.pool.query(
+        "update runs set capability_manifest_version = null where benchmark_set_id = $1",
+        [benchmarkSetId],
+      );
+      expect(await readVisibleBenchmarkSet(primary, db.pool)).toMatchObject({
+        sampleCount: 2,
+        warmupRunCount: 1,
+      });
+      await db.pool.query(
+        "update runs set capability_manifest_version = $1 where benchmark_set_id = $2",
+        [CAPABILITY_MANIFEST_VERSION, benchmarkSetId],
+      );
 
       await db.pool.query("update runs set game_id = null, gpu_hardware_id = null where id = $1", [
         primary.id,

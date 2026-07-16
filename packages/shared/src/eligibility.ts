@@ -89,6 +89,15 @@ export interface CohortEligibilitySqlOptions {
   allowWarmups?: boolean;
   /** Auxiliary set reads inspect raw members before Phase 7 chooses one representative. */
   allowBenchmarkSetMembers?: boolean;
+  /**
+   * Require a capability manifest at the CURRENT version. Public cohorts must
+   * (a metric's denominator depends on proven sensors), but an owner-facing read
+   * of a run's own benchmark set must not: a legacy run whose manifest predates
+   * the current version — exactly the population Phase 6.7 backfills — would
+   * otherwise lose its repeatability panel until an operator runs the CLI-only
+   * full lane. Comparability itself does not depend on the manifest version.
+   */
+  requireCurrentCapabilityManifest?: boolean;
 }
 
 /**
@@ -110,9 +119,16 @@ export function cohortEligibilitySql(
     // This helper is the code source mirrored by the 0020/0021/0022 partial
     // index predicates; keeping it as a conjunct preserves index implication.
     comparabilityProfileSql(alias),
-    `${alias}.capability_manifest_version is not null`,
-    `${alias}.capability_manifest_version >= ${CAPABILITY_MANIFEST_VERSION}`,
   ];
+  if (options.requireCurrentCapabilityManifest ?? true) {
+    // The is-not-null conjunct is NOT redundant next to `>= N`. In a WHERE
+    // clause it would be — null and false both drop the row — but this fragment
+    // is also SELECTed as a value (the TS↔SQL parity property test), and
+    // `true and null` is null, not false. Keep it so the predicate always
+    // returns a real boolean.
+    predicates.push(`${alias}.capability_manifest_version is not null`);
+    predicates.push(`${alias}.capability_manifest_version >= ${CAPABILITY_MANIFEST_VERSION}`);
+  }
   if (!options.allowWarmups) {
     predicates.push(`${alias}.is_warmup = false`);
   }
