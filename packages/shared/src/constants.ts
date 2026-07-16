@@ -84,6 +84,10 @@ export const DIAGNOSTICS = {
   frameCapMinStableFraction: 0.9,
   /** Curated game-ready driver requirements self-suppress after this age. */
   driverRequirementMaxAgeDays: 30,
+  /** Latest-driver catalog rows self-suppress if the ingest has not refreshed them. */
+  driverCatalogMaxAgeDays: 30,
+  /** Give a newly published driver time to settle before recommending it. */
+  driverUpdateGraceDays: 7,
   /**
    * Confidence-graded bottleneck attribution (§16b), computed from VERIFIED
    * per-frame busy times (PresentMon v2 CPUBusy/GPUBusy, CapFrameX MsGPUActive).
@@ -171,6 +175,11 @@ export const UNKNOWN_HARDWARE = {
 export const INGEST_LIMITS = {
   /** ~2.3 h at 60 fps; keeps the Parquet far below the server read cap. */
   maxFramesPerRun: 500_000,
+  /**
+   * Browser-side raw-capture cap. Parsing expands UTF-8 bytes into text, lines,
+   * and frame objects, so reject before `File.arrayBuffer()` can spike a tab.
+   */
+  maxCaptureBytes: 64 * 1024 * 1024,
   /**
    * Hard cap on the uploaded Parquet. The web app's R2 MAX_OBJECT_READ_BYTES
    * is defined AS this constant, so the verification worker can always read

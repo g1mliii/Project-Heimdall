@@ -8,37 +8,60 @@
 
 import { MIN_FRAME_TIME_MS, type FrameSample, type HardwareSnapshot } from "@heimdall/shared";
 
-import { failure, success, type ParsedCapture, type ParseResult } from "./errors";
+import {
+  failure,
+  success,
+  type CaptureParseOptions,
+  type ParsedCapture,
+  type ParseResult,
+} from "./errors";
 import { decodeInput, splitLines } from "./internal/decode";
 import { findCsvHeader, headerFailure } from "./internal/csv";
-import { CAPFRAMEX_COLUMNS, type SensorColumnField } from "./internal/columns";
-import { finalizeFrames, guardSensor, parseFrameRowsAt } from "./internal/frames";
+import {
+  CAPFRAMEX_COLUMNS,
+  frameAlignedSensorMap,
+  type SensorColumnField,
+} from "./internal/columns";
+import {
+  finalizeFrames,
+  guardSensor,
+  parseFrameRowsAt,
+  tooManyFramesFailure,
+} from "./internal/frames";
 import { inferGpuVendor } from "./internal/vendor";
 import { parseVramTotalMb } from "./internal/hardware";
 import { parserVersionString } from "./version";
 
 const SOURCE = "capframex" as const;
 
-export function parseCapFrameX(input: string | Uint8Array): ParseResult<ParsedCapture> {
+export function parseCapFrameX(
+  input: string | Uint8Array,
+  { maxFrames }: CaptureParseOptions = {},
+): ParseResult<ParsedCapture> {
   const text = decodeInput(input);
   const sniff = /\S/.exec(text)?.[0];
   if (sniff === undefined) return failure(SOURCE, "empty-input", "Input is empty.");
-  if (sniff === "{" || sniff === "[") return parseJson(text);
-  return parseCsv(text);
+  if (sniff === "{" || sniff === "[") return parseJson(text, maxFrames);
+  return parseCsv(text, maxFrames);
 }
 
 /* ── CSV branch (§7.1–§7.2) ─────────────────────────────────────────────── */
 
-function parseCsv(text: string): ParseResult<ParsedCapture> {
+function parseCsv(text: string, maxFrames?: number): ParseResult<ParsedCapture> {
   const lines = splitLines(text);
   const found = findCsvHeader(lines, CAPFRAMEX_COLUMNS.frameTimeMs);
   if (found === undefined) return headerFailure(SOURCE, lines);
 
-  const rows = parseFrameRowsAt(SOURCE, lines, found, CAPFRAMEX_COLUMNS);
+  const rows = parseFrameRowsAt(SOURCE, lines, found, CAPFRAMEX_COLUMNS, { maxFrames });
   if (!rows.ok) return rows;
 
   return success(
-    { source: SOURCE, frames: rows.value, parserVersion: parserVersionString(SOURCE) },
+    {
+      source: SOURCE,
+      frames: rows.value,
+      sensorAlignment: frameAlignedSensorMap(CAPFRAMEX_COLUMNS),
+      parserVersion: parserVersionString(SOURCE),
+    },
     rows.warnings,
   );
 }
@@ -52,8 +75,22 @@ const JSON_SENSOR_KEYS: Partial<Record<SensorColumnField, readonly string[]>> = 
   gpuPowerW: ["gpupower"],
   vramUsedMb: ["gpumemusage"],
   cpuLoadPct: ["cpuusage"],
-  gpuBusyMs: ["msgpuactive"],
+  cpuBusyMs: ["cpuactive"],
+  gpuBusyMs: ["gpuactive", "msgpuactive"],
 };
+
+/** CPUActive is useful when present but is not emitted by every JSON generation. */
+const JSON_EXPECTED_SENSOR_FIELDS = (
+  Object.keys(JSON_SENSOR_KEYS) as SensorColumnField[]
+).filter((field) => field !== "cpuBusyMs");
+
+interface PeriodicSensorSeries {
+  timesMs: number[];
+  values: number[];
+}
+
+type PeriodicSensors = Partial<Record<SensorColumnField, PeriodicSensorSeries>>;
+type PeriodicSensorEntry = [SensorColumnField, PeriodicSensorSeries];
 
 /** Case-insensitive property lookup on a plain object. */
 function getCi(obj: Record<string, unknown>, names: readonly string[]): unknown {
@@ -76,7 +113,127 @@ function numberAt(array: unknown, index: number): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function parseJson(text: string): ParseResult<ParsedCapture> {
+/** Map a CapFrameX 1.8.6 SensorData2 channel onto the canonical sensor fields. */
+function sensorData2Field(channel: Record<string, unknown>): SensorColumnField | undefined {
+  const type = getCi(channel, ["type"]);
+  const name = getCi(channel, ["name"]);
+  const stableIdentifier = getCi(channel, ["stableidentifier"]);
+  if (typeof type !== "string") return undefined;
+
+  const normalizedType = type.trim().toLowerCase();
+  const normalizedName = typeof name === "string" ? name.trim().toLowerCase() : "";
+  const normalizedStable =
+    typeof stableIdentifier === "string" ? stableIdentifier.trim().toLowerCase() : "";
+  const matches = (expectedName: string, stableSuffix: string): boolean =>
+    normalizedName === expectedName || normalizedStable.endsWith(stableSuffix);
+
+  if (normalizedType === "load" && matches("gpu core", "/load/gpu core")) {
+    return "gpuLoadPct";
+  }
+  if (normalizedType === "clock" && matches("gpu core", "/clock/gpu core")) {
+    return "gpuClockMhz";
+  }
+  if (normalizedType === "power" && matches("gpu tbp", "/power/gpu tbp")) {
+    return "gpuPowerW";
+  }
+  if (
+    normalizedType === "data" &&
+    matches("gpu memory dedicated", "/data/gpu memory dedicated")
+  ) {
+    return "vramUsedMb";
+  }
+  if (normalizedType === "load" && matches("cpu total", "/load/cpu total")) {
+    return "cpuLoadPct";
+  }
+  return undefined;
+}
+
+/**
+ * Read CapFrameX's periodic SensorData2 blocks. Each block has a MeasureTime
+ * channel and several independently sized sensor `Values` arrays.
+ */
+function parseSensorData2(value: unknown): PeriodicSensors {
+  const blocks = Array.isArray(value) ? value : [value];
+  const result: PeriodicSensors = {};
+  const needsSort = new Set<SensorColumnField>();
+
+  for (const rawBlock of blocks) {
+    const block = asRecord(rawBlock);
+    if (block === undefined) continue;
+    const measureTime = asRecord(getCi(block, ["measuretime"]));
+    const times = measureTime === undefined ? undefined : getCi(measureTime, ["values"]);
+    if (!Array.isArray(times)) continue;
+    const timesMs = times.map((_, index) => {
+      const seconds = numberAt(times, index);
+      return seconds === undefined || seconds < 0 ? undefined : seconds * 1000;
+    });
+
+    for (const rawChannel of Object.values(block)) {
+      const channel = asRecord(rawChannel);
+      if (channel === undefined) continue;
+      const field = sensorData2Field(channel);
+      if (field === undefined) continue;
+      const values = getCi(channel, ["values"]);
+      if (!Array.isArray(values)) continue;
+
+      const scale = field === "vramUsedMb" ? 1024 : 1;
+      const sampleCount = Math.min(times.length, values.length);
+      for (let index = 0; index < sampleCount; index++) {
+        const timeMs = timesMs[index];
+        const raw = numberAt(values, index);
+        const sensorValue = guardSensor(field, raw === undefined ? undefined : raw * scale);
+        if (timeMs === undefined || sensorValue === undefined) continue;
+        const series = (result[field] ??= { timesMs: [], values: [] });
+        if (series.timesMs.length > 0 && series.timesMs.at(-1)! > timeMs) needsSort.add(field);
+        series.timesMs.push(timeMs);
+        series.values.push(sensorValue);
+      }
+    }
+  }
+
+  for (const field of needsSort) {
+    const series = result[field]!;
+    const indices = series.timesMs.map((_, index) => index);
+    indices.sort((left, right) => series.timesMs[left]! - series.timesMs[right]!);
+    series.timesMs = indices.map((index) => series.timesMs[index]!);
+    series.values = indices.map((index) => series.values[index]!);
+  }
+  return result;
+}
+
+/**
+ * Attach the latest periodic sample at-or-before this frame, without looking ahead.
+ *
+ * `MeasureTime` and `TimeInSeconds` share an origin (both count from capture
+ * start), but frames are re-based to 0 via `baselineMs`, so the series must be
+ * re-based by the same amount to stay on one timeline. A capture started
+ * mid-session (`TimeInSeconds[0]` well above 0) would otherwise compare frame
+ * times near 0 against sample times in the thousands and attach nothing at all —
+ * while the sensor still reported as present.
+ */
+function attachPeriodicSensors(
+  frame: FrameSample,
+  sensors: readonly PeriodicSensorEntry[],
+  localTimeMs: number,
+  baselineMs: number,
+  cursors: Partial<Record<SensorColumnField, number>>,
+): void {
+  for (const [field, series] of sensors) {
+    if (frame[field] !== undefined || series.values.length === 0) continue;
+    let cursor = cursors[field] ?? -1;
+    while (
+      cursor + 1 < series.timesMs.length &&
+      series.timesMs[cursor + 1]! - baselineMs <= localTimeMs
+    ) {
+      cursor++;
+    }
+    cursors[field] = cursor;
+    if (cursor < 0) continue;
+    frame[field] = series.values[cursor]!;
+  }
+}
+
+function parseJson(text: string, maxFrames?: number): ParseResult<ParsedCapture> {
   let root: unknown;
   try {
     root = JSON.parse(text);
@@ -92,38 +249,48 @@ function parseJson(text: string): ParseResult<ParsedCapture> {
 
   const runsRaw = getCi(rootObj, ["runs"]);
   const runs = Array.isArray(runsRaw) ? runsRaw : [];
-  const captures = runs
+  const captureRuns = runs
     .map((run) => {
       const runObj = asRecord(run);
-      return runObj === undefined ? undefined : asRecord(getCi(runObj, ["capturedata"]));
+      if (runObj === undefined) return undefined;
+      const capture = asRecord(getCi(runObj, ["capturedata"]));
+      return capture === undefined
+        ? undefined
+        : { capture, sensorData2: getCi(runObj, ["sensordata2"]) };
     })
-    .filter((c): c is Record<string, unknown> => c !== undefined);
-  if (captures.length === 0) {
+    .filter((run): run is { capture: Record<string, unknown>; sensorData2: unknown } =>
+      run !== undefined,
+    );
+  if (captureRuns.length === 0) {
     return failure(SOURCE, "missing-columns", "JSON has no Runs[].CaptureData block.");
   }
 
   const frames: FrameSample[] = [];
-  const missingSensors = new Set<SensorColumnField>(
-    Object.keys(JSON_SENSOR_KEYS) as SensorColumnField[],
-  );
+  const missingSensors = new Set<SensorColumnField>(JSON_EXPECTED_SENSOR_FIELDS);
   let badRows = 0;
   let totalRows = 0;
-  let cumulativeMs = 0;
+  let nextRunOffsetMs = 0;
+  const sensorAlignment: Partial<Record<SensorColumnField, boolean>> = {};
 
-  // Multi-run captures are concatenated; per-run TimeInSeconds restarts, so we
-  // only trust it for single-run files and fall back to the cumulative sum of
-  // frame times otherwise.
-  const useTimes = captures.length === 1;
-
-  for (const capture of captures) {
+  for (const { capture, sensorData2 } of captureRuns) {
     const frameTimes = getCi(capture, ["msbetweenpresents"]);
     if (!Array.isArray(frameTimes)) {
       return failure(SOURCE, "missing-columns", "CaptureData lacks a MsBetweenPresents array.");
     }
-    const times = useTimes ? getCi(capture, ["timeinseconds"]) : undefined;
+    const times = getCi(capture, ["timeinseconds"]);
     const timesArray = Array.isArray(times) ? times : undefined;
     let baselineMs: number | undefined;
     let lastRawMs: number | undefined;
+    const runOffsetMs = nextRunOffsetMs;
+    let runCumulativeMs = 0;
+    let runEndMs = runOffsetMs;
+    const periodicSensors = parseSensorData2(sensorData2);
+    const periodicEntries = Object.entries(periodicSensors) as PeriodicSensorEntry[];
+    const periodicCursors: Partial<Record<SensorColumnField, number>> = {};
+    for (const [field] of periodicEntries) {
+      missingSensors.delete(field);
+      sensorAlignment[field] = false;
+    }
 
     // Resolve each sensor array once per capture — getCi scans every
     // CaptureData key, so calling it per frame would be O(frames × keys).
@@ -135,6 +302,7 @@ function parseJson(text: string): ParseResult<ParsedCapture> {
       const array = getCi(capture, keys);
       if (!Array.isArray(array)) continue;
       missingSensors.delete(field);
+      sensorAlignment[field] ??= true;
       sensorArrays.push([field, array]);
     }
 
@@ -146,7 +314,7 @@ function parseJson(text: string): ParseResult<ParsedCapture> {
         continue;
       }
 
-      let timeMs: number;
+      let localTimeMs: number;
       if (timesArray !== undefined) {
         const rawSeconds = numberAt(timesArray, i);
         if (rawSeconds === undefined) {
@@ -159,22 +327,32 @@ function parseJson(text: string): ParseResult<ParsedCapture> {
           badRows++;
           continue;
         }
-        timeMs = rawMs - (baselineMs ?? rawMs);
+        localTimeMs = rawMs - (baselineMs ?? rawMs);
         baselineMs ??= rawMs;
         lastRawMs = rawMs;
       } else {
-        timeMs = cumulativeMs;
+        localTimeMs = runCumulativeMs;
       }
 
-      const frame: FrameSample = { timeMs, frameTimeMs };
+      if (maxFrames !== undefined && frames.length >= maxFrames) {
+        return tooManyFramesFailure(SOURCE, maxFrames);
+      }
+
+      const frame: FrameSample = { timeMs: runOffsetMs + localTimeMs, frameTimeMs };
       for (const [field, array] of sensorArrays) {
         const value = guardSensor(field, numberAt(array, i));
         if (value !== undefined) frame[field] = value;
       }
+      // `baselineMs` is set from the first accepted frame above, so it is
+      // resolved by the time any sample is attached; a run without
+      // `TimeInSeconds` counts from 0 already and needs no shift.
+      attachPeriodicSensors(frame, periodicEntries, localTimeMs, baselineMs ?? 0, periodicCursors);
 
-      cumulativeMs += frameTimeMs;
+      runCumulativeMs += frameTimeMs;
+      runEndMs = Math.max(runEndMs, frame.timeMs + frameTimeMs);
       frames.push(frame);
     }
+    nextRunOffsetMs = runEndMs;
   }
 
   const rows = finalizeFrames(SOURCE, {
@@ -188,6 +366,7 @@ function parseJson(text: string): ParseResult<ParsedCapture> {
   const value: ParsedCapture = {
     source: SOURCE,
     frames: rows.value,
+    sensorAlignment,
     parserVersion: parserVersionString(SOURCE),
   };
   const hardware = extractHardware(rootObj);

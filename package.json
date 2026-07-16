@@ -9,6 +9,11 @@
     "node": "^22.0.0 || ^24.0.0",
     "pnpm": ">=11.2.2 <12"
   },
+  "dependencyPolicy": {
+    "minimumAgeExceptions": {
+      "wrangler@4.110.0": "Security exception: replaces the 30-day-soaked 4.100.0 release whose Miniflare tree contains patched undici and ws advisories (GHSA-vmh5-mc38-953g, GHSA-vxpw-j846-p89q, GHSA-hm92-r4w5-c3mj, GHSA-96hv-2xvq-fx4p)."
+    }
+  },
   "scripts": {
     "dev": "pnpm --filter @heimdall/ui build && pnpm --filter @heimdall/web dev",
     "build": "pnpm --filter @heimdall/web build",

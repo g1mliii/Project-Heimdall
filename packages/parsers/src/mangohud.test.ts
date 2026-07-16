@@ -45,6 +45,15 @@ describe("parseMangoHud (§8)", () => {
     });
   });
 
+  it("preserves Mesa's version string for Linux driver-currency checks", () => {
+    const { value } = parseOk(readFixture("mangohud/amd-mesa-basic.csv"));
+    expect(value.hardware).toMatchObject({
+      gpuVendor: "amd",
+      os: "Arch Linux",
+      gpuDriver: "Mesa 26.1.4",
+    });
+  });
+
   it("still parses frames when the sysinfo block is missing", () => {
     const text = readFixtureText("mangohud/nvidia-basic.csv");
     const withoutSysinfo = text.split("\n").slice(2).join("\n");

@@ -49,6 +49,32 @@ describe("parseAnyCapture", () => {
     expect(parseAnyCapture(input)).toMatchObject({ ok: true, source: "presentmon" });
   });
 
+  it("forwards a frame cap to the selected parser before it retains every row", () => {
+    const input = [
+      "SwapChainAddress,TimeInSeconds,MsBetweenPresents",
+      "0x1,0,10",
+      "0x1,0.01,10",
+      "0x1,0.02,10",
+    ].join("\n");
+
+    expect(parseAnyCapture(input, { maxFrames: 2 })).toMatchObject({
+      ok: false,
+      error: { code: "too-many-frames", source: "presentmon" },
+    });
+  });
+
+  it("does not reinterpret a stream-capped PresentMon capture as another source", () => {
+    const lines = ["Application,ProcessID,SwapChainAddress,TimeInSeconds,MsBetweenPresents"];
+    for (let index = 0; index <= 1_024; index++) {
+      lines.push(`game-${index}.exe,${index},0x${index},${index / 100},10`);
+    }
+
+    expect(parseAnyCapture(lines.join("\n"))).toMatchObject({
+      ok: false,
+      error: { code: "too-many-streams", source: "presentmon" },
+    });
+  });
+
   it.each(["le", "be"] as const)("detects a UTF-16%s PresentMon v1 capture", (endian) => {
     const input = encodeUtf16WithBom(
       [

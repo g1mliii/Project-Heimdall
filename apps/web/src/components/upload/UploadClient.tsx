@@ -32,7 +32,7 @@ import type {
   UploadResult,
   UploadSuccess,
 } from "@/lib/upload/upload-run";
-import type { MethodologyManifest } from "@heimdall/shared";
+import { MAX_INDEXED_METADATA_TEXT_LENGTH, type MethodologyManifest } from "@heimdall/shared";
 import {
   ArrowRightIcon,
   CheckIcon,
@@ -140,6 +140,7 @@ export function UploadClient() {
   const [resolution, setResolution] = React.useState("");
   const [sceneType, setSceneType] = React.useState<MethodologyManifest["sceneType"]>("freeform");
   const [settingsPreset, setSettingsPreset] = React.useState("");
+  const [graphicsApi, setGraphicsApi] = React.useState("");
   const [upscaler, setUpscaler] = React.useState<MethodologyManifest["upscaler"]>("unknown");
   const [rayTracing, setRayTracing] = React.useState<MethodologyManifest["rayTracing"]>("unknown");
   const [capFps, setCapFps] = React.useState("");
@@ -172,6 +173,7 @@ export function UploadClient() {
       ...(scene.trim() === "" ? {} : { scene: scene.trim() }),
       ...(resolution.trim() === "" ? {} : { resolution: resolution.trim() }),
       ...(settingsPreset.trim() === "" ? {} : { settingsPreset: settingsPreset.trim() }),
+      ...(graphicsApi.trim() === "" ? {} : { graphicsApi: graphicsApi.trim().toLowerCase() }),
       upscaler,
       rayTracing,
       framePacing: {
@@ -362,8 +364,10 @@ export function UploadClient() {
               />
               <Input
                 label="Scene or route"
+                hint="Needed to compare repeats of this benchmark."
                 placeholder="Downtown benchmark loop"
                 value={scene}
+                maxLength={MAX_INDEXED_METADATA_TEXT_LENGTH}
                 onChange={(event) => setScene(event.target.value)}
                 disabled={busy}
               />
@@ -372,6 +376,7 @@ export function UploadClient() {
                 hint="Required for PresentMon repeats when the capture has no hardware block."
                 placeholder="2560x1440"
                 value={resolution}
+                maxLength={MAX_INDEXED_METADATA_TEXT_LENGTH}
                 onChange={(event) => setResolution(event.target.value)}
                 disabled={busy}
               />
@@ -388,9 +393,20 @@ export function UploadClient() {
               />
               <Input
                 label="Settings preset"
+                hint="Needed to compare repeats of this benchmark."
                 placeholder="Ultra"
                 value={settingsPreset}
+                maxLength={MAX_INDEXED_METADATA_TEXT_LENGTH}
                 onChange={(event) => setSettingsPreset(event.target.value)}
+                disabled={busy}
+              />
+              <Input
+                label="Graphics API"
+                hint="Capture files don't record this — DX11 and DX12 runs only stay separate if you declare it."
+                placeholder="DX12"
+                value={graphicsApi}
+                maxLength={MAX_INDEXED_METADATA_TEXT_LENGTH}
+                onChange={(event) => setGraphicsApi(event.target.value)}
                 disabled={busy}
               />
               <Select

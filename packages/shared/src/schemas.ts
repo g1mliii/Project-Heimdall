@@ -49,10 +49,16 @@ export const runStatusSchema = z.enum([
 
 const pct = z.number().min(0).max(100);
 const MAX_METADATA_TEXT_LENGTH = 512;
-// `resolution` and `graphicsApi` are copied into indexed run columns. Keep
-// their worst-case UTF-8 tuple contribution safely below Postgres's B-tree
-// index-row limit while leaving descriptive manifest fields at 512 characters.
-const MAX_INDEXED_METADATA_TEXT_LENGTH = 64;
+/**
+ * `resolution` and `graphicsApi` are copied into indexed run columns. Keep
+ * their worst-case UTF-8 tuple contribution safely below Postgres's B-tree
+ * index-row limit while leaving descriptive manifest fields at 512 characters.
+ *
+ * Exported so the upload form can bound its own inputs to the same limit rather
+ * than letting an overlong entry travel to the API only to come back a 400 that
+ * names no field.
+ */
+export const MAX_INDEXED_METADATA_TEXT_LENGTH = 64;
 const MAX_MANIFEST_CAVEATS = 16;
 const MAX_EVIDENCE_METRICS = 16;
 const metadataText = (maxLength: number) => z.string().trim().min(1).max(maxLength);
@@ -62,6 +68,12 @@ const indexedMetadataTextSchema = metadataText(MAX_INDEXED_METADATA_TEXT_LENGTH)
 const benchmarkSetIdSchema = z.string().uuid();
 /** URL-safe 256-bit browser-held capability used only to join an existing set. */
 const benchmarkSetSecretSchema = z.string().regex(/^[A-Za-z0-9_-]{43,128}$/);
+/** Browser-local benchmark-set credentials use the same contract as the API. */
+export const benchmarkSetCredentialsSchema = z.object({
+  id: benchmarkSetIdSchema,
+  secret: benchmarkSetSecretSchema,
+});
+export type BenchmarkSetCredentials = z.infer<typeof benchmarkSetCredentialsSchema>;
 const evidenceMetricNameSchema = z.string().trim().min(1).max(64);
 
 export const hardwareSnapshotSchema = z.object({

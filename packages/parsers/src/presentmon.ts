@@ -1,8 +1,9 @@
 /**
- * Intel PresentMon CSV parser (§8). Two console-capture generations share the
- * output shape with CapFrameX:
+ * Intel PresentMon CSV parser (§8). Three tested output profiles share the
+ * same normalized shape as CapFrameX:
  *
  * - v1.x: `MsBetweenPresents` + `TimeInSeconds`, no busy-time or telemetry.
+ * - v2.x `--v1_metrics`: the v1-compatible columns plus `msGPUActive`.
  * - v2.x: `FrameTime` (+ `CPUStartTime`), plus the GamersNexus-style
  *   bottleneck columns `CPUBusy`/`GPUBusy`, opt-in GPU telemetry
  *   (`GPUUtilization`/`GPUFrequency`/`GPUPower`/`GPUMemUsed`), and `FrameType`
@@ -21,6 +22,7 @@ import type { PresentationMode, SyncMode } from "@heimdall/shared";
 import {
   failure,
   success,
+  type CaptureParseOptions,
   type CaptureSemantics,
   type ParsedCapture,
   type ParseResult,
@@ -31,15 +33,21 @@ import { findColumn, findCsvHeader, headerFailure, splitCsvLine, type FoundHeade
 import {
   PRESENTMON_PROFILES,
   PRESENTMON_SEMANTICS_COLUMNS,
+  PRESENTMON_V1_COMPAT_COLUMNS,
   PRESENTMON_V1_COLUMNS,
   PRESENTMON_V2_COLUMNS,
+  frameAlignedSensorMap,
 } from "./internal/columns";
 import { parseFrameRowsAt, type FrameRowsInput } from "./internal/frames";
 import { parserVersionString } from "./version";
 
 const SOURCE = "presentmon" as const;
+const MAX_TRACKED_STREAMS = 1_024;
 
-export function parsePresentMon(input: string | Uint8Array): ParseResult<ParsedCapture> {
+export function parsePresentMon(
+  input: string | Uint8Array,
+  { maxFrames }: CaptureParseOptions = {},
+): ParseResult<ParsedCapture> {
   const text = decodeInput(input);
   const lines = splitLines(text);
   if (lines.length === 0) return failure(SOURCE, "empty-input", "Input is empty.");
@@ -52,14 +60,28 @@ export function parsePresentMon(input: string | Uint8Array): ParseResult<ParsedC
   if (found === undefined) return headerFailure(SOURCE, lines);
 
   const isV2 = findColumn(found.header, PRESENTMON_V2_COLUMNS.frameTimeMs) !== undefined;
-  const columns = isV2 ? PRESENTMON_V2_COLUMNS : PRESENTMON_V1_COLUMNS;
-  const captureProfile = isV2 ? PRESENTMON_PROFILES[1] : PRESENTMON_PROFILES[0];
+  const isV1MetricsCompat =
+    !isV2 &&
+    findColumn(found.header, PRESENTMON_V1_COMPAT_COLUMNS.sensors.gpuBusyMs ?? []) !== undefined;
+  const columns = isV2
+    ? PRESENTMON_V2_COLUMNS
+    : isV1MetricsCompat
+      ? PRESENTMON_V1_COMPAT_COLUMNS
+      : PRESENTMON_V1_COLUMNS;
+  const captureProfile = isV2
+    ? PRESENTMON_PROFILES.v2
+    : isV1MetricsCompat
+      ? PRESENTMON_PROFILES.v1MetricsCompat
+      : PRESENTMON_PROFILES.v1;
 
   const stream = dominantStream(lines, found);
+  if (stream.error !== undefined) return failure(SOURCE, "too-many-streams", stream.error);
   const generatedColumn = findColumn(found.header, ["frametype"]);
   const rows = parseFrameRowsAt(SOURCE, lines, found, columns, {
     ...(stream.rowFilter === undefined ? {} : { rowFilter: stream.rowFilter }),
     ...(generatedColumn === undefined ? {} : { generatedColumn }),
+    ...(isV2 ? presentMonV2TimeColumn(found) : {}),
+    ...(maxFrames === undefined ? {} : { maxFrames }),
   });
   if (!rows.ok) return rows;
 
@@ -73,10 +95,17 @@ export function parsePresentMon(input: string | Uint8Array): ParseResult<ParsedC
       frames: rows.value,
       parserVersion: parserVersionString(SOURCE),
       captureProfile: captureProfile.id,
+      sensorAlignment: frameAlignedSensorMap(columns),
       ...(captureSemantics ? { captureSemantics } : {}),
     },
     [...rows.warnings, ...stream.warnings],
   );
+}
+
+/** PresentMon 2.x writes CPUStartTime in milliseconds, not seconds. */
+function presentMonV2TimeColumn(found: FoundHeader): Pick<FrameRowsInput, "timeColumn"> {
+  const index = findColumn(found.header, ["cpustarttime"]);
+  return index === undefined ? {} : { timeColumn: { index, unit: "milliseconds" } };
 }
 
 /** Map a PresentMon `PresentMode` cell to a canonical presentation mode (§16a.3). */
@@ -157,13 +186,23 @@ export function detectPresentMonSemantics(
   return undefined;
 }
 
-/** Normalize the small runtime vocabulary PresentMon writes into methodology. */
+/**
+ * Normalize the small runtime vocabulary PresentMon writes into methodology.
+ *
+ * `Runtime` names the PRESENT runtime, not the graphics API: DXGI is what every
+ * D3D10/11/12 title presents through, so it cannot tell DX11 from DX12 and is
+ * NOT evidence of an API. Returning it verbatim would pool DX11 and DX12 runs
+ * into one comparability bucket — exactly what the graphics-API key exists to
+ * prevent. Only a value that names an API on its own is mapped; anything else
+ * degrades to "undeclared" (§16d.1) and the user declares the API instead.
+ */
 function toGraphicsApi(raw: string): string | undefined {
   const value = raw.trim().toLowerCase();
-  if (value === "") return undefined;
   if (value === "d3d12" || value === "direct3d 12") return "dx12";
   if (value === "d3d11" || value === "direct3d 11") return "dx11";
-  return value;
+  if (value === "d3d9" || value === "direct3d 9") return "dx9";
+  if (value === "vulkan") return "vulkan";
+  return undefined;
 }
 
 /**
@@ -185,6 +224,15 @@ function detectSyncMode(tearingCell?: string, syncIntervalCell?: string): SyncMo
  * stream with the most rows. Returns no filter when the columns are absent or
  * only one stream is present.
  */
+function noDominantStreamError(): { warnings: ParseWarning[]; error: string } {
+  return {
+    warnings: [],
+    error:
+      `Capture contains more than ${MAX_TRACKED_STREAMS} process/swapchain streams ` +
+      "and none of them dominates.",
+  };
+}
+
 function dominantStream(
   lines: readonly string[],
   found: FoundHeader,
@@ -192,6 +240,7 @@ function dominantStream(
   rowFilter?: FrameRowsInput["rowFilter"];
   firstRow?: readonly string[];
   warnings: ParseWarning[];
+  error?: string;
 } {
   const indices = ["application", "processid", "swapchainaddress"]
     .map((alias) => findColumn(found.header, [alias]))
@@ -209,26 +258,83 @@ function dominantStream(
     indices.map((index) => cells[index]?.trim() ?? "").join("|");
 
   const counts = new Map<string, number>();
+  // Retain at most one row per bounded stream so semantics detection does not
+  // need to rescan a potentially 500k-frame capture after grouping it.
   const firstRows = new Map<string, readonly string[]>();
+  let totalCount = 0;
+  let evicted = false;
   for (let i = found.index + 1; i < lines.length; i++) {
     const line = lines[i]!;
     if (line.trim() === "") continue;
     const cells = splitCsvLine(line, found.dialect.delimiter);
+    totalCount++;
     const key = keyOf(cells);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-    if (!firstRows.has(key)) firstRows.set(key, cells);
+    const previous = counts.get(key);
+    if (previous !== undefined) {
+      counts.set(key, previous + 1);
+      continue;
+    }
+    if (counts.size >= MAX_TRACKED_STREAMS) {
+      // Misra-Gries: charge an untracked stream against every tracked one
+      // rather than rejecting the capture. A long system-wide session can pass
+      // MAX_TRACKED_STREAMS on transient swapchains alone, and failing there
+      // would make it unuploadable. Any stream holding more than
+      // 1/(MAX_TRACKED_STREAMS + 1) of all rows — which a real capture's game
+      // stream always does — cannot be evicted by this, so the dominant stream
+      // is still tracked when the scan ends. Amortized O(1) per row: each pass
+      // consumes MAX_TRACKED_STREAMS counts against a total of `totalCount`.
+      evicted = true;
+      for (const [tracked, count] of counts) {
+        if (count > 1) {
+          counts.set(tracked, count - 1);
+        } else {
+          counts.delete(tracked);
+          firstRows.delete(tracked);
+        }
+      }
+      continue;
+    }
+    counts.set(key, 1);
+    firstRows.set(key, cells);
   }
-  if (counts.size <= 1) return { warnings: [], firstRow: firstRows.values().next().value };
+
+  if (!evicted && counts.size <= 1) {
+    return { warnings: [], firstRow: firstRows.values().next().value };
+  }
+  if (counts.size === 0) {
+    // Every tracked stream was evicted, so no stream holds a large enough share
+    // to be the dominant one. There is nothing to attribute this capture to.
+    return noDominantStreamError();
+  }
+
+  // Eviction leaves the surviving counts as lower bounds, so recount them
+  // exactly before picking a winner and reporting how much was dropped.
+  if (evicted) {
+    for (const key of counts.keys()) counts.set(key, 0);
+    for (let i = found.index + 1; i < lines.length; i++) {
+      const line = lines[i]!;
+      if (line.trim() === "") continue;
+      const key = keyOf(splitCsvLine(line, found.dialect.delimiter));
+      const count = counts.get(key);
+      if (count !== undefined) counts.set(key, count + 1);
+    }
+  }
 
   let dominant = "";
   let dominantCount = 0;
-  let totalCount = 0;
   for (const [key, count] of counts) {
-    totalCount += count;
     if (count > dominantCount) {
       dominant = key;
       dominantCount = count;
     }
+  }
+
+  // Misra-Gries only guarantees retention for a stream above this share. A
+  // lower-count survivor can be an arbitrary residue of the eviction pass, so
+  // selecting it would silently turn a multi-stream capture into unrelated
+  // frame data.
+  if (evicted && dominantCount * (MAX_TRACKED_STREAMS + 1) <= totalCount) {
+    return noDominantStreamError();
   }
 
   const dropped = totalCount - dominantCount;
@@ -239,7 +345,9 @@ function dominantStream(
       {
         code: "multiple-streams",
         message:
-          `Capture contains ${counts.size} process/swapchain streams; ` +
+          (evicted
+            ? `Capture contains over ${MAX_TRACKED_STREAMS} process/swapchain streams; `
+            : `Capture contains ${counts.size} process/swapchain streams; `) +
           `kept the dominant one and dropped ${dropped} row(s) from the others.`,
         count: dropped,
       },

@@ -1,0 +1,41 @@
+{
+  "summary": {
+    "avgFps": 65.6348647150577,
+    "onePercentLowFps": 49.372963365261185,
+    "pointOnePercentLowFps": 49.060010204482126,
+    "frameTimeP50Ms": 15.2671,
+    "frameTimeP95Ms": 18.38,
+    "frameTimeP99Ms": 20.1248,
+    "stutterCount": 0,
+    "generatedFramePct": 0,
+    "pointOnePercentLowConfidence": "low",
+    "sampleCount": 120,
+    "durationSeconds": 1.8282966000000003
+  },
+  "sampleCount": 120,
+  "firstFrame": {
+    "timeMs": 0,
+    "frameTimeMs": 5.3232,
+    "cpuBusyMs": 5.2226,
+    "gpuBusyMs": 15.5204
+  },
+  "lastFrame": {
+    "timeMs": 1811.34530000054,
+    "frameTimeMs": 16.9392,
+    "cpuBusyMs": 16.8507,
+    "gpuBusyMs": 15.1584,
+    "vramUsedMb": 11764,
+    "gpuLoadPct": 100,
+    "gpuClockMhz": 2724,
+    "cpuLoadPct": 27.67559242248535,
+    "gpuPowerW": 317
+  },
+  "hardware": {
+    "gpu": "AMD Radeon GPU",
+    "cpu": "AMD Ryzen CPU",
+    "gpuVendor": "amd",
+    "os": "Windows 11",
+    "gpuDriver": "Adrenalin 26.3.1",
+    "ramGb": 32
+  }
+}

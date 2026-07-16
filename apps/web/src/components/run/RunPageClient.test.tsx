@@ -151,11 +151,18 @@ describe("RunPageClient states", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Benchmark set repeatability")).toBeInTheDocument();
-    expect(screen.getByText("3 measured runs · 1 warm-up pass excluded")).toBeInTheDocument();
+    const benchmarkSetCard = screen.getByLabelText("Benchmark set repeatability");
+    expect(benchmarkSetCard).toBeInTheDocument();
+    expect(benchmarkSetCard).toHaveTextContent("3 measured runs · 1 warm-up pass excluded");
     expect(screen.getByText("High confidence")).toBeInTheDocument();
     expect(screen.getByText("Mean avg FPS")).toBeInTheDocument();
     expect(screen.getByText("Relative variation (CV)")).toBeInTheDocument();
+    for (const numericLabel of ["3", "1"]) {
+      for (const numericValue of screen.getAllByText(numericLabel)) {
+        expect(numericValue).toHaveAttribute("data-mono");
+      }
+    }
+    expect(screen.getByText("±0.8 FPS")).toHaveAttribute("data-mono");
     expect(screen.getByText(/This run is marked as a warm-up/)).toBeInTheDocument();
   });
 
@@ -175,7 +182,9 @@ describe("RunPageClient states", () => {
       />,
     );
 
-    expect(screen.getByText("1 measured run · No warm-up passes recorded")).toBeInTheDocument();
+    expect(screen.getByLabelText("Benchmark set repeatability")).toHaveTextContent(
+      "1 measured run · No warm-up passes recorded",
+    );
     expect(screen.getByText(/Add another measured run to estimate repeatability/)).toBeInTheDocument();
     expect(screen.queryByText("Relative variation (CV)")).not.toBeInTheDocument();
     expect(screen.queryByText(/Standard deviation/)).not.toBeInTheDocument();
@@ -213,6 +222,32 @@ describe("RunPageClient states", () => {
 
     const ram = screen.getByText("RAM is running below its rated speed");
     expect(ram.closest(".hd-diag")).toHaveClass("hd-diag--warn");
+  });
+
+  it("counts driver advice but not attribution context as an issue", () => {
+    const diagnosticRun: Run = {
+      ...run,
+      diagnostics: [
+        {
+          id: "d1",
+          code: "gpu-driver-outdated",
+          severity: "info",
+          title: "GPU driver is older than recommended",
+          detail: "Install the current driver for the tested game.",
+        },
+        {
+          id: "d2",
+          code: "likely-gpu-bound",
+          severity: "info",
+          title: "Likely GPU-bound",
+          detail: "The GPU was the limiting component during this run.",
+        },
+      ],
+    };
+    render(<RunPageClient run={diagnosticRun} loadFrames={okLoader} />);
+
+    expect(screen.getByText("1 issue")).toBeInTheDocument();
+    expect(screen.queryByText("No issues detected")).not.toBeInTheDocument();
   });
 
   it("shows a pending diagnostics state (never a false all-clear) before verification", () => {

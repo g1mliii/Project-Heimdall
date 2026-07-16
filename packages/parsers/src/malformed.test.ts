@@ -12,7 +12,9 @@ const ERROR_CODES: readonly ParseErrorCode[] = [
   "missing-columns",
   "invalid-json",
   "no-valid-frames",
+  "too-many-frames",
   "too-many-bad-rows",
+  "too-many-streams",
 ];
 
 const SOURCES = captureSourceSchema.options;

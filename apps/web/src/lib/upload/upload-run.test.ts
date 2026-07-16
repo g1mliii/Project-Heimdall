@@ -14,6 +14,7 @@ import {
   createRunRequestSchema,
   finalizeRunRequestSchema,
   hashManagementToken,
+  INGEST_LIMITS,
   rowsToFrameSamples,
 } from "@heimdall/shared";
 import {
@@ -41,7 +42,7 @@ function generatedPresentMonFile(): File {
   ];
   for (let i = 0; i < 10; i += 1) {
     lines.push(
-      `game.exe,1234,0xAAAA,${i % 2 === 0 ? "Application" : "AMD AFMF"},${3.5 + i * 0.01},10`,
+      `game.exe,1234,0xAAAA,${i % 2 === 0 ? "Application" : "AMD AFMF"},${3500 + i * 10},10`,
     );
   }
   return new File([lines.join("\n")], "presentmon-generated.csv");
@@ -189,6 +190,25 @@ describe("uploadCapture engine", () => {
     expect(JSON.stringify(log.finalizeBody)).not.toContain(result.managementToken);
   });
 
+  it("uploads exact periodic-vs-frame-aligned evidence from CapFrameX JSON", async () => {
+    const log: TransportLog = {};
+    const result = await uploadCapture(
+      fixtureFile("capframex/json/amd-sensordata2-real.json"),
+      {
+        game: "Benchmark Game",
+        visibility: "unlisted",
+        transport: mockTransport(log),
+      },
+    );
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    const manifest = createRunRequestSchema.parse(log.createBody).capabilityManifest!;
+    expect(manifest.sensors.gpuLoadPct).toEqual({ present: true, frameAligned: false });
+    expect(manifest.sensors.gpuPowerW).toEqual({ present: true, frameAligned: false });
+    expect(manifest.sensors.cpuBusyMs).toEqual({ present: true, frameAligned: true });
+    expect(manifest.sensors.gpuBusyMs).toEqual({ present: true, frameAligned: true });
+  });
+
   it("sends parser-derived capability semantics and normalized methodology metadata (§16a/§16c)", async () => {
     const log: TransportLog = {};
     const result = await uploadCapture(fixtureFile("presentmon/v2-basic.csv"), {
@@ -217,11 +237,13 @@ describe("uploadCapture engine", () => {
     });
     expect(createBody.methodologyManifest).toMatchObject({
       resolution: "2560x1440",
-      graphicsApi: "dxgi",
       captureProfile: "presentmon-2.x",
       frameGeneration: "none",
       hags: "unknown",
     });
+    // The fixture's Runtime is DXGI, which names the present runtime rather than
+    // the graphics API, so no API is claimed from it.
+    expect(createBody.methodologyManifest?.graphicsApi).toBeUndefined();
     expect(createBody).toMatchObject({
       benchmarkSetId: BENCHMARK_SET_ID,
       benchmarkSetSecret: BENCHMARK_SET_SECRET,
@@ -250,7 +272,7 @@ describe("uploadCapture engine", () => {
     );
   });
 
-  it("uses PresentMon's detected VSync state over a stale declaration", async () => {
+  it("keeps a declared VSync state and reports detected sync as capture semantics", async () => {
     const log: TransportLog = {};
     const result = await uploadCapture(vsyncPresentMonFile(), {
       game: "Test Game",
@@ -266,8 +288,13 @@ describe("uploadCapture engine", () => {
 
     expect(result.ok, JSON.stringify(result)).toBe(true);
     const body = createRunRequestSchema.parse(log.createBody);
+    // Sync detection reads ONE present row, which routinely reports
+    // SyncInterval=1 while the swapchain settles. It is real capture evidence
+    // and belongs on the capability manifest — but `vsync` is a comparability
+    // column, so overwriting the declaration would silently split this run out
+    // of its own benchmark set on a single unlucky first frame.
     expect(body.capabilityManifest?.syncMode).toBe("vsync");
-    expect(body.methodologyManifest?.framePacing.vsync).toBe(true);
+    expect(body.methodologyManifest?.framePacing.vsync).toBe(false);
   });
 
   it("round trip: the uploaded parquet recomputes to the exact client summary (§11.5 basis)", async () => {
@@ -336,6 +363,22 @@ describe("uploadCapture engine", () => {
       });
       expect(result.ok, fixture).toBe(false);
     }
+    expect(transport.fetch).not.toHaveBeenCalled();
+    expect(transport.putWithProgress).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized raw capture before allocating its bytes", async () => {
+    const arrayBuffer = vi.fn();
+    const file = {
+      size: INGEST_LIMITS.maxCaptureBytes + 1,
+      arrayBuffer,
+    } as unknown as File;
+    const transport = mockTransport({});
+
+    await expect(
+      uploadCapture(file, { game: "Test Game", visibility: "unlisted", transport }),
+    ).resolves.toMatchObject({ ok: false, code: "capture-too-large" });
+    expect(arrayBuffer).not.toHaveBeenCalled();
     expect(transport.fetch).not.toHaveBeenCalled();
     expect(transport.putWithProgress).not.toHaveBeenCalled();
   });

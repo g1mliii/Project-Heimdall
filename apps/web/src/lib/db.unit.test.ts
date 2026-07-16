@@ -9,7 +9,8 @@ describe("verification DB hot path", () => {
 
     await expect(readRunForVerification("run_123", db)).resolves.toBeNull();
     expect(query).toHaveBeenCalledTimes(1);
-    expect(query.mock.calls[0]?.[0]).toContain("left join games g on g.id = r.game_id");
+    expect(query.mock.calls[0]?.[0]).toContain("left join game_driver_requirements requirement");
+    expect(query.mock.calls[0]?.[0]).toContain("left join driver_catalog catalog");
     expect(query.mock.calls[0]?.[0]).toContain("r.signature");
   });
 });

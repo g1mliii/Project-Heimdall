@@ -1,0 +1,13 @@
+{
+  "Success": "1",
+  "IDS": [
+    {
+      "downloadInfo": {
+        "Version": "610.74",
+        "ReleaseDateTime": "Tue Jul 07, 2026",
+        "DetailsURL": "https://www.nvidia.com/en-us/drivers/details/274187/",
+        "ReleaseNotes": "%3Cstrong%3EGame%20Ready%20for%20DOOM%3A%20The%20Dark%20Ages%20%7C%20Revelations%3C%2Fstrong%3E%3Cbr%3EThis%20driver%20provides%20the%20best%20gaming%20experience%20for%20games%20including%20DOOM%3A%20The%20Dark%20Ages%20%7C%20Revelations%20and%20Assassin%27s%20Creed%20Black%20Flag%20Resynced.%3Cbr%3E%3Cstrong%3EFixed%20Gaming%20Bugs%3C%2Fstrong%3E"
+      }
+    }
+  ]
+}

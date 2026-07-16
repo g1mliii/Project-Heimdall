@@ -629,10 +629,145 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       };
       await insertRun(routeUndeclared, db.pool, { benchmarkSetSecretHash });
       expect(await readVisibleBenchmarkSet(routeUndeclared, db.pool)).toBeNull();
+
+      const apiUndeclared = makeSetRun("run_set_api_undeclared", 100);
+      apiUndeclared.methodologyManifest = {
+        ...apiUndeclared.methodologyManifest!,
+        graphicsApi: undefined,
+      };
+      await insertRun(apiUndeclared, db.pool, { benchmarkSetSecretHash });
+      expect(await readVisibleBenchmarkSet(apiUndeclared, db.pool)).toBeNull();
     });
   });
 
   describe("canonical resolution (§11.9)", () => {
+    it("does not map Darwin, macOS, or architecture text to a driver platform", async () => {
+      for (const [id, os] of [
+        ["run_driver_os_darwin", "Darwin 10.0"],
+        ["run_driver_os_macos", "macOS 15"],
+        ["run_driver_os_architecture", "Custom architecture build"],
+      ] as const) {
+        await insertRun(
+          {
+            ...pendingRun(id),
+            hardware: { ...validRun.hardware, os },
+          },
+          db.pool,
+        );
+        expect(await readRunForVerification(id, db.pool)).toMatchObject({
+          driverPlatform: null,
+          driverCatalog: null,
+        });
+      }
+    });
+
+    it("does not map explicitly unsupported Windows versions to a driver platform", async () => {
+      for (const [id, os] of [
+        ["run_driver_os_windows_7", "Windows 7"],
+        ["run_driver_os_windows_8_1", "Windows 8.1"],
+        ["run_driver_os_windows_server", "Windows Server 2025"],
+      ] as const) {
+        await insertRun(
+          {
+            ...pendingRun(id),
+            hardware: { ...validRun.hardware, os },
+          },
+          db.pool,
+        );
+        expect((await readRunForVerification(id, db.pool))?.driverPlatform).toBeNull();
+      }
+
+      const unversionedId = "run_driver_os_windows_unversioned";
+      await insertRun(
+        {
+          ...pendingRun(unversionedId),
+          hardware: { ...validRun.hardware, os: "Windows" },
+        },
+        db.pool,
+      );
+      expect((await readRunForVerification(unversionedId, db.pool))?.driverPlatform).toEqual({
+        vendor: "nvidia",
+        os: "windows",
+        component: "gpu",
+      });
+    });
+
+    it("falls back to the capture tool's platform when no OS was declared", async () => {
+      // No parser populates os_build and an anonymous upload need not declare an
+      // OS, so this is the common case — and a null platform defeats the
+      // requirement/catalog joins, silently suppressing BOTH driver advisories.
+      // PresentMon only ships for Windows, which makes it evidence, not a guess.
+      const id = "run_driver_os_absent";
+      await insertRun(
+        { ...pendingRun(id), hardware: { ...validRun.hardware, os: undefined } },
+        db.pool,
+      );
+      expect((await readRunForVerification(id, db.pool))?.driverPlatform).toEqual({
+        vendor: "nvidia",
+        os: "windows",
+        component: "gpu",
+      });
+    });
+
+    it("maps Windows NT and bracketed 10/11 runtime strings to the supported driver platform", async () => {
+      for (const [id, os] of [
+        ["run_driver_os_windows_nt", "Microsoft Windows NT 10.0.22631"],
+        ["run_driver_os_windows_nt_underscore", "Windows_NT 10.0"],
+        ["run_driver_os_windows_ver_10", "Microsoft Windows [Version 10.0.22631.3447]"],
+        ["run_driver_os_windows_ver_11", "Microsoft Windows [Version 11.0.26100.1234]"],
+      ] as const) {
+        await insertRun(
+          {
+            ...pendingRun(id),
+            hardware: { ...validRun.hardware, os },
+          },
+          db.pool,
+        );
+        expect((await readRunForVerification(id, db.pool))?.driverPlatform).toEqual({
+          vendor: "nvidia",
+          os: "windows",
+          component: "gpu",
+        });
+      }
+    });
+
+    it("selects the seeded catalog for every supported vendor and OS cell", async () => {
+      await db.pool.query(
+        "update driver_catalog set fetched_at = now(), released_at = current_date - interval '8 days'",
+      );
+      const cells = [
+        ["nvidia", "Windows 11", "gpu", "610.74"],
+        ["nvidia", "Arch Linux", "gpu", "595.84"],
+        ["amd", "Windows 10", "gpu", "26.6.4"],
+        ["amd", "Bazzite Linux", "mesa", "26.1.4"],
+        ["intel", "Windows 11", "gpu", "32.0.101.8861"],
+        ["intel", "Ubuntu Linux", "mesa", "26.1.4"],
+      ] as const;
+
+      for (const [vendor, os, component, latestVersion] of cells) {
+        const id = `run_driver_cell_${vendor}_${component}_${os.startsWith("Windows") ? "windows" : "linux"}`;
+        await insertRun(
+          {
+            ...pendingRun(id),
+            hardware: {
+              ...validRun.hardware,
+              gpuVendor: vendor,
+              os,
+            },
+          },
+          db.pool,
+        );
+        expect(await readRunForVerification(id, db.pool)).toMatchObject({
+          driverPlatform: {
+            vendor,
+            os: os.startsWith("Windows") ? "windows" : "linux",
+            component,
+          },
+          driverCatalog: { vendor, component, latestVersion },
+        });
+      }
+    });
+
     it("suppresses a stale curated driver requirement (§15.4)", async () => {
       const id = "run_driver_requirement_freshness";
       const gameId = await resolveGameId("capframex", "Cyberpunk 2077", db.pool);
@@ -655,15 +790,77 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
           db.pool,
         ),
       ).toBe(true);
+      await db.pool.query(
+        `update game_driver_requirements
+            set fetched_at = now()
+          where game_id = $1 and vendor = 'nvidia' and os = 'windows'`,
+        [gameId],
+      );
+      await db.pool.query(
+        `update driver_catalog
+            set fetched_at = now(), released_at = current_date - interval '8 days'
+          where vendor = 'nvidia' and os = 'windows' and component = 'gpu'`,
+      );
       expect(await readRunRequiredDriver(id, db.pool)).toBe("566.36");
-      expect((await readRunForVerification(id, db.pool))?.requiredDriver).toBe("566.36");
+      expect(await readRunForVerification(id, db.pool)).toMatchObject({
+        requiredDriver: "566.36",
+        driverPlatform: { vendor: "nvidia", os: "windows", component: "gpu" },
+        driverCatalog: {
+          vendor: "nvidia",
+          os: "windows",
+          component: "gpu",
+          latestVersion: "610.74",
+        },
+      });
 
       await db.pool.query(
-        "update games set required_driver_checked_at = now() - interval '31 days' where id = $1",
+        `update game_driver_requirements
+            set fetched_at = now() - interval '31 days'
+          where game_id = $1 and vendor = 'nvidia' and os = 'windows'`,
         [gameId],
       );
       expect(await readRunRequiredDriver(id, db.pool)).toBeNull();
       expect((await readRunForVerification(id, db.pool))?.requiredDriver).toBeNull();
+    });
+
+    it("suppresses missing, stale, and newly released driver catalog rows", async () => {
+      const id = "run_driver_catalog_freshness";
+      await insertRun(pendingRun(id), db.pool);
+
+      expect((await readRunForVerification(id, db.pool))?.driverPlatform).toEqual({
+        vendor: "nvidia",
+        os: "windows",
+        component: "gpu",
+      });
+
+      await db.pool.query(
+        `update driver_catalog
+            set fetched_at = now(), released_at = current_date
+          where vendor = 'nvidia' and os = 'windows' and component = 'gpu'`,
+      );
+      expect((await readRunForVerification(id, db.pool))?.driverCatalog).toBeNull();
+
+      await db.pool.query(
+        `update driver_catalog
+            set fetched_at = now(), released_at = current_date - interval '8 days'
+          where vendor = 'nvidia' and os = 'windows' and component = 'gpu'`,
+      );
+      expect((await readRunForVerification(id, db.pool))?.driverCatalog?.latestVersion).toBe(
+        "610.74",
+      );
+
+      await db.pool.query(
+        `update driver_catalog
+            set fetched_at = now() - interval '31 days'
+          where vendor = 'nvidia' and os = 'windows' and component = 'gpu'`,
+      );
+      expect((await readRunForVerification(id, db.pool))?.driverCatalog).toBeNull();
+
+      await db.pool.query(
+        `delete from driver_catalog
+          where vendor = 'nvidia' and os = 'windows' and component = 'gpu'`,
+      );
+      expect((await readRunForVerification(id, db.pool))?.driverCatalog).toBeNull();
     });
 
     it("match-or-creates a game and reuses it across alias variants", async () => {

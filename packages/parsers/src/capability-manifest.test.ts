@@ -114,6 +114,22 @@ describe("deriveCapabilityManifest (§16a.3)", () => {
     expect(fromPresence).toEqual(fromFrames);
   });
 
+  it("fails closed for CapFrameX when verification lacks a trusted capture profile", () => {
+    const manifest = buildCapabilityManifest({
+      source: "capframex",
+      presentSensors: ["cpuLoadPct", "gpuLoadPct", "cpuBusyMs", "gpuBusyMs"],
+      frameGenerationObserved: false,
+      hardware,
+      conservativeCapFrameXAlignment: true,
+      declared: { sensorAlignment: { cpuLoadPct: true, gpuLoadPct: true } },
+    });
+
+    expect(manifest.sensors.cpuLoadPct).toEqual({ present: true, frameAligned: false });
+    expect(manifest.sensors.gpuLoadPct).toEqual({ present: true, frameAligned: false });
+    expect(manifest.sensors.cpuBusyMs).toEqual({ present: true, frameAligned: true });
+    expect(manifest.sensors.gpuBusyMs).toEqual({ present: true, frameAligned: true });
+  });
+
   it("uses verified matrix evidence when a present sensor is not frame-aligned", () => {
     const original = SENSOR_AVAILABILITY.capframex.nvidia;
     if (original === undefined) throw new Error("expected CapFrameX/NVIDIA matrix cell");
@@ -151,7 +167,6 @@ describe("detectPresentMonSemantics (§16a.2)", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value.captureSemantics).toEqual({
-        graphicsApi: "dxgi",
         presentationMode: "hardware-independent-flip",
         syncMode: "tearing",
       });
@@ -163,7 +178,12 @@ describe("detectPresentMonSemantics (§16a.2)", () => {
     const result = parsePresentMon(readFixture("presentmon/v1-basic.csv"));
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.captureSemantics).toMatchObject({ graphicsApi: "dxgi" });
+      // The fixture's Runtime is DXGI — the present runtime every D3D10/11/12
+      // title shares, so it names no API and none may be claimed from it.
+      expect(result.value.captureSemantics?.graphicsApi).toBeUndefined();
+      expect(result.value.captureSemantics).toMatchObject({
+        presentationMode: "hardware-independent-flip",
+      });
       expect(result.value.captureProfile).toBe("presentmon-1.x");
     }
   });

@@ -23,10 +23,17 @@ export type SensorColumnField = (typeof SENSOR_COLUMN_FIELDS)[number];
 export interface SourceColumns {
   /** Required frame-time column — a header without it is `missing-columns`. */
   frameTimeMs: readonly string[];
-  /** Capture-relative timestamp in SECONDS (converted to ms by the parser). */
+  /** Capture-relative timestamp in seconds (converted to ms by the parser). */
   timeSeconds: readonly string[];
   /** Optional sensor columns; absent ones become a `missing-sensors` warning. */
   sensors: Partial<Record<SensorColumnField, readonly string[]>>;
+}
+
+/** Row-based source columns are frame-aligned whenever they are present. */
+export function frameAlignedSensorMap(
+  columns: SourceColumns,
+): Partial<Record<SensorColumnField, boolean>> {
+  return Object.fromEntries(Object.keys(columns.sensors).map((field) => [field, true]));
 }
 
 export const CAPFRAMEX_COLUMNS: SourceColumns = {
@@ -51,6 +58,15 @@ export const PRESENTMON_V1_COLUMNS: SourceColumns = {
   },
 };
 
+/** PresentMon 2.x `--v1_metrics` compatibility output. */
+export const PRESENTMON_V1_COMPAT_COLUMNS: SourceColumns = {
+  ...PRESENTMON_V1_COLUMNS,
+  sensors: {
+    ...PRESENTMON_V1_COLUMNS.sensors,
+    gpuBusyMs: ["msgpuactive"],
+  },
+};
+
 /**
  * PresentMon 2.x — detected via FrameTime; telemetry columns are opt-in. Busy-
  * time aliases cover the current `CPUBusy`/`GPUBusy` names AND the intermediate
@@ -59,7 +75,9 @@ export const PRESENTMON_V1_COLUMNS: SourceColumns = {
  */
 export const PRESENTMON_V2_COLUMNS: SourceColumns = {
   frameTimeMs: ["frametime"],
-  timeSeconds: ["cpustarttime", "timeinseconds"],
+  // CPUStartTime is already milliseconds and is selected explicitly by the
+  // PresentMon parser. TimeInSeconds remains the fallback for other v2 builds.
+  timeSeconds: ["timeinseconds"],
   sensors: {
     cpuBusyMs: ["cpubusy", "mscpubusy"],
     gpuBusyMs: ["gpubusy", "msgpubusy"],
@@ -77,20 +95,26 @@ export const PRESENTMON_V2_COLUMNS: SourceColumns = {
  * version and HAGS state must be DECLARED by the desktop client (Phase 9), so
  * they live in the methodology manifest, not here.
  */
-export const PRESENTMON_PROFILES = [
-  {
+export const PRESENTMON_PROFILES = {
+  v1: {
     id: "presentmon-1.x",
     detect: "MsBetweenPresents",
     hasBusyTimes: false,
     hasPresentationSemantics: false,
   },
-  {
+  v1MetricsCompat: {
+    id: "presentmon-2.x-v1-metrics",
+    detect: "MsBetweenPresents + msGPUActive",
+    hasBusyTimes: true,
+    hasPresentationSemantics: true,
+  },
+  v2: {
     id: "presentmon-2.x",
     detect: "FrameTime",
     hasBusyTimes: true,
     hasPresentationSemantics: true,
   },
-] as const;
+} as const;
 
 /**
  * Header columns that expose PresentMon capture *semantics* (not per-frame

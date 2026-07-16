@@ -1,0 +1,28 @@
+{
+  "summary": {
+    "avgFps": 73.17637878201134,
+    "onePercentLowFps": 37.48863625713455,
+    "pointOnePercentLowFps": 36.28605019086462,
+    "frameTimeP50Ms": 13.146,
+    "frameTimeP95Ms": 17.3258,
+    "frameTimeP99Ms": 24.6743,
+    "stutterCount": 0,
+    "generatedFramePct": 0,
+    "pointOnePercentLowConfidence": "low",
+    "sampleCount": 200,
+    "durationSeconds": 2.733122400000001
+  },
+  "sampleCount": 200,
+  "firstFrame": {
+    "timeMs": 0,
+    "frameTimeMs": 8.6357,
+    "cpuBusyMs": 8.5246,
+    "gpuBusyMs": 21.1567
+  },
+  "lastFrame": {
+    "timeMs": 2720.0448000000015,
+    "frameTimeMs": 13.0776,
+    "cpuBusyMs": 12.9906,
+    "gpuBusyMs": 12.8629
+  }
+}

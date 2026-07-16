@@ -6,6 +6,7 @@
  */
 
 import type {
+  CapabilitySensorField,
   CaptureSource,
   FrameSample,
   HardwareSnapshot,
@@ -33,10 +34,18 @@ export interface ParsedCapture {
   hardware?: HardwareSnapshot;
   /** Detected presentation/sync semantics (PresentMon v2+); absent otherwise. */
   captureSemantics?: CaptureSemantics;
+  /** Per-field sampling alignment observed from this exact capture format. */
+  sensorAlignment?: Partial<Record<CapabilitySensorField, boolean>>;
   /** Pinned parser-recognized capture profile, e.g. `presentmon-2.x`. */
   captureProfile?: string;
   /** e.g. `"capframex@1.0.0"` — stored for reprocessing provenance (§2.2). */
   parserVersion: string;
+}
+
+/** Optional resource bounds for parsing an untrusted capture locally. */
+export interface CaptureParseOptions {
+  /** Reject on the first valid frame beyond this limit instead of retaining it. */
+  maxFrames?: number;
 }
 
 export type ParseErrorCode =
@@ -45,7 +54,9 @@ export type ParseErrorCode =
   | "missing-columns"
   | "invalid-json"
   | "no-valid-frames"
-  | "too-many-bad-rows";
+  | "too-many-frames"
+  | "too-many-bad-rows"
+  | "too-many-streams";
 
 export type ParseErrorSource = CaptureSource | "unknown";
 

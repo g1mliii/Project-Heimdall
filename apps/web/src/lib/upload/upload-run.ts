@@ -137,10 +137,18 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
     };
   }
 
+  if (file.size > INGEST_LIMITS.maxCaptureBytes) {
+    return {
+      ok: false,
+      code: "capture-too-large",
+      message: `capture is ${file.size} bytes (limit ${INGEST_LIMITS.maxCaptureBytes})`,
+    };
+  }
+
   try {
     emit({ stage: "parsing" });
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const parsed = parseAnyCapture(bytes);
+    const parsed = parseAnyCapture(bytes, { maxFrames: INGEST_LIMITS.maxFramesPerRun });
     if (!parsed.ok) {
       return { ok: false, code: parsed.error.code, message: parsed.error.message };
     }
@@ -150,16 +158,12 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
       parserVersion,
       captureSemantics,
       captureProfile,
+      sensorAlignment,
     } = parsed.capture;
 
     // Fast local feedback for the same limits the server enforces (§11.10).
-    if (frames.length > INGEST_LIMITS.maxFramesPerRun) {
-      return {
-        ok: false,
-        code: "too-many-frames",
-        message: `capture has ${frames.length} frames (limit ${INGEST_LIMITS.maxFramesPerRun})`,
-      };
-    }
+    // The upper bound needs no check here: `parseAnyCapture` is capped at
+    // `maxFramesPerRun` above and fails the parse before it can return more.
     if (frames.length < INGEST_LIMITS.minFramesPerRun) {
       return {
         ok: false,
@@ -198,17 +202,18 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
       frames,
       parsed.source,
       hardware,
-      captureSemantics,
+      {
+        ...captureSemantics,
+        ...(sensorAlignment === undefined ? {} : { sensorAlignment }),
+      },
     );
-    // Parser-detected details win over a declaration: unlike a user's text
-    // entry, the source header/profile is direct capture evidence. Everything
-    // else remains explicitly declared and therefore optional.
-    const detectedVsync =
-      captureSemantics?.syncMode === "vsync"
-        ? true
-        : captureSemantics?.syncMode === "tearing"
-          ? false
-          : undefined;
+    // Parser-detected details win over a declaration only where the source is
+    // direct capture evidence about the whole capture. `syncMode` is NOT: it is
+    // read from a single present row, which routinely reports SyncInterval=1
+    // while the swapchain settles, so it must never overwrite a declared
+    // `framePacing.vsync` — that would silently rewrite a comparability column
+    // and split the run out of its own benchmark set. It still reaches the
+    // capability manifest as capture semantics.
     const normalizedMethodology = normalizeMethodologyManifest(
       options.methodology === undefined
         ? undefined
@@ -225,9 +230,6 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
         ? undefined
         : {
             ...normalizedMethodology,
-            ...(detectedVsync === undefined
-              ? {}
-              : { framePacing: { ...normalizedMethodology.framePacing, vsync: detectedVsync } }),
             ...(captureSemantics?.graphicsApi === undefined
               ? {}
               : { graphicsApi: captureSemantics.graphicsApi }),

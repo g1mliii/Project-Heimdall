@@ -101,7 +101,7 @@ const CAPFRAMEX_COMMON: Record<SensorField, SensorAvailability> = {
   gpuPowerW: "expected",
   vramUsedMb: "expected",
   cpuLoadPct: "expected",
-  cpuBusyMs: "never",
+  cpuBusyMs: "sometimes", // CaptureData.CpuActive exists on recent JSON captures
   gpuBusyMs: "sometimes", // MsGPUActive exists on recent versions only
 };
 
@@ -133,8 +133,42 @@ export const SENSOR_AVAILABILITY: Record<
 > = {
   capframex: {
     nvidia: cell(CAPFRAMEX_COMMON),
-    amd: cell(
+    amd: verifiedCell(
       { ...CAPFRAMEX_COMMON, gpuPowerW: "sometimes" },
+      {
+        source: "capframex",
+        gpuVendor: "amd",
+        driver: "AMD Software 26.6.1 (Windows driver 32.0.31019.2002)",
+        toolVersion: "CapFrameX 1.8.6.2",
+        headers: [
+          "SensorData2./gpu-amd/1/load/0",
+          "SensorData2./gpu-amd/1/clock/0",
+          "SensorData2./gpu-amd/1/power/1",
+          "SensorData2./gpu-amd/1/data/0",
+          "SensorData2./amdcpu/0/load/0",
+          "CaptureData.CpuActive",
+          "CaptureData.GpuActive",
+        ],
+        units: {
+          gpuLoadPct: "%",
+          gpuClockMhz: "MHz",
+          gpuPowerW: "W",
+          vramUsedMb: "GiB (normalized to MiB)",
+          cpuLoadPct: "%",
+          cpuBusyMs: "ms",
+          gpuBusyMs: "ms",
+        },
+        frameAligned: {
+          gpuLoadPct: false,
+          gpuClockMhz: false,
+          gpuPowerW: false,
+          vramUsedMb: false,
+          cpuLoadPct: false,
+          cpuBusyMs: true,
+          gpuBusyMs: true,
+        },
+        fixture: "capframex/json/amd-sensordata2-real.json",
+      },
       "AMD board power depends on driver/telemetry version",
     ),
     intel: cell(
@@ -144,7 +178,16 @@ export const SENSOR_AVAILABILITY: Record<
   },
   presentmon: {
     nvidia: cell(PRESENTMON_COMMON),
-    amd: cell(PRESENTMON_COMMON),
+    amd: verifiedCell(PRESENTMON_COMMON, {
+      source: "presentmon",
+      gpuVendor: "amd",
+      driver: "AMD Software 26.6.1 (Windows driver 32.0.31019.2002)",
+      toolVersion: "PresentMon 2.4.1",
+      headers: ["CPUBusy", "GPUBusy"],
+      units: { cpuBusyMs: "ms", gpuBusyMs: "ms" },
+      frameAligned: { cpuBusyMs: true, gpuBusyMs: true },
+      fixture: "presentmon/v2-amd-real.csv",
+    }),
     intel: cell(
       { ...PRESENTMON_COMMON, gpuPowerW: "expected" },
       "PresentMon is Intel's own tool; Arc telemetry is first-class when enabled",
@@ -181,6 +224,20 @@ export function detectAvailableSensors(frames: readonly FrameSample[]): SensorFi
 const HAGS_AFFECTED_FIELDS: readonly SensorField[] = ["gpuBusyMs"];
 
 /**
+ * CapFrameX's SensorData2 telemetry is periodically polled and then expanded
+ * across frames. Its CaptureData busy-time fields are separately derived from
+ * the presented-frame stream, so only the SensorData2-style fields need a
+ * conservative fallback when the original capture profile is unavailable.
+ */
+const CAPFRAMEX_PERIODIC_SENSOR_FIELDS = new Set<SensorField>([
+  "gpuLoadPct",
+  "gpuClockMhz",
+  "gpuPowerW",
+  "vramUsedMb",
+  "cpuLoadPct",
+]);
+
+/**
  * Derive the explicit VRAM-capacity state (§16a.4) from a hardware snapshot.
  * A bare `undefined` total is reported as `{ state: "unknown" }` so downstream
  * rules can tell "parser didn't look" from a real capacity. Unified-memory is
@@ -194,15 +251,6 @@ export function deriveVramCapacity(hardware?: HardwareSnapshot): VramCapacity {
 }
 
 /**
- * Derive the per-run {@link CapabilityManifest} (§16a.3/§16a.4) purely from the
- * parsed frames + hardware snapshot, so the browser and the server recompute it
- * identically. Capture semantics the merged frame stream cannot reveal
- * (presentation/sync mode) default to `"unknown"` and are populated by the
- * uploader/desktop client; VRAM capacity and frame-generation are detectable
- * here. This never inspects per-frame values beyond presence, so it stays cheap
- * over 500k-frame captures.
- */
-/**
  * Capture semantics that the merged frame stream cannot reveal (§16a.3) are
  * shared with parser output. They are declared by the uploader/desktop client
  * or detected from source-specific header columns (e.g. PresentMon
@@ -212,8 +260,19 @@ export function deriveVramCapacity(hardware?: HardwareSnapshot): VramCapacity {
 export type DeclaredCaptureSemantics = CaptureSemantics & {
   /** Explicit state the worker cannot reconstruct when hardware lacks a total. */
   vramCapacity?: VramCapacity;
+  /** Sampling alignment observed from this exact parser/capture profile. */
+  sensorAlignment?: Partial<Record<SensorField, boolean>>;
 };
 
+/**
+ * Derive the per-run {@link CapabilityManifest} (§16a.3/§16a.4) purely from the
+ * parsed frames + hardware snapshot, so the browser and the server recompute it
+ * identically. Capture semantics the merged frame stream cannot reveal
+ * (presentation/sync mode) default to `"unknown"` and are populated by the
+ * uploader/desktop client; VRAM capacity and frame-generation are detectable
+ * here. This never inspects per-frame values beyond presence, so it stays cheap
+ * over 500k-frame captures.
+ */
 export function deriveCapabilityManifest(
   frames: readonly FrameSample[],
   source: CaptureSource,
@@ -244,8 +303,22 @@ export function buildCapabilityManifest(input: {
   hardware?: HardwareSnapshot;
   /** Declared/detected capture semantics preserved across the recompute. */
   declared?: DeclaredCaptureSemantics;
+  /**
+   * The verification worker only has normalized Parquet, not the original
+   * CapFrameX profile that distinguishes row-aligned CSV from periodic
+   * SensorData2 telemetry. When enabled, those periodic-capable fields are
+   * always unaligned: a matrix cell can describe another capture profile and
+   * declared alignment is not server-owned evidence.
+   */
+  conservativeCapFrameXAlignment?: boolean;
 }): CapabilityManifest {
-  const { source, frameGenerationObserved, hardware, declared } = input;
+  const {
+    source,
+    frameGenerationObserved,
+    hardware,
+    declared,
+    conservativeCapFrameXAlignment = false,
+  } = input;
   const present = new Set(input.presentSensors);
   const matrixCell = hardware?.gpuVendor
     ? SENSOR_AVAILABILITY[source][hardware.gpuVendor]
@@ -253,16 +326,20 @@ export function buildCapabilityManifest(input: {
   const sensors = Object.fromEntries(
     SENSOR_FIELDS.map((field): [SensorField, CaptureCapability] => {
       const isPresent = present.has(field);
-      // CSV/JSON row-per-frame sources are frame-aligned by construction; a
-      // real fixture can explicitly prove a periodically sampled column. Only
-      // a `verified-real` cell is allowed to override the safe row-per-frame
-      // default; synthetic expectations never turn a real column into a claim.
+      const declaredFrameAligned = declared?.sensorAlignment?.[field];
+      // Exact parser evidence wins because one source/vendor can expose both
+      // row-aligned CSV and periodic JSON fields. Matrix evidence is the safe
+      // fallback for legacy callers that cannot carry per-capture alignment.
+      const conservativePeriodicField =
+        conservativeCapFrameXAlignment &&
+        source === "capframex" &&
+        CAPFRAMEX_PERIODIC_SENSOR_FIELDS.has(field);
+      const fallbackFrameAligned = !(
+        matrixCell?.provenance === "verified-real" &&
+        matrixCell.evidence?.frameAligned[field] === false
+      );
       const frameAligned =
-        isPresent &&
-        !(
-          matrixCell?.provenance === "verified-real" &&
-          matrixCell.evidence?.frameAligned[field] === false
-        );
+        isPresent && !conservativePeriodicField && (declaredFrameAligned ?? fallbackFrameAligned);
       return [field, { present: isPresent, frameAligned }];
     }),
   ) as CapabilityManifest["sensors"];

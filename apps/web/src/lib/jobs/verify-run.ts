@@ -92,7 +92,7 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
   if (!state) {
     return { kind: "failed", error: "run row disappeared" };
   }
-  const { run, signature, requiredDriver } = state;
+  const { run, signature, requiredDriver, driverPlatform, driverCatalog } = state;
   if (!run.framesObjectKey) {
     return { kind: "failed", error: "run has no frames object key" };
   }
@@ -122,13 +122,16 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
       // Recompute the capability manifest canonically from the stored Parquet —
       // the client-derived manifest (written at insertRun) was provisional, the
       // same way the summary is. Cheap: presence booleans + hardware, no frame
-      // arrays retained. Declared capture semantics (presentation/sync mode) that
-      // the Parquet can't reveal are preserved from the stored client manifest.
+      // arrays retained. Only capture semantics that the Parquet cannot reveal
+      // (presentation/sync mode and VRAM capacity) survive from the provisional
+      // client manifest. Sensor alignment gates richer diagnostics, so it must
+      // be derived from server-owned source evidence instead.
       capabilityManifest = buildCapabilityManifest({
         source: run.captureSource,
         presentSensors: parquet.presentSensors,
         frameGenerationObserved: parquet.frameGenerationObserved,
         hardware: run.hardware,
+        conservativeCapFrameXAlignment: true,
         ...(run.capabilityManifest
           ? {
               declared: {
@@ -149,6 +152,8 @@ export async function verifyRunJob(job: ClaimedJob, deps: VerifyDeps): Promise<V
         source: run.captureSource,
         vendor: run.hardware.gpuVendor ?? "unknown",
         ...(requiredDriver !== null ? { game: { requiredDriver } } : {}),
+        ...(driverPlatform !== null ? { driverPlatform } : {}),
+        ...(driverCatalog !== null ? { driverCatalog } : {}),
         frames: parquet.diagnosticsColumns,
         capabilityManifest,
       });

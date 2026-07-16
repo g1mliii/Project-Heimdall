@@ -7,18 +7,14 @@
  * storage starts a new set; that is safer than guessing membership.
  */
 
-import { generateManagementToken } from "@heimdall/shared";
+import { benchmarkSetCredentialsSchema, generateManagementToken } from "@heimdall/shared";
+import type { BenchmarkSetCredentials } from "@heimdall/shared";
 
-export interface BrowserBenchmarkSet {
-  id: string;
-  secret: string;
-}
+export type BrowserBenchmarkSet = BenchmarkSetCredentials;
 
 type BenchmarkSetStorage = Pick<Storage, "getItem" | "setItem">;
 
 const STORAGE_PREFIX = "heimdall.benchmark-set.v1:";
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const SECRET = /^[A-Za-z0-9_-]{43,128}$/;
 
 function storageForBrowser(): Storage | null {
   if (typeof window === "undefined") return null;
@@ -37,18 +33,8 @@ function parseStoredSet(value: string | null): BrowserBenchmarkSet | null {
   if (value === null) return null;
   try {
     const parsed: unknown = JSON.parse(value);
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      "id" in parsed &&
-      "secret" in parsed &&
-      typeof parsed.id === "string" &&
-      typeof parsed.secret === "string" &&
-      UUID.test(parsed.id) &&
-      SECRET.test(parsed.secret)
-    ) {
-      return { id: parsed.id, secret: parsed.secret };
-    }
+    const result = benchmarkSetCredentialsSchema.safeParse(parsed);
+    if (result.success) return result.data;
   } catch {
     // Corrupt local state must never become a server-side membership request.
   }

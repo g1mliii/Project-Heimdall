@@ -109,6 +109,9 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0020_benchmark_set_scope.sql",
       "0021_graphics_api_comparability.sql",
       "0022_scene_preset_comparability.sql",
+      "0023_driver_currency.sql",
+      "0024_driver_currency_fuzzy_lookup_indexes.sql",
+      "0025_runs_game_fk_index.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
@@ -119,7 +122,9 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
         "benchmark_sets",
         "comparisons",
         "diagnostics",
+        "driver_catalog",
         "game_aliases",
+        "game_driver_requirements",
         "games",
         "hardware",
         "hardware_aliases",
@@ -144,6 +149,28 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     expect(names).toContain("title");
     expect(names).toContain("detail");
     expect(names).not.toContain("message");
+
+    const gameColumns = await pool.query<{ column_name: string }>(
+      `select column_name
+         from information_schema.columns
+        where table_schema = current_schema()
+          and table_name = 'games'`,
+    );
+    expect(gameColumns.rows.map((row) => row.column_name)).not.toContain("required_driver");
+
+    const coverage = await pool.query<{ vendor: string; os: string; component: string }>(
+      `select vendor, os, component
+         from driver_catalog
+        order by vendor, os, component`,
+    );
+    expect(coverage.rows).toEqual([
+      { vendor: "amd", os: "linux", component: "mesa" },
+      { vendor: "amd", os: "windows", component: "gpu" },
+      { vendor: "intel", os: "linux", component: "mesa" },
+      { vendor: "intel", os: "windows", component: "gpu" },
+      { vendor: "nvidia", os: "linux", component: "gpu" },
+      { vendor: "nvidia", os: "windows", component: "gpu" },
+    ]);
   });
 
   it("creates the §4.2 indexes", async () => {
@@ -174,6 +201,9 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "staging_cleanup_jobs_not_before_idx",
       "runs_pending_unfinalized_created_at_idx",
       "runs_public_benchmark_set_profile_idx",
+      "runs_game_id_idx",
+      "games_normalized_name_tokens_gin_idx",
+      "game_aliases_normalized_name_tokens_gin_idx",
     ]) {
       expect(names).toContain(expected);
     }
@@ -240,7 +270,10 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
           'runs_user_id_idx',
           'verification_jobs_active_claim_idx',
           'runs_pending_unfinalized_created_at_idx',
-          'runs_public_benchmark_set_profile_idx'
+          'runs_public_benchmark_set_profile_idx',
+          'runs_game_id_idx',
+          'games_normalized_name_tokens_gin_idx',
+          'game_aliases_normalized_name_tokens_gin_idx'
         )`,
     );
     const byName = new Map(rows.map((row) => [row.name, row]));
@@ -252,6 +285,8 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     expect(byName.get("runs_status_visibility_idx")?.definition).toContain("created_at DESC");
     expect(byName.get("runs_user_id_idx")?.definition).toContain("created_at DESC");
     expect(byName.get("runs_user_id_idx")?.definition).toContain("id DESC");
+    expect(byName.get("runs_game_id_idx")?.definition).toContain("game_id");
+    expect(byName.get("runs_game_id_idx")?.predicate).toContain("game_id IS NOT NULL");
     expect(byName.get("verification_jobs_active_claim_idx")?.definition).toContain(
       "created_at",
     );
@@ -284,6 +319,13 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "scene_type IS NOT NULL",
     ]) {
       expect(benchmarkPredicate).toContain(required);
+    }
+    for (const name of [
+      "games_normalized_name_tokens_gin_idx",
+      "game_aliases_normalized_name_tokens_gin_idx",
+    ]) {
+      expect(byName.get(name)?.definition).toContain("USING gin");
+      expect(byName.get(name)?.definition).toContain("regexp_split_to_array");
     }
   });
 

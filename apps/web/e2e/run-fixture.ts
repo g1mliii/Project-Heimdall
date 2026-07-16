@@ -25,9 +25,11 @@ const e2eSummary = computeRunSummary(e2eFrames);
 /**
  * REAL rules-engine output for the fixture — not hand-authored rows. The
  * fixture hardware runs RAM below rated (4800 vs 6000) and an outdated driver
- * (566.14 vs the curated 566.36 for this title), so the engine emits the
- * ram-below-rated and gpu-driver-outdated findings. global-setup persists these
- * so the /runs/[id] page server-renders them exactly as production would.
+ * (566.14 vs the curated 566.36 for this title and latest-known 610.74), so the
+ * engine emits the RAM and game-ready findings. The generic currency finding
+ * intentionally stands down when the game-ready finding already provides the
+ * more specific target version. global-setup persists these so the /runs/[id]
+ * page server-renders them exactly as production would.
  */
 export const e2eDiagnostics: Omit<Diagnostic, "id">[] = runDiagnostics({
   summary: e2eSummary,
@@ -35,6 +37,13 @@ export const e2eDiagnostics: Omit<Diagnostic, "id">[] = runDiagnostics({
   source: syntheticRunBase.captureSource,
   vendor: syntheticRunBase.hardware.gpuVendor ?? "unknown",
   game: { requiredDriver: "566.36" },
+  driverPlatform: { vendor: "nvidia", os: "windows", component: "gpu" },
+  driverCatalog: {
+    vendor: "nvidia",
+    os: "windows",
+    component: "gpu",
+    latestVersion: "610.74",
+  },
   frames: framesToColumns(e2eFrames),
 });
 
@@ -56,6 +65,7 @@ export const e2eBenchmarkSetFixtureRun: Run = {
     sceneType: "benchmark-scene",
     scene: "Dogtown route",
     settingsPreset: "Ultra",
+    graphicsApi: "dx12",
     resolution: e2eFixtureRun.hardware.resolution,
     upscaler: "none",
     rayTracing: "off",

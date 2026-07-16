@@ -1,0 +1,29 @@
+{
+  "name": "@heimdall/driver-curation",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "wrangler types --config wrangler.jsonc && tsc --noEmit",
+    "test": "vitest run",
+    "cf-typegen": "wrangler types --config wrangler.jsonc",
+    "deploy:dry-run": "wrangler deploy --dry-run --config wrangler.jsonc"
+  },
+  "dependencies": {
+    "@heimdall/parsers": "workspace:*",
+    "@heimdall/shared": "workspace:*",
+    "@neondatabase/serverless": "1.1.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.12.4",
+    "eslint": "10.4.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.59.4",
+    "vitest": "4.1.7",
+    "wrangler": "4.110.0"
+  }
+}

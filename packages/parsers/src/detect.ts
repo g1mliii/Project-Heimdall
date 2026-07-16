@@ -11,7 +11,7 @@
 
 import type { CaptureSource } from "@heimdall/shared";
 
-import type { ParseError, ParsedCapture, ParseWarning } from "./errors";
+import type { CaptureParseOptions, ParseError, ParsedCapture, ParseWarning } from "./errors";
 import { decodeInput } from "./internal/decode";
 import { parseCapture } from "./parse";
 
@@ -51,12 +51,20 @@ export type AutoParseResult =
   | { ok: false; error: ParseError };
 
 /** Try each source in detection order; the first successful parse wins. */
-export function parseAnyCapture(input: string | Uint8Array): AutoParseResult {
+export function parseAnyCapture(
+  input: string | Uint8Array,
+  options?: CaptureParseOptions,
+): AutoParseResult {
   let bestError: ParseError | null = null;
   for (const source of detectionOrder(input)) {
-    const result = parseCapture(source, input);
+    const result = parseCapture(source, input, options);
     if (result.ok) {
       return { ok: true, source, capture: result.value, warnings: result.warnings };
+    }
+    // The stream cap is a recognized PresentMon shape failure. Falling through
+    // would let overlapping frame-time columns be accepted by another parser.
+    if (result.error.source === "presentmon" && result.error.code === "too-many-streams") {
+      return { ok: false, error: result.error };
     }
     // Keep the most informative rejection: a source that recognized the shape
     // but choked mid-file beats a blanket "unrecognized-format".

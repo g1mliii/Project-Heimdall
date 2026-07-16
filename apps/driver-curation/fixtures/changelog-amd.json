@@ -1,0 +1,53 @@
+{
+  "ok": true,
+  "data": {
+    "nextCursor": null,
+    "records": [
+      {
+        "channel": "stable",
+        "publishedAt": "2026-06-29",
+        "sourceUrl": "https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-4.html",
+        "updateType": "release",
+        "version": "26.6.4",
+        "driverUpdate": {
+          "channel": "adrenalin",
+          "releaseDate": "2026-06-29",
+          "releaseNotesUrl": "https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-4.html",
+          "sourceUrl": "https://www.amd.com/en/support/downloads/drivers.html/graphics/radeon-rx/radeon-rx-7000-series/amd-radeon-rx-7600.html",
+          "vendor": "amd",
+          "version": "26.6.4"
+        }
+      },
+      {
+        "channel": "stable",
+        "publishedAt": "2026-06-29",
+        "sourceUrl": "https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-4.html",
+        "updateType": "release",
+        "version": "26.6.4",
+        "driverUpdate": {
+          "channel": "adrenalin",
+          "releaseDate": "2026-06-29",
+          "releaseNotesUrl": "https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-4.html",
+          "sourceUrl": "https://www.amd.com/en/support/downloads/drivers.html/graphics/radeon-rx/radeon-rx-9000-series/amd-radeon-rx-9060.html",
+          "vendor": "amd",
+          "version": "26.6.4"
+        }
+      },
+      {
+        "channel": "stable",
+        "publishedAt": "2026-06-22",
+        "sourceUrl": "https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-2.html",
+        "updateType": "release",
+        "version": "26.6.2",
+        "driverUpdate": {
+          "channel": "adrenalin",
+          "releaseDate": "2026-06-22",
+          "releaseNotesUrl": "https://www.amd.com/en/resources/support-articles/release-notes/RN-RAD-WIN-26-6-2.html",
+          "sourceUrl": "https://www.amd.com/en/support/downloads/drivers.html/graphics/radeon-rx/radeon-rx-7000-series/amd-radeon-rx-7600.html",
+          "vendor": "amd",
+          "version": "26.6.2"
+        }
+      }
+    ]
+  }
+}

@@ -1,11 +1,11 @@
 Application,ProcessID,SwapChainAddress,PresentRuntime,SyncInterval,PresentFlags,AllowsTearing,PresentMode,FrameType,CPUStartTime,FrameTime,CPUBusy,CPUWait,GPULatency,GPUTime,GPUBusy,GPUWait,DisplayLatency,DisplayedTime,GPUUtilization,GPUFrequency,GPUPower,GPUMemUsed
-game.exe,1234,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,0.000,10,6,4,1.2,9.6,9.5,0.1,14.8,10.0,96,2520,210,7800
-game.exe,1234,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,0.010,10,6,4,1.2,9.6,9.5,0.1,14.8,10.0,96,2520,210,7800
-game.exe,1234,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,0.020,10,6,4,1.2,9.6,9.5,0.1,14.8,10.0,96,2520,210,7800
-game.exe,1234,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,0.030,10,6,4,1.2,9.6,9.5,0.1,14.8,10.0,96,2520,210,7800
-game.exe,1234,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,0.040,30,20,10,1.5,29.2,29.0,0.2,35.1,30.0,97,2505,225,7810
-game.exe,1234,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,0.070,10,6,4,1.2,9.6,9.5,0.1,14.8,10.0,96,2520,210,7800
-game.exe,1234,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,0.080,10,6,4,1.2,9.6,9.5,0.1,14.8,10.0,96,2520,210,7800
-game.exe,1234,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,0.090,10,6,4,1.2,9.6,9.5,0.1,14.8,10.0,96,2520,210,7800
-game.exe,1234,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,0.100,10,6,4,1.2,9.6,9.5,0.1,14.8,10.0,96,2520,210,7800
-game.exe,1234,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,0.110,10,6,4,1.2,9.6,9.5,0.1,14.8,10.0,96,2520,210,7800
+game.exe,1234,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,0,10,6,4,1.2,9.6,9.5,0.1,14.8,10.0,96,2520,210,7800
+game.exe,1234,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,10,10,6,4,1.2,9.6,9.5,0.1,14.8,10.0,96,2520,210,7800
+game.exe,1234,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,20,10,6,4,1.2,9.6,9.5,0.1,14.8,10.0,96,2520,210,7800
+game.exe,1234,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,30,10,6,4,1.2,9.6,9.5,0.1,14.8,10.0,96,2520,210,7800
+game.exe,1234,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,40,30,20,10,1.5,29.2,29.0,0.2,35.1,30.0,97,2505,225,7810
+game.exe,1234,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,70,10,6,4,1.2,9.6,9.5,0.1,14.8,10.0,96,2520,210,7800
+game.exe,1234,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,80,10,6,4,1.2,9.6,9.5,0.1,14.8,10.0,96,2520,210,7800
+game.exe,1234,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,90,10,6,4,1.2,9.6,9.5,0.1,14.8,10.0,96,2520,210,7800
+game.exe,1234,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,100,10,6,4,1.2,9.6,9.5,0.1,14.8,10.0,96,2520,210,7800
+game.exe,1234,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,110,10,6,4,1.2,9.6,9.5,0.1,14.8,10.0,96,2520,210,7800
