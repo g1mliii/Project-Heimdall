@@ -99,7 +99,7 @@
         "message": "<IconButton> size must be one of 'sm' | 'md' | 'lg'."
       },
       {
-        "selector": "JSXOpeningElement[name.name='Input'] > JSXAttribute > JSXIdentifier[name!=/^(?:label|hint|error|icon|mono|wrapClassName|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|maxLength|minLength|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",
+        "selector": "JSXOpeningElement[name.name='Input'] > JSXAttribute > JSXIdentifier[name!=/^(?:label|hint|error|icon|mono|wrapClassName|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|maxLength|minLength|autoFocus|autoComplete|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",
         "message": "<Input> doesn't accept that prop. Declared props: label, hint, error, icon, mono, wrapClassName (native DOM/aria/data passthrough props are allowed)."
       },
       {
@@ -137,6 +137,10 @@
       {
         "selector": "JSXOpeningElement[name.name='Tag'] > JSXAttribute > JSXIdentifier[name!=/^(?:onRemove|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",
         "message": "<Tag> doesn't accept that prop. Declared props: onRemove (native DOM/aria/data passthrough props are allowed)."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Table'] > JSXAttribute > JSXIdentifier[name!=/^(?:caption|columns|rows|rowKey|rowHighlighted|sort|onSortChange|empty|key|ref|className)$/]",
+        "message": "<Table> doesn't accept that prop. Declared props: caption, columns, rows, rowKey, rowHighlighted, sort, onSortChange, empty, className."
       },
       {
         "selector": "JSXOpeningElement[name.name='Tooltip'] > JSXAttribute > JSXIdentifier[name!=/^(?:content|key|ref|className|style|children|id|name|type|value|defaultValue|defaultChecked|placeholder|disabled|readOnly|required|autoFocus|tabIndex|role|title|hidden|htmlFor|form|href|target|rel|on[A-Z][A-Za-z]*|aria-[a-zA-Z]+|data-[a-zA-Z-]+)$/]",

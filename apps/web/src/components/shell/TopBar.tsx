@@ -2,14 +2,15 @@
 
 /**
  * Minimal app chrome (Phase 5 slice of design/ui_kits/web/AppShell.jsx):
- * logo + wordmark, nav tabs, primary upload CTA. Global search and the
- * account menu land with later phases — no dead controls until then.
+ * logo + wordmark, nav tabs, global catalog search, and primary upload CTA.
+ * The account menu remains deferred until authentication lands.
  */
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ButtonLink, NavTabs } from "@heimdall/ui";
 import { icon } from "@/components/icons";
+import { GlobalSearch } from "./GlobalSearch";
 import styles from "./TopBar.module.css";
 
 const UploadIcon = icon(
@@ -53,6 +54,7 @@ export function TopBar() {
         as={Link}
         aria-label="Primary navigation"
       />
+      <GlobalSearch />
       <div className={styles.spacer} />
       <ButtonLink as={Link} href="/upload" variant="primary" iconLeft={<UploadIcon size={16} />}>
         Upload log

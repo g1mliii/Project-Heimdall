@@ -156,6 +156,22 @@ export const CAPABILITY_MANIFEST_VERSION = 1;
  */
 export const METHODOLOGY_MANIFEST_VERSION = 1;
 
+/** Minimum useful catalog-search query length (§17.6). */
+export const SEARCH_MIN_QUERY_LENGTH = 3;
+
+/** Public typeahead result caps, split by actionable and contextual rows. */
+export const SEARCH_RESULT_LIMIT = {
+  games: 8,
+  hardware: 5,
+} as const;
+
+/** Explicit floor paired with pg_trgm's indexable `%` operator (§17.6). */
+export const SEARCH_SIMILARITY_THRESHOLD = 0.3;
+
+/** Default and hard maximum page sizes for a game's individual submissions. */
+export const GAME_SUBMISSIONS_PAGE_SIZE = 25;
+export const GAME_SUBMISSIONS_MAX_PAGE_SIZE = 50;
+
 /**
  * Placeholder hardware strings for captures whose log carries no hardware
  * metadata (PresentMon CSV). These are display-only sentinels: canonical-id

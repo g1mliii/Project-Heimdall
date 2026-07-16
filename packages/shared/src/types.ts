@@ -247,6 +247,66 @@ export interface MethodologyManifest {
   captureDurationSeconds?: number;
 }
 
+/** One actionable canonical-game result from the global catalog search (§17.6). */
+export interface SearchGameResult {
+  /** Postgres bigint serialized as text so JSON never loses precision. */
+  id: string;
+  slug: string;
+  name: string;
+}
+
+/** Non-navigating hardware context returned alongside game search results (§17.6). */
+export interface SearchHardwareResult {
+  /** Postgres bigint serialized as text so JSON never loses precision. */
+  id: string;
+  kind: "gpu" | "cpu";
+  vendor: string | null;
+  canonicalName: string;
+}
+
+/** Public global-search response. Hardware rows are context, never fake links. */
+export interface SearchResponse {
+  games: SearchGameResult[];
+  hardware: SearchHardwareResult[];
+}
+
+/** Display-safe methodology facts for one run; never a pooled cohort. */
+export interface GameSubmissionMethodology {
+  /** Exact Phase 6.5 profile gate evaluated from this run's own manifest. */
+  profileComplete: boolean;
+  resolution: string | null;
+  graphicsApi: string | null;
+  upscaler: UpscalerMode | null;
+  rayTracing: RayTracingMode | null;
+  frameGeneration: GeneratedFrameTech;
+}
+
+/** One individually addressable public + validated run on a game page (§17.7). */
+export interface GameSubmissionRow {
+  id: string;
+  createdAt: string;
+  gpu: string;
+  cpu: string;
+  sceneType: SceneType | null;
+  avgFps: number;
+  onePercentLowFps: number;
+  pointOnePercentLowFps: number;
+  submittedBy: string | null;
+  methodology: GameSubmissionMethodology;
+  isWarmup: boolean;
+  benchmarkSetId: string | null;
+  /** Installed version plus freshness-gated catalog facts; all are per-run context. */
+  gpuDriver: string | null;
+  requiredDriver: string | null;
+  latestDriver: string | null;
+}
+
+/** Opaque-keyset page of individual submissions. No total count is computed. */
+export interface GameSubmissionsPage {
+  rows: GameSubmissionRow[];
+  nextCursor: string | null;
+}
+
 /**
  * A benchmark run: metadata + precomputed summary. Per-frame samples are NOT
  * inlined — `framesObjectKey` points at the Parquet blob in R2.

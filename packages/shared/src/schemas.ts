@@ -13,9 +13,12 @@ import {
   CAPABILITY_MANIFEST_VERSION,
   CAPABILITY_SENSOR_FIELDS,
   CURRENT_SCHEMA_VERSION,
+  GAME_SUBMISSIONS_MAX_PAGE_SIZE,
+  GAME_SUBMISSIONS_PAGE_SIZE,
   INGEST_LIMITS,
   METHODOLOGY_MANIFEST_VERSION,
   MIN_FRAME_TIME_MS,
+  SEARCH_RESULT_LIMIT,
 } from "./constants";
 import type { CapabilitySensorField } from "./constants";
 
@@ -238,6 +241,85 @@ export const methodologyManifestSchema = z.object({
   captureDurationSeconds: z.number().positive().optional(),
 });
 export type MethodologyManifestDto = z.infer<typeof methodologyManifestSchema>;
+
+/* ── Public catalog + game-page reads (§17a) ───────────────────────────── */
+
+export const searchGameResultSchema = z.object({
+  id: z.string().min(1),
+  slug: z.string().min(1),
+  name: z.string().min(1),
+});
+
+export const searchHardwareResultSchema = z.object({
+  id: z.string().min(1),
+  kind: z.enum(["gpu", "cpu"]),
+  vendor: z.string().nullable(),
+  canonicalName: z.string().min(1),
+});
+
+/** A short query is a normal typeahead state; only the upper bound rejects. */
+export const searchQuerySchema = z
+  .object({
+    q: z.string().trim().max(MAX_INDEXED_METADATA_TEXT_LENGTH),
+  })
+  .strict();
+
+export const searchResponseSchema = z.object({
+  games: z.array(searchGameResultSchema).max(SEARCH_RESULT_LIMIT.games),
+  hardware: z.array(searchHardwareResultSchema).max(SEARCH_RESULT_LIMIT.hardware),
+});
+
+const gameSubmissionsCursorSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .regex(/^[A-Za-z0-9_-]+$/, "must be an opaque base64url cursor");
+
+export const gameSubmissionsQuerySchema = z
+  .object({
+    cursor: gameSubmissionsCursorSchema.optional(),
+    limit: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(GAME_SUBMISSIONS_MAX_PAGE_SIZE)
+      .default(GAME_SUBMISSIONS_PAGE_SIZE),
+    sceneType: sceneTypeSchema.optional(),
+  })
+  .strict();
+export type GameSubmissionsQuery = z.infer<typeof gameSubmissionsQuerySchema>;
+
+export const gameSubmissionMethodologySchema = z.object({
+  profileComplete: z.boolean(),
+  resolution: z.string().nullable(),
+  graphicsApi: z.string().nullable(),
+  upscaler: upscalerModeSchema.nullable(),
+  rayTracing: rayTracingModeSchema.nullable(),
+  frameGeneration: generatedFrameTechSchema,
+});
+
+export const gameSubmissionRowSchema = z.object({
+  id: z.string().min(1),
+  createdAt: z.string().min(1),
+  gpu: z.string().min(1),
+  cpu: z.string().min(1),
+  sceneType: sceneTypeSchema.nullable(),
+  avgFps: z.number().positive(),
+  onePercentLowFps: z.number().positive(),
+  pointOnePercentLowFps: z.number().positive(),
+  submittedBy: z.string().nullable(),
+  methodology: gameSubmissionMethodologySchema,
+  isWarmup: z.boolean(),
+  benchmarkSetId: z.string().nullable(),
+  gpuDriver: z.string().nullable(),
+  requiredDriver: z.string().nullable(),
+  latestDriver: z.string().nullable(),
+});
+
+export const gameSubmissionsPageSchema = z.object({
+  rows: z.array(gameSubmissionRowSchema).max(GAME_SUBMISSIONS_MAX_PAGE_SIZE),
+  nextCursor: gameSubmissionsCursorSchema.nullable(),
+});
 
 /** Provenance fields shared by every ingest payload (§2.2). */
 const provenance = {

@@ -9,6 +9,7 @@ import { TopBar } from "./TopBar";
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/",
+  useRouter: () => ({ push: vi.fn() }),
 }));
 
 afterEach(cleanup);
@@ -17,6 +18,7 @@ describe("TopBar", () => {
   it("renders the upload CTA as a single navigation link", () => {
     render(<TopBar />);
 
+    expect(screen.getByRole("combobox", { name: "Search games and hardware" })).toBeInTheDocument();
     const upload = screen.getByRole("link", { name: "Upload log" });
     expect(upload).toHaveAttribute("href", "/upload");
     expect(upload.querySelector("button")).toBeNull();

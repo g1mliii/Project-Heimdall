@@ -39,22 +39,47 @@ export default async function globalSetup() {
     await insertRun(e2eVramFixtureRun, pool);
     await insertDiagnostics(e2eVramFixtureRun.id, e2eVramDiagnostics, pool);
     const benchmarkSetSecretHash = await hashManagementToken(E2E_BENCHMARK_SET_SECRET);
-    const gameId = await resolveGameId(
-      e2eBenchmarkSetFixtureRun.captureSource,
-      e2eBenchmarkSetFixtureRun.game,
-      pool,
+    const [gameId, gpuId, cpuId] = await Promise.all([
+      resolveGameId(
+        e2eBenchmarkSetFixtureRun.captureSource,
+        e2eBenchmarkSetFixtureRun.game,
+        pool,
+      ),
+      resolveHardwareId(
+        "gpu",
+        e2eBenchmarkSetFixtureRun.captureSource,
+        e2eBenchmarkSetFixtureRun.hardware.gpu,
+        e2eBenchmarkSetFixtureRun.hardware.gpuVendor ?? null,
+        pool,
+      ),
+      resolveHardwareId(
+        "cpu",
+        e2eBenchmarkSetFixtureRun.captureSource,
+        e2eBenchmarkSetFixtureRun.hardware.cpu,
+        null,
+        pool,
+      ),
+    ]);
+    if (!gameId || !gpuId || !cpuId) {
+      throw new Error("could not resolve benchmark e2e fixture ids");
+    }
+    // The ordinary run is intentionally legacy/unprofiled. Resolve it onto the
+    // same public game so the game page proves that older submissions remain
+    // individually visible without entering a pooled cohort.
+    await pool.query(
+      "update runs set game_id = $1, gpu_hardware_id = $2, cpu_hardware_id = $3 where id = $4",
+      [gameId, gpuId, cpuId, e2eFixtureRun.id],
     );
-    const gpuId = await resolveHardwareId(
-      "gpu",
-      e2eBenchmarkSetFixtureRun.captureSource,
-      e2eBenchmarkSetFixtureRun.hardware.gpu,
-      e2eBenchmarkSetFixtureRun.hardware.gpuVendor ?? null,
-      pool,
+    await pool.query(
+      `insert into hardware_aliases (
+         hardware_id, kind, source, raw_name, normalized_name
+       ) values ($1, 'gpu', 'e2e-short', '4070', '4070')
+       on conflict (source, normalized_name, kind) do nothing`,
+      [gpuId],
     );
-    if (!gameId || !gpuId) throw new Error("could not resolve benchmark e2e fixture ids");
     const canonicalizeBenchmarkRun = (run: typeof e2eBenchmarkSetFixtureRun) => ({
       ...run,
-      hardware: { ...run.hardware, canonicalGpuId: gpuId },
+      hardware: { ...run.hardware, canonicalGpuId: gpuId, canonicalCpuId: cpuId },
     });
     await insertRun(canonicalizeBenchmarkRun(e2eBenchmarkSetFixtureRun), pool, {
       benchmarkSetSecretHash,

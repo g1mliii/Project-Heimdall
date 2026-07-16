@@ -112,6 +112,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0023_driver_currency.sql",
       "0024_driver_currency_fuzzy_lookup_indexes.sql",
       "0025_runs_game_fk_index.sql",
+      "0026_catalog_search_and_game_recency_indexes.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
@@ -204,6 +205,12 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "runs_game_id_idx",
       "games_normalized_name_tokens_gin_idx",
       "game_aliases_normalized_name_tokens_gin_idx",
+      "games_name_trgm_idx",
+      "games_slug_trgm_idx",
+      "game_aliases_normalized_name_trgm_idx",
+      "hardware_canonical_name_trgm_idx",
+      "hardware_aliases_normalized_name_trgm_idx",
+      "runs_game_recent_idx",
     ]) {
       expect(names).toContain(expected);
     }
@@ -273,7 +280,13 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
           'runs_public_benchmark_set_profile_idx',
           'runs_game_id_idx',
           'games_normalized_name_tokens_gin_idx',
-          'game_aliases_normalized_name_tokens_gin_idx'
+          'game_aliases_normalized_name_tokens_gin_idx',
+          'games_name_trgm_idx',
+          'games_slug_trgm_idx',
+          'game_aliases_normalized_name_trgm_idx',
+          'hardware_canonical_name_trgm_idx',
+          'hardware_aliases_normalized_name_trgm_idx',
+          'runs_game_recent_idx'
         )`,
     );
     const byName = new Map(rows.map((row) => [row.name, row]));
@@ -287,6 +300,16 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     expect(byName.get("runs_user_id_idx")?.definition).toContain("id DESC");
     expect(byName.get("runs_game_id_idx")?.definition).toContain("game_id");
     expect(byName.get("runs_game_id_idx")?.predicate).toContain("game_id IS NOT NULL");
+    expect(byName.get("runs_game_recent_idx")?.definition).toContain(
+      "game_id, created_at DESC, id DESC",
+    );
+    expect(byName.get("runs_game_recent_idx")?.predicate).toContain(
+      "status = 'validated'::text",
+    );
+    expect(byName.get("runs_game_recent_idx")?.predicate).toContain(
+      "visibility = 'public'::text",
+    );
+    expect(byName.get("runs_game_recent_idx")?.predicate).toContain("game_id IS NOT NULL");
     expect(byName.get("verification_jobs_active_claim_idx")?.definition).toContain(
       "created_at",
     );
@@ -327,6 +350,24 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       expect(byName.get(name)?.definition).toContain("USING gin");
       expect(byName.get(name)?.definition).toContain("regexp_split_to_array");
     }
+    for (const name of [
+      "games_name_trgm_idx",
+      "games_slug_trgm_idx",
+      "game_aliases_normalized_name_trgm_idx",
+      "hardware_canonical_name_trgm_idx",
+      "hardware_aliases_normalized_name_trgm_idx",
+    ]) {
+      expect(byName.get(name)?.definition).toContain("USING gin");
+      expect(byName.get(name)?.definition).toContain("gin_trgm_ops");
+    }
+
+    const extension = await pool.query<{ schema_name: string }>(
+      `select n.nspname as schema_name
+         from pg_extension e
+         join pg_namespace n on n.oid = e.extnamespace
+        where e.extname = 'pg_trgm'`,
+    );
+    expect(extension.rows).toEqual([{ schema_name: "public" }]);
   });
 
   it("CHECK constraints stay in lockstep with the shared enum constants", async () => {
