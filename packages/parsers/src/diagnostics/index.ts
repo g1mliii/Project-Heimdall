@@ -29,7 +29,7 @@ import {
 } from "./bottleneck-attribution";
 
 export * from "./types";
-export { compareDriverVersions, normalizeDriverVersion } from "./gpu-driver-outdated";
+export { compareDriverVersions, isDriverOlderThan, normalizeDriverVersion } from "./gpu-driver-outdated";
 export { analyzeBottleneck } from "./bottleneck-attribution";
 
 /**

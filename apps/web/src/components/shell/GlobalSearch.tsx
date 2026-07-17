@@ -4,6 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  normalizeAliasName,
   SEARCH_MIN_QUERY_LENGTH,
   type SearchResponse,
 } from "@heimdall/shared";
@@ -44,7 +45,9 @@ export function GlobalSearch({ search = defaultSearchLoader }: { search?: Search
   const [focused, setFocused] = React.useState(false);
   const [activeIndex, setActiveIndex] = React.useState(-1);
   const [state, setState] = React.useState<SearchState>({ kind: "idle" });
-  const normalizedQuery = query.trim();
+  // Gate on the same normalized form the route/repo use, so the client and
+  // server agree on whether a query is long enough to search.
+  const normalizedQuery = normalizeAliasName(query);
   const results = state.kind === "ready" ? state.results : EMPTY_RESULTS;
   const open = focused && normalizedQuery.length > 0;
 

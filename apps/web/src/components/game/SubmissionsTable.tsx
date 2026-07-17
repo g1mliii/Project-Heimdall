@@ -30,11 +30,14 @@ const SCENE_LABELS: Record<NonNullable<GameSubmissionRow["sceneType"]>, string> 
 
 const SUBMISSION_DATE_FORMATTER = new Intl.DateTimeFormat("en", { dateStyle: "medium" });
 
+/** Upscaler values that carry no methodology signal, so they are not shown. */
+const HIDDEN_UPSCALERS = new Set(["none", "unknown"]);
+
 function methodologyParts(row: GameSubmissionRow): string[] {
   const parts = [row.methodology.resolution, row.methodology.graphicsApi?.toUpperCase()].filter(
     (part): part is string => Boolean(part),
   );
-  if (row.methodology.upscaler && !["none", "unknown"].includes(row.methodology.upscaler)) {
+  if (row.methodology.upscaler && !HIDDEN_UPSCALERS.has(row.methodology.upscaler)) {
     parts.push(row.methodology.upscaler.toUpperCase());
   }
   if (row.methodology.rayTracing === "on") parts.push("RT");

@@ -103,6 +103,24 @@ function comparableVersions(
 }
 
 /**
+ * Whether `captured` is strictly older than `expected` once both are put in the
+ * same comparable form for this vendor/OS/component. This is the ONE definition
+ * of "older than" — the diagnostics rules and the game-page read path both call
+ * it, so their normalization/compare rules cannot drift. Either side failing to
+ * normalize yields `false` (no-op) rather than a guess.
+ */
+export function isDriverOlderThan(
+  captured: string,
+  expected: string,
+  vendor: GpuVendor,
+  os: DriverPlatform,
+  component: DriverComponent,
+): boolean {
+  const versions = comparableVersions(captured, expected, vendor, os, component);
+  return versions !== null && compareDriverVersions(...versions) < 0;
+}
+
+/**
  * The game-ready shortfall, when a curated per-game minimum outranks the
  * captured driver. Shared by both rules below so they agree on exactly one
  * definition of "older than this game wants".
@@ -115,8 +133,7 @@ function requiredDriverShortfall(
   const platform = input.driverPlatform;
   if (!driver || !required || !platform || input.vendor === "unknown") return null;
   if (platform.vendor !== input.vendor || platform.component !== "gpu") return null;
-  const versions = comparableVersions(driver, required, input.vendor, platform.os, "gpu");
-  if (!versions || compareDriverVersions(...versions) >= 0) return null;
+  if (!isDriverOlderThan(driver, required, input.vendor, platform.os, "gpu")) return null;
   return { driver, required };
 }
 
@@ -143,14 +160,11 @@ export const driverUpdateAvailableRule: DiagnosticRule = {
       return null;
     }
 
-    const versions = comparableVersions(
-      captured,
-      catalog.latestVersion,
-      input.vendor,
-      catalog.os,
-      catalog.component,
-    );
-    if (!versions || compareDriverVersions(...versions) >= 0) return null;
+    if (
+      !isDriverOlderThan(captured, catalog.latestVersion, input.vendor, catalog.os, catalog.component)
+    ) {
+      return null;
+    }
 
     return {
       severity: "info",

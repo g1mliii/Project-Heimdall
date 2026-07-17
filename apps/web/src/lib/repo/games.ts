@@ -8,7 +8,7 @@
  * app memory on this path.
  */
 
-import { compareDriverVersions, normalizeDriverVersion } from "@heimdall/parsers";
+import { isDriverOlderThan } from "@heimdall/parsers";
 import type { DiagnosticsDriverPlatform } from "@heimdall/parsers";
 import {
   aggregateEligibilitySql,
@@ -111,34 +111,19 @@ function decodeCursor(cursor: string | undefined): DecodedCursor | null {
       throw new InvalidGameSubmissionsCursorError();
     }
     return { createdAt, id };
-  } catch (error) {
-    if (error instanceof InvalidGameSubmissionsCursorError) throw error;
+  } catch {
+    // Every failure path — malformed base64url, bad separator, non-canonical
+    // date, or a non-round-tripping re-encode — is the same invalid cursor.
     throw new InvalidGameSubmissionsCursorError();
   }
 }
 
 /**
- * Whether `captured` is strictly older than `expected` after both are put in
- * the same comparable form. Mirrors the diagnostics engine: normalize per
- * vendor/OS first (NVIDIA's Device-Manager form maps to marketing form, AMD's
- * Windows Driver-Store package no-ops), then compare — either side failing to
- * normalize yields `false` rather than a guess.
- */
-function isOlderDriver(
-  captured: string,
-  expected: string,
-  vendor: Exclude<GpuVendor, "unknown">,
-  platform: DiagnosticsDriverPlatform,
-): boolean {
-  const left = normalizeDriverVersion(captured, vendor, platform.os, platform.component);
-  const right = normalizeDriverVersion(expected, vendor, platform.os, platform.component);
-  return left !== null && right !== null && compareDriverVersions(left, right) < 0;
-}
-
-/**
- * Server-side driver-currency flags for one submission. Self-suppresses (both
- * false) when the driver, vendor, or resolved platform is absent — exactly the
- * conditions under which the diagnostics rules no-op.
+ * Server-side driver-currency flags for one submission. Delegates the
+ * normalize-then-compare decision to {@link isDriverOlderThan} — the same
+ * primitive the diagnostics rules use, so the badge and the diagnostic cannot
+ * disagree. Self-suppresses (both false) when the driver, vendor, or resolved
+ * platform is absent, exactly as the diagnostics rules no-op.
  */
 function driverCurrency(row: GameSubmissionDbRow): {
   belowMinimum: boolean;
@@ -148,12 +133,13 @@ function driverCurrency(row: GameSubmissionDbRow): {
   if (!driver || !vendor || vendor === "unknown" || !os || !component) {
     return { belowMinimum: false, behindLatest: false };
   }
-  const platform: DiagnosticsDriverPlatform = { vendor, os, component };
   return {
     belowMinimum:
-      row.required_driver !== null && isOlderDriver(driver, row.required_driver, vendor, platform),
+      row.required_driver !== null &&
+      isDriverOlderThan(driver, row.required_driver, vendor, os, component),
     behindLatest:
-      row.latest_driver !== null && isOlderDriver(driver, row.latest_driver, vendor, platform),
+      row.latest_driver !== null &&
+      isDriverOlderThan(driver, row.latest_driver, vendor, os, component),
   };
 }
 
