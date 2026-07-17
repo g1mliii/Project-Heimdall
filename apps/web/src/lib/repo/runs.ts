@@ -7,9 +7,8 @@
 import { benchmarkSetConfidence } from "@heimdall/parsers";
 import type { BenchmarkSetStats } from "@heimdall/parsers";
 import {
-  aggregateEligibilitySql,
+  cohortEligibilitySql,
   comparabilityMatchSql,
-  comparabilityProfileSql,
   comparabilitySelectSql,
   isAggregateEligible,
   RUN_STATUS,
@@ -100,10 +99,14 @@ export async function readVisibleBenchmarkSet(
          from runs base
         where base.id = $2
           and base.benchmark_set_id = $1
-          and ${aggregateEligibilitySql("base")}
-          and ${comparabilityProfileSql("base")}
-          and base.game_id is not null
-          and base.gpu_hardware_id is not null
+          and ${cohortEligibilitySql("base", {
+            allowWarmups: true,
+            allowBenchmarkSetMembers: true,
+            // A run's own repeatability panel is not a public cohort. Requiring
+            // the current manifest version here would blank the card for every
+            // legacy run until an operator ran the CLI-only full lane.
+            requireCurrentCapabilityManifest: false,
+          })}
      )
      select count(*) filter (where not r.is_warmup) as sample_count,
             count(*) filter (where r.is_warmup) as warmup_run_count,
@@ -115,10 +118,13 @@ export async function readVisibleBenchmarkSet(
        join runs r on r.benchmark_set_id = $1
          and ${comparabilityMatchSql("r", "base")}
        join run_summaries s on s.run_id = r.id
-      where ${aggregateEligibilitySql("r")}
-        and ${comparabilityProfileSql("r")}
-        and r.game_id is not null
-        and r.gpu_hardware_id is not null`,
+      where ${cohortEligibilitySql("r", {
+        allowWarmups: true,
+        allowBenchmarkSetMembers: true,
+        // Must match the `base` CTE: gating members on the manifest version
+        // would drop legacy repeats from their own set's count and variance.
+        requireCurrentCapabilityManifest: false,
+      })}`,
     [run.benchmarkSetId, run.id],
     db,
   );

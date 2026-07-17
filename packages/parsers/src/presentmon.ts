@@ -168,25 +168,6 @@ function detectPresentMonSemanticsFromRow(
 }
 
 /**
- * Read semantics from the first matching data row. Exported for callers that
- * parse a PresentMon CSV outside {@link parsePresentMon}; the main parser
- * avoids this additional scan by retaining the selected stream's first row.
- */
-export function detectPresentMonSemantics(
-  lines: readonly string[],
-  found: FoundHeader,
-  rowFilter?: FrameRowsInput["rowFilter"],
-): CaptureSemantics | undefined {
-  for (let i = found.index + 1; i < lines.length; i++) {
-    if (lines[i]!.trim() === "") continue;
-    const cells = splitCsvLine(lines[i]!, found.dialect.delimiter);
-    if (rowFilter !== undefined && !rowFilter(cells)) continue;
-    return detectPresentMonSemanticsFromRow(cells, found);
-  }
-  return undefined;
-}
-
-/**
  * Normalize the small runtime vocabulary PresentMon writes into methodology.
  *
  * `Runtime` names the PRESENT runtime, not the graphics API: DXGI is what every

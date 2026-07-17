@@ -21,7 +21,7 @@ describe("diagnostic insert SQL", () => {
       "unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[])",
     );
     expect(diagnosticInsertSql(1, 2)).toContain(
-      "insert into diagnostics (run_id, code, severity, title, detail, evidence, rule_version, confidence)",
+      "insert into diagnostics (run_id, code, severity, title, detail, evidence, rule_version, confidence, evaluated_at)",
     );
     expect(diagnosticInsertSql(1, 20, "exists (select 1 from run_update)")).toContain(
       "where exists (select 1 from run_update)",

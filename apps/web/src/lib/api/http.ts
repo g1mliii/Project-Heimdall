@@ -6,7 +6,7 @@
 
 import { NextResponse } from "next/server";
 import type { ZodError, ZodType } from "zod";
-import { INGEST_LIMITS, type ApiError } from "@heimdall/shared";
+import { INGEST_LIMITS, readAllBounded, type ApiError } from "@heimdall/shared";
 import { getIngestEnv } from "../env";
 import { consumeRateLimit } from "../repo/rate-limit";
 
@@ -55,36 +55,14 @@ export async function parseJsonBody<T>(
 
   let text: string;
   try {
-    const reader = request.body?.getReader();
-    if (!reader) {
+    if (!request.body) {
       text = "";
     } else {
-      const chunks: Uint8Array[] = [];
-      let totalBytes = 0;
-      let tooLarge = false;
-      try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          totalBytes += value.byteLength;
-          if (totalBytes > maxBytes) {
-            tooLarge = true;
-            await reader.cancel();
-            break;
-          }
-          chunks.push(value);
-        }
-      } finally {
-        reader.releaseLock();
-      }
-      if (tooLarge) {
+      const bytes = await readAllBounded(request.body, maxBytes);
+      // `readAllBounded` returns null rather than throwing, so this stays a 413
+      // instead of being caught below and reported as a malformed body.
+      if (bytes === null) {
         return jsonError(413, "payload-too-large", `request body exceeds ${maxBytes} bytes`);
-      }
-      const bytes = new Uint8Array(totalBytes);
-      let offset = 0;
-      for (const chunk of chunks) {
-        bytes.set(chunk, offset);
-        offset += chunk.byteLength;
       }
       text = new TextDecoder().decode(bytes);
     }

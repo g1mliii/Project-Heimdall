@@ -7,7 +7,13 @@
  * body), so no R2 is involved.
  */
 
-import { computeRunSummary, framesToColumns, runDiagnostics } from "@heimdall/parsers";
+import {
+  buildCapabilityManifest,
+  computeRunSummary,
+  detectAvailableSensors,
+  framesToColumns,
+  runDiagnostics,
+} from "@heimdall/parsers";
 import { makeSyntheticFrames, syntheticRunBase } from "@heimdall/shared";
 import type { Diagnostic, Run } from "@heimdall/shared";
 import { buildFramesParquet } from "../src/lib/upload/build-parquet";
@@ -72,6 +78,15 @@ export const e2eBenchmarkSetFixtureRun: Run = {
     frameGeneration: e2eFixtureRun.generatedFrameTech,
     framePacing: { vsync: false, vrr: false },
   },
+  // Match verification's conservative CapFrameX canonicalization rather than
+  // trusting the browser-style per-frame representation.
+  capabilityManifest: buildCapabilityManifest({
+    source: e2eFixtureRun.captureSource,
+    presentSensors: detectAvailableSensors(e2eFrames),
+    frameGenerationObserved: e2eFrames.some((frame) => frame.generated === true),
+    hardware: e2eFixtureRun.hardware,
+    conservativeCapFrameXAlignment: true,
+  }),
   framesObjectKey: `runs/${E2E_BENCHMARK_SET_RUN_ID}/${"b".repeat(32)}.parquet`,
 };
 

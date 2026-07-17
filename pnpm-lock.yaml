@@ -146,6 +146,9 @@ importers:
       eslint:
         specifier: 10.4.0
         version: 10.4.0
+      fast-check:
+        specifier: 4.8.0
+        version: 4.8.0
       jsdom:
         specifier: 29.1.1
         version: 29.1.1

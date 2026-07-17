@@ -9,6 +9,8 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { readdir, readFile } from "node:fs/promises";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import pg from "pg";
 import type { VerificationJobStatus } from "@heimdall/shared";
@@ -112,7 +114,8 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0023_driver_currency.sql",
       "0024_driver_currency_fuzzy_lookup_indexes.sql",
       "0025_runs_game_fk_index.sql",
-      "0026_catalog_search_and_game_recency_indexes.sql",
+      "0026_reprocess_jobs.sql",
+      "0027_catalog_search_and_game_recency_indexes.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
@@ -130,6 +133,8 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
         "hardware",
         "hardware_aliases",
         "rate_limits",
+        "reprocess_jobs",
+        "reprocess_watermarks",
         "run_summaries",
         "runs",
         "schema_migrations",
@@ -172,6 +177,76 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       { vendor: "nvidia", os: "linux", component: "gpu" },
       { vendor: "nvidia", os: "windows", component: "gpu" },
     ]);
+  });
+
+  it("applies 0026 cleanly to an already-populated 0025 database", async () => {
+    const schema = "phase_6_7_populated_migration";
+    await pool.query(`drop schema if exists "${schema}" cascade; create schema "${schema}"`);
+    const populated = new pg.Pool({
+      connectionString: pool.options.connectionString,
+      max: 1,
+      options: `-csearch_path=${schema}`,
+    });
+    try {
+      await populated.query(
+        `create table schema_migrations (
+           version text primary key,
+           applied_at timestamptz not null default now()
+         )`,
+      );
+      const migrationsDir = path.resolve(
+        import.meta.dirname,
+        "../../../../infra/db/migrations",
+      );
+      const files = (await readdir(migrationsDir))
+        .filter((file) => file.endsWith(".sql") && file !== "0026_reprocess_jobs.sql")
+        .sort();
+      for (const file of files) {
+        await populated.query(await readFile(path.join(migrationsDir, file), "utf8"));
+        await populated.query("insert into schema_migrations (version) values ($1)", [file]);
+      }
+      await populated.query(
+        `insert into runs (
+           id, game_raw, capture_source, visibility, status,
+           cpu_model, gpu_model, gpu_vendor, gpu_driver,
+           frames_object_key, schema_version, parser_version
+         ) values (
+           'run_legacy_populated', 'Legacy Game', 'capframex', 'public', 'validated',
+           'Legacy CPU', 'Legacy GPU', 'nvidia', '500.00',
+           'runs/legacy-populated.parquet', 1, 'legacy'
+         )`,
+      );
+      await populated.query(
+        `insert into diagnostics (run_id, code, severity, title, detail, rule_version)
+         values (
+           'run_legacy_populated', 'driver-update-available', 'info',
+           'Old driver finding', 'Legacy finding', '1.0.0'
+         )`,
+      );
+
+      expect(await migrate(populated)).toEqual(["0026_reprocess_jobs.sql"]);
+      const run = await populated.query<{
+        status: string;
+        capability_manifest_version: number | null;
+        driver_evaluated_at: Date | null;
+      }>(
+        `select status, capability_manifest_version, driver_evaluated_at
+           from runs where id = 'run_legacy_populated'`,
+      );
+      expect(run.rows[0]).toEqual({
+        status: RUN_STATUS.validated,
+        capability_manifest_version: null,
+        driver_evaluated_at: null,
+      });
+      const diagnostic = await populated.query<{ evaluated_at: Date | null }>(
+        "select evaluated_at from diagnostics where run_id = 'run_legacy_populated'",
+      );
+      expect(diagnostic.rows[0]?.evaluated_at).toBeNull();
+      expect(await migrate(populated)).toEqual([]);
+    } finally {
+      await populated.end();
+      await pool.query(`drop schema if exists "${schema}" cascade`);
+    }
   });
 
   it("creates the §4.2 indexes", async () => {
@@ -279,6 +354,12 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
           'runs_pending_unfinalized_created_at_idx',
           'runs_public_benchmark_set_profile_idx',
           'runs_game_id_idx',
+          'reprocess_jobs_claim_idx',
+          'runs_reprocess_capability_idx',
+          'diagnostics_rule_version_run_idx',
+          'runs_driver_evaluated_at_idx',
+          'driver_catalog_fetched_at_idx',
+          'game_driver_requirements_fetched_at_idx',
           'games_normalized_name_tokens_gin_idx',
           'game_aliases_normalized_name_tokens_gin_idx',
           'games_name_trgm_idx',
@@ -310,6 +391,22 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "visibility = 'public'::text",
     );
     expect(byName.get("runs_game_recent_idx")?.predicate).toContain("game_id IS NOT NULL");
+    expect(byName.get("reprocess_jobs_claim_idx")?.definition).toContain("not_before");
+    expect(byName.get("reprocess_jobs_claim_idx")?.definition).toContain("kind");
+    expect(byName.get("reprocess_jobs_claim_idx")?.predicate).toContain("failed_at IS NULL");
+    expect(byName.get("runs_reprocess_capability_idx")?.definition).toContain(
+      "capability_manifest_version NULLS FIRST",
+    );
+    expect(byName.get("diagnostics_rule_version_run_idx")?.definition).toContain(
+      "rule_version NULLS FIRST",
+    );
+    expect(byName.get("runs_driver_evaluated_at_idx")?.definition).toContain(
+      "driver_evaluated_at NULLS FIRST",
+    );
+    expect(byName.get("driver_catalog_fetched_at_idx")?.definition).toContain("fetched_at");
+    expect(byName.get("game_driver_requirements_fetched_at_idx")?.definition).toContain(
+      "fetched_at",
+    );
     expect(byName.get("verification_jobs_active_claim_idx")?.definition).toContain(
       "created_at",
     );

@@ -9,7 +9,6 @@ import {
   verifiedCell,
 } from "./sensor-availability";
 import { parsePresentMon } from "./presentmon";
-import { detectPresentMonSemantics } from "./presentmon";
 import { readFixture } from "./testing/fixtures";
 
 const hardware: HardwareSnapshot = {
@@ -216,6 +215,4 @@ describe("detectPresentMonSemantics (§16a.2)", () => {
       expect(result.value.captureSemantics?.syncMode).toBe("vsync");
     }
   });
-
-  void detectPresentMonSemantics;
 });

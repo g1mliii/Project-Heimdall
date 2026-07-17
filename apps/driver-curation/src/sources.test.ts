@@ -24,7 +24,6 @@ describe("driver source contracts", () => {
   it("parses the confirmed NVIDIA Windows lookup and game-ready titles", async () => {
     const batch = parseNvidiaLookup(
       await fixture("nvidia-windows.json"),
-      "windows",
       fetchedAt,
     );
     expect(batch.catalog).toEqual([
@@ -57,7 +56,6 @@ describe("driver source contracts", () => {
           },
         ],
       }),
-      "windows",
       fetchedAt,
     );
 
@@ -80,7 +78,7 @@ describe("driver source contracts", () => {
       });
 
     for (const invalid of ["February 31, 2026", "6/31/2026"]) {
-      expect(() => parseNvidiaLookup(lookup(invalid), "windows", fetchedAt)).toThrow(
+      expect(() => parseNvidiaLookup(lookup(invalid), fetchedAt)).toThrow(
         "invalid release date",
       );
     }
@@ -104,7 +102,6 @@ describe("driver source contracts", () => {
           },
         ],
       }),
-      "windows",
       fetchedAt,
     );
 
@@ -131,7 +128,6 @@ describe("driver source contracts", () => {
           },
         ],
       }),
-      "windows",
       fetchedAt,
     );
 
@@ -155,7 +151,6 @@ describe("driver source contracts", () => {
           },
         ],
       }),
-      "windows",
       fetchedAt,
     );
 

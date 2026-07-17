@@ -110,6 +110,13 @@ export const diagnosticEvidenceSchema = z.object({
     })
     .optional(),
   caveats: z.array(metadataTextSchema).max(MAX_MANIFEST_CAVEATS).optional(),
+  provenance: z
+    .object({
+      sourceUrl: z.string().trim().min(1).max(2048).optional(),
+      referencedVersion: indexedMetadataTextSchema.optional(),
+      fetchedAt: z.string().datetime({ offset: true }).optional(),
+    })
+    .optional(),
 });
 
 /**
@@ -127,6 +134,7 @@ export const diagnosticSchema = z.object({
   evidence: diagnosticEvidenceSchema.optional(),
   ruleVersion: z.string().min(1).optional(),
   confidence: confidenceLevelSchema.optional(),
+  evaluatedAt: z.string().datetime({ offset: true }).optional(),
 });
 export type DiagnosticDto = z.infer<typeof diagnosticSchema>;
 

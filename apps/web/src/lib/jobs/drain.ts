@@ -14,6 +14,15 @@ import {
   completeVerificationJob,
   failVerificationJob,
 } from "../repo/jobs";
+import {
+  claimNextReprocessJob,
+  completeReprocessJob,
+  enqueueDriverRefreshJobs,
+  failReprocessJob,
+  REPROCESS_KIND,
+  type ClaimedReprocessJob,
+  type ReprocessKind,
+} from "../repo/reprocess";
 import { pruneRateLimits } from "../repo/rate-limit";
 import {
   completeStagingCleanupJob,
@@ -23,9 +32,11 @@ import {
   retryStagingCleanupJob,
 } from "../repo/runs";
 import { verifyRunJob, type VerifyDeps } from "./verify-run";
+import { refreshDriverFindingsJob } from "./reprocess-run";
 
 /** A job claimed this many times without finishing is dead — stop retrying. */
 export const MAX_VERIFICATION_ATTEMPTS = 5;
+export const MAX_REPROCESS_ATTEMPTS = 5;
 
 export interface DrainResult {
   claimed: number;
@@ -33,6 +44,36 @@ export interface DrainResult {
   flagged: number;
   retried: number;
   failed: number;
+}
+
+export interface ReprocessDrainResult {
+  driverEnqueued: number;
+  reprocessClaimed: number;
+  reprocessed: number;
+  reprocessSummaryDrifted: number;
+  driverRefreshed: number;
+  driverFindingsChanged: number;
+  reprocessRetried: number;
+  reprocessFailed: number;
+}
+
+/** A pass that did no work. Counters start here and a skipped pass returns it. */
+function emptyDrainResult(): DrainResult {
+  return { claimed: 0, validated: 0, flagged: 0, retried: 0, failed: 0 };
+}
+
+/** @see emptyDrainResult */
+function emptyReprocessDrainResult(): ReprocessDrainResult {
+  return {
+    driverEnqueued: 0,
+    reprocessClaimed: 0,
+    reprocessed: 0,
+    reprocessSummaryDrifted: 0,
+    driverRefreshed: 0,
+    driverFindingsChanged: 0,
+    reprocessRetried: 0,
+    reprocessFailed: 0,
+  };
 }
 
 export interface DrainDeps extends VerifyDeps {
@@ -65,7 +106,7 @@ export async function drainJobs(
   deps: DrainDeps = realDeps(),
 ): Promise<DrainResult> {
   const deadline = deadlineAt ?? Date.now() + budgetMs;
-  const result: DrainResult = { claimed: 0, validated: 0, flagged: 0, retried: 0, failed: 0 };
+  const result: DrainResult = emptyDrainResult();
   const attemptedThisPass = new Set<string>();
 
   while (result.claimed < maxJobs && Date.now() < deadline) {
@@ -111,6 +152,105 @@ export async function drainJobs(
         await failVerificationJob(job.id, job.attempts, outcome.error, true, deps.db);
         result.failed += 1;
         break;
+    }
+  }
+  return result;
+}
+
+/** A fifth, independently bounded lane; it can never consume live-ingest job slots. */
+export async function drainReprocessJobs(
+  {
+    maxJobs = 2,
+    budgetMs = 25_000,
+    deadlineAt,
+  }: {
+    maxJobs?: number;
+    budgetMs?: number;
+    deadlineAt?: number;
+  } = {},
+  deps: Pick<DrainDeps, "db" | "getObject" | "publicKeyBase64"> = realDeps(),
+): Promise<ReprocessDrainResult> {
+  const deadline = deadlineAt ?? Date.now() + budgetMs;
+  const result: ReprocessDrainResult = emptyReprocessDrainResult();
+  const jobLimit = Math.max(0, Math.floor(maxJobs));
+  if (!hasTimeRemaining(deadline) || jobLimit === 0) return result;
+
+  // The alternating claim order can drain at most half the pass as driver
+  // work when full replays are also backlogged. Keep the live driver queue at
+  // that capacity so a large catalog update cannot grow it faster than cron
+  // consumes it.
+  const driverQueueCapacity = Math.ceil(jobLimit / 2);
+  result.driverEnqueued = (
+    await enqueueDriverRefreshJobs({ limit: driverQueueCapacity }, deps.db)
+  ).enqueued;
+  const attemptedThisPass = new Set<string>();
+
+  while (result.reprocessClaimed < jobLimit && hasTimeRemaining(deadline)) {
+    // Alternate the preferred kind. A mass full backfill cannot starve weekly
+    // driver work, and continuous driver churn cannot monopolize the lane.
+    const preferred: readonly ReprocessKind[] =
+      result.reprocessClaimed % 2 === 0
+        ? [REPROCESS_KIND.driver, REPROCESS_KIND.full]
+        : [REPROCESS_KIND.full, REPROCESS_KIND.driver];
+    let job: ClaimedReprocessJob | null = null;
+    for (const kind of preferred) {
+      job = await claimNextReprocessJob(
+        kind,
+        { excludeKeys: [...attemptedThisPass] },
+        deps.db,
+      );
+      if (job !== null) break;
+    }
+    if (job === null) break;
+
+    attemptedThisPass.add(job.key);
+    result.reprocessClaimed += 1;
+    if (job.attempts > MAX_REPROCESS_ATTEMPTS) {
+      await failReprocessJob(job, "attempts cap exceeded", true, deps.db);
+      result.reprocessFailed += 1;
+      continue;
+    }
+
+    try {
+      if (job.kind === REPROCESS_KIND.driver) {
+        const outcome = await refreshDriverFindingsJob(job, deps.db);
+        if (outcome.kind === "failed") {
+          await failReprocessJob(job, outcome.error, true, deps.db);
+          result.reprocessFailed += 1;
+          continue;
+        }
+        await completeReprocessJob(job, deps.db);
+        result.driverRefreshed += 1;
+        if (outcome.changed) result.driverFindingsChanged += 1;
+        continue;
+      }
+
+      const outcome = await verifyRunJob(job, deps, { mode: "reprocess" });
+      if (outcome.kind === "reprocessed") {
+        await completeReprocessJob(job, deps.db);
+        result.reprocessed += 1;
+        if (outcome.summaryDrift !== null) result.reprocessSummaryDrifted += 1;
+        continue;
+      }
+      if (outcome.kind === "retry") {
+        const terminal = job.attempts >= MAX_REPROCESS_ATTEMPTS;
+        await failReprocessJob(job, outcome.error, terminal, deps.db);
+        if (terminal) result.reprocessFailed += 1;
+        else result.reprocessRetried += 1;
+        continue;
+      }
+      await failReprocessJob(
+        job,
+        outcome.kind === "failed" ? outcome.error : `unexpected ${outcome.kind} outcome`,
+        true,
+        deps.db,
+      );
+      result.reprocessFailed += 1;
+    } catch (error) {
+      const terminal = job.attempts >= MAX_REPROCESS_ATTEMPTS;
+      await failReprocessJob(job, String(error), terminal, deps.db);
+      if (terminal) result.reprocessFailed += 1;
+      else result.reprocessRetried += 1;
     }
   }
   return result;
@@ -182,7 +322,7 @@ export async function cleanupFinalizedStaging(
   return cleaned;
 }
 
-export interface MaintenancePassResult extends DrainResult {
+export interface MaintenancePassResult extends DrainResult, ReprocessDrainResult {
   cleanedStalePending: number;
   cleanedFinalizedStaging: number;
   prunedRateLimitWindows: number;
@@ -190,6 +330,7 @@ export interface MaintenancePassResult extends DrainResult {
 
 /** Keep cleanup queues moving even when verification work is continuously backlogged. */
 const MAINTENANCE_RESERVE_MS = 5_000;
+const REPROCESS_MAX_JOBS_PER_PASS = 2;
 
 /**
  * The full §11.5/§11.11 housekeeping pass — drain jobs, reap stale and
@@ -214,18 +355,31 @@ export async function runMaintenancePass(
   let cleanedStalePending: number;
   let cleanedFinalizedStaging: number;
   let prunedRateLimitWindows: number;
+  let reprocessed: ReprocessDrainResult;
   if (hasTimeRemaining(deadlineAt)) {
-    [drained, cleanedStalePending, cleanedFinalizedStaging, prunedRateLimitWindows] = await Promise.all([
-      drainJobs({ maxJobs, deadlineAt: deadlineAt - maintenanceReserveMs }, deps),
-      cleanupStalePending(deps, { deadlineAt }),
-      cleanupFinalizedStaging(deps, { deadlineAt }),
-      pruneRateLimits(deps.db),
-    ]);
+    [drained, cleanedStalePending, cleanedFinalizedStaging, prunedRateLimitWindows, reprocessed] =
+      await Promise.all([
+        drainJobs({ maxJobs, deadlineAt: deadlineAt - maintenanceReserveMs }, deps),
+        cleanupStalePending(deps, { deadlineAt }),
+        cleanupFinalizedStaging(deps, { deadlineAt }),
+        pruneRateLimits(deps.db),
+        drainReprocessJobs(
+          { maxJobs: REPROCESS_MAX_JOBS_PER_PASS, deadlineAt: deadlineAt - maintenanceReserveMs },
+          deps,
+        ),
+      ]);
   } else {
-    drained = { claimed: 0, validated: 0, flagged: 0, retried: 0, failed: 0 };
+    drained = emptyDrainResult();
     cleanedStalePending = 0;
     cleanedFinalizedStaging = 0;
     prunedRateLimitWindows = 0;
+    reprocessed = emptyReprocessDrainResult();
   }
-  return { ...drained, cleanedStalePending, cleanedFinalizedStaging, prunedRateLimitWindows };
+  return {
+    ...drained,
+    ...reprocessed,
+    cleanedStalePending,
+    cleanedFinalizedStaging,
+    prunedRateLimitWindows,
+  };
 }
