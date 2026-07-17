@@ -232,6 +232,12 @@ export async function computeFrameParquetSummary(
   const presentSensors = new Set<CapabilitySensorField>();
 
   for (const expectedColumnName of FRAME_PARQUET_COLUMN_NAMES) {
+    // Both lookups key on the loop variable, so they are constant for every row
+    // of this column — resolve once here rather than re-hashing per frame.
+    const capabilityField = CAPABILITY_SENSOR_COLUMNS.get(expectedColumnName);
+    const field = DIAGNOSTICS_SENSOR_COLUMNS.get(expectedColumnName);
+    let capabilityFieldSeen = false;
+
     await readFrameParquetColumn(
       parquetRead,
       buffer,
@@ -253,9 +259,10 @@ export async function computeFrameParquetSummary(
         }
         const parsed = parseOptionalFrameParquetNumber(expectedColumnName, value, row);
         if (parsed === undefined) return;
-        const capabilityField = CAPABILITY_SENSOR_COLUMNS.get(expectedColumnName);
-        if (capabilityField !== undefined) presentSensors.add(capabilityField);
-        const field = DIAGNOSTICS_SENSOR_COLUMNS.get(expectedColumnName);
+        if (capabilityField !== undefined && !capabilityFieldSeen) {
+          capabilityFieldSeen = true;
+          presentSensors.add(capabilityField);
+        }
         if (field !== undefined) {
           let sensorArray = sensorArrays[field];
           if (!sensorArray) {

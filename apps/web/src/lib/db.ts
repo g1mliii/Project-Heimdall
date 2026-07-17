@@ -14,6 +14,7 @@ import pg from "pg";
 import { DIAGNOSTICS, normalizeMethodologyManifest } from "@heimdall/shared";
 import type {
   CapabilityManifest,
+  ConfidenceLevel,
   Diagnostic,
   DiagnosticFinding,
   HardwareSnapshot,
@@ -25,7 +26,11 @@ import type {
   DiagnosticsDriverCatalog,
   DiagnosticsDriverPlatform,
 } from "@heimdall/parsers";
+import { DIAGNOSTIC_RULES } from "@heimdall/parsers";
 import { getDbEnv } from "./env";
+
+/** Registry order — the order findings are produced, and the order they read back. */
+const DIAGNOSTIC_RULE_CODES = DIAGNOSTIC_RULES.map((rule) => rule.code);
 
 /** A pg.Pool or checked-out pg.PoolClient — anything that can run a query. */
 export type Queryable = Pick<pg.Pool, "query">;
@@ -251,7 +256,88 @@ interface DiagnosticRow extends pg.QueryResultRow {
   evidence: Diagnostic["evidence"] | null;
   rule_version: string | null;
   confidence: Diagnostic["confidence"] | null;
+  evaluated_at: Date | null;
 }
+
+/**
+ * The canonical `run_summaries` column order, shared by every writer so the
+ * insert, the verification update, and the reprocess update cannot drift.
+ */
+const SUMMARY_COLUMNS = [
+  "avg_fps",
+  "p1_low_fps",
+  "p01_low_fps",
+  "frametime_p50_ms",
+  "frametime_p95_ms",
+  "frametime_p99_ms",
+  "stutter_count",
+  "generated_frame_pct",
+  "p01_low_confidence",
+  "sample_count",
+  "duration_seconds",
+] as const;
+
+/**
+ * Transpose a summary into positional parameters in {@link SUMMARY_COLUMNS}
+ * order.
+ *
+ * The parameters are positional, so a transposed pair here writes the wrong
+ * value into the right column with no type error and no test failure. Every
+ * writer goes through this one function so that ordering is stated once.
+ */
+export function summaryColumns(summary: RunSummary): (number | ConfidenceLevel)[] {
+  return [
+    summary.avgFps,
+    summary.onePercentLowFps,
+    summary.pointOnePercentLowFps,
+    summary.frameTimeP50Ms,
+    summary.frameTimeP95Ms,
+    summary.frameTimeP99Ms,
+    summary.stutterCount,
+    summary.generatedFramePct,
+    summary.pointOnePercentLowConfidence,
+    summary.sampleCount,
+    summary.durationSeconds,
+  ];
+}
+
+/** `$n, $n+1, …` for the summary values, for the insert form. */
+export function summaryValuesSql(firstSummaryParameter: number): string {
+  return SUMMARY_COLUMNS.map((_, i) => `$${firstSummaryParameter + i}`).join(", ");
+}
+
+/** The `run_summaries` column list, for the insert form. */
+export function summaryInsertColumnsSql(): string {
+  return SUMMARY_COLUMNS.join(", ");
+}
+
+/**
+ * The complete `run_summaries` update. `runIdParameter` and
+ * `firstSummaryParameter` make it usable from any CTE without restating the
+ * column order; `guardSql` gates the write on the caller's claim.
+ */
+export function summaryUpdateSql(
+  runIdParameter: number,
+  firstSummaryParameter: number,
+  guardSql?: string,
+): string {
+  const assignments = SUMMARY_COLUMNS.map(
+    (column, i) => `${column} = $${firstSummaryParameter + i}`,
+  ).join(", ");
+  return `update run_summaries
+          set ${assignments}
+        where run_id = $${runIdParameter}${guardSql ? `\n          and ${guardSql}` : ""}`;
+}
+
+/**
+ * Retry backoff for a failed queue job, in seconds: 30s doubling per attempt,
+ * capped at 5 doublings and a 300s ceiling. Reads `attempts` from the row being
+ * updated, so it is only valid inside an update on a job table.
+ *
+ * Shared by the verification and reprocess lanes — `runMaintenancePass` drains
+ * both under one budget, so their retry policies must not drift apart.
+ */
+export const RETRY_BACKOFF_SECS_SQL = "least(300, 30 * (1 << least(attempts - 1, 4)))";
 
 /**
  * Transpose findings into the seven positional arrays a diagnostics multi-row
@@ -299,8 +385,8 @@ export function diagnosticInsertSql(
   const evidenceParameter = codeParameter + 4;
   const ruleVersionParameter = codeParameter + 5;
   const confidenceParameter = codeParameter + 6;
-  return `insert into diagnostics (run_id, code, severity, title, detail, evidence, rule_version, confidence)
-     select $${runIdParameter}, code, severity, title, detail, evidence::jsonb, rule_version, confidence
+  return `insert into diagnostics (run_id, code, severity, title, detail, evidence, rule_version, confidence, evaluated_at)
+     select $${runIdParameter}, code, severity, title, detail, evidence::jsonb, rule_version, confidence, now()
        from unnest($${codeParameter}::text[], $${severityParameter}::text[], $${titleParameter}::text[], $${detailParameter}::text[], $${evidenceParameter}::text[], $${ruleVersionParameter}::text[], $${confidenceParameter}::text[])
          as finding(code, severity, title, detail, evidence, rule_version, confidence)${guardSql ? `\n      where ${guardSql}` : ""}`;
 }
@@ -329,11 +415,16 @@ export async function readDiagnostics(
   db: Queryable = getPool(),
 ): Promise<Diagnostic[]> {
   const rows = await query<DiagnosticRow>(
-    `select id, code, severity, title, detail, evidence, rule_version, confidence
+    // Order by registry position, not by id. Serial id happens to match the
+    // registry on first insert, but applyDriverRefresh replaces the two driver
+    // findings with fresh (higher) ids, which would permanently sort them below
+    // everything else. `array_position` returns null for a code no longer in the
+    // registry; those sort last and keep a stable id tiebreak.
+    `select id, code, severity, title, detail, evidence, rule_version, confidence, evaluated_at
        from diagnostics
       where run_id = $1
-      order by id`,
-    [runId],
+      order by array_position($2::text[], code) nulls last, id`,
+    [runId, DIAGNOSTIC_RULE_CODES],
     db,
   );
   return rows.map((row) => {
@@ -349,6 +440,7 @@ export async function readDiagnostics(
     if (row.evidence !== null) diagnostic.evidence = row.evidence;
     if (row.rule_version !== null) diagnostic.ruleVersion = row.rule_version;
     if (row.confidence !== null) diagnostic.confidence = row.confidence;
+    if (row.evaluated_at !== null) diagnostic.evaluatedAt = row.evaluated_at.toISOString();
     return diagnostic;
   });
 }
@@ -447,11 +539,8 @@ export async function insertRun(
        returning id
      )
      insert into run_summaries (
-       run_id, avg_fps, p1_low_fps, p01_low_fps,
-       frametime_p50_ms, frametime_p95_ms, frametime_p99_ms,
-       stutter_count, generated_frame_pct, p01_low_confidence,
-       sample_count, duration_seconds
-     ) select $1, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35
+       run_id, ${summaryInsertColumnsSql()}
+     ) select $1, ${summaryValuesSql(25)}
          from run_row
        returning run_id`,
     [
@@ -464,10 +553,7 @@ export async function insertRun(
       hw.os ?? null, resolution,
       run.generatedFrameTech, run.framesObjectKey ?? null,
       run.schemaVersion, run.parserVersion, run.createdAt, hw.gpuVramTotalMb ?? null,
-      summary.avgFps, summary.onePercentLowFps, summary.pointOnePercentLowFps,
-      summary.frameTimeP50Ms, summary.frameTimeP95Ms, summary.frameTimeP99Ms,
-      summary.stutterCount, summary.generatedFramePct, summary.pointOnePercentLowConfidence,
-      summary.sampleCount, summary.durationSeconds,
+      ...summaryColumns(summary),
       run.capabilityManifest ? JSON.stringify(run.capabilityManifest) : null,
       run.capabilityManifest?.version ?? null,
       methodologyManifest ? JSON.stringify(methodologyManifest) : null,
@@ -549,6 +635,10 @@ interface VerificationRunRow extends RunRow {
   driver_os: DiagnosticsDriverPlatform["os"] | null;
   driver_component: DiagnosticsDriverPlatform["component"] | null;
   latest_driver: string | null;
+  required_driver_source_url: string | null;
+  required_driver_fetched_at: Date | null;
+  latest_driver_source_url: string | null;
+  latest_driver_fetched_at: Date | null;
 }
 
 /**
@@ -563,6 +653,7 @@ export async function readRunForVerification(
   run: Run;
   signature: string | null;
   requiredDriver: string | null;
+  requiredDriverProvenance: { sourceUrl?: string; fetchedAt?: string } | null;
   driverPlatform: DiagnosticsDriverPlatform | null;
   driverCatalog: DiagnosticsDriverCatalog | null;
 } | null> {
@@ -572,7 +663,11 @@ export async function readRunForVerification(
         requirement.min_version as required_driver,
         driver_platform.os as driver_os,
         ${DRIVER_COMPONENT_SQL} as driver_component,
-        catalog.latest_version as latest_driver
+        catalog.latest_version as latest_driver,
+        requirement.source_url as required_driver_source_url,
+        requirement.fetched_at as required_driver_fetched_at,
+        catalog.source_url as latest_driver_source_url,
+        catalog.fetched_at as latest_driver_fetched_at
        ${RUN_WITH_SUMMARY_FROM}
        ${DRIVER_PLATFORM_JOIN_SQL}
        ${REQUIRED_DRIVER_JOIN_SQL}
@@ -606,7 +701,27 @@ export async function readRunForVerification(
     driverPlatform,
     driverCatalog:
       driverPlatform && row.latest_driver
-        ? { ...driverPlatform, latestVersion: row.latest_driver }
+        ? {
+            ...driverPlatform,
+            latestVersion: row.latest_driver,
+            ...(row.latest_driver_source_url === null
+              ? {}
+              : { sourceUrl: row.latest_driver_source_url }),
+            ...(row.latest_driver_fetched_at === null
+              ? {}
+              : { fetchedAt: row.latest_driver_fetched_at.toISOString() }),
+          }
         : null,
+    requiredDriverProvenance:
+      row.required_driver === null
+        ? null
+        : {
+            ...(row.required_driver_source_url === null
+              ? {}
+              : { sourceUrl: row.required_driver_source_url }),
+            ...(row.required_driver_fetched_at === null
+              ? {}
+              : { fetchedAt: row.required_driver_fetched_at.toISOString() }),
+          },
   };
 }

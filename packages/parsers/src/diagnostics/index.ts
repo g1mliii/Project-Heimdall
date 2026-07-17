@@ -50,6 +50,12 @@ export const DIAGNOSTIC_RULES: readonly DiagnosticRule[] = [
   telemetryInsufficientRule,
 ];
 
+/** Rules whose inputs live entirely in Postgres and never require an R2 read. */
+export const DRIVER_RULES: readonly DiagnosticRule[] = [
+  driverUpdateAvailableRule,
+  gpuDriverOutdatedRule,
+];
+
 /**
  * A sensor column counts as available when it is attached to the columnar
  * input. The worker and `framesToColumns` only attach one after observing a
@@ -69,6 +75,17 @@ function availableSensors(frames: DiagnosticsFrameColumns): Set<DiagnosticSensor
  * empty array means a clean run (§16 — no false positives). Never throws.
  */
 export function runDiagnostics(input: DiagnosticsInput): DiagnosticFinding[] {
+  return runDiagnosticRules(input, DIAGNOSTIC_RULES);
+}
+
+/**
+ * Evaluate a selected rule registry through the same sensor gates and
+ * exception isolation as the canonical full diagnostics pass.
+ */
+export function runDiagnosticRules(
+  input: DiagnosticsInput,
+  rules: readonly DiagnosticRule[],
+): DiagnosticFinding[] {
   const frameCount = input.frames.frameTimeMs.length;
   const available = availableSensors(input.frames);
   const findings: DiagnosticFinding[] = [];
@@ -76,7 +93,7 @@ export function runDiagnostics(input: DiagnosticsInput): DiagnosticFinding[] {
   // classification to be memoized for one diagnostics pass over a large run.
   const context = { input, frameCount };
 
-  for (const rule of DIAGNOSTIC_RULES) {
+  for (const rule of rules) {
     if (!rule.requiredSensors.every((sensor) => available.has(sensor))) continue;
     let verdict: ReturnType<DiagnosticRule["evaluate"]>;
     try {

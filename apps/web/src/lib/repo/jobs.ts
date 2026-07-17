@@ -21,6 +21,9 @@ import {
   getPool,
   diagnosticInsertColumns,
   diagnosticInsertSql,
+  RETRY_BACKOFF_SECS_SQL,
+  summaryColumns,
+  summaryUpdateSql,
   type Queryable,
 } from "../db";
 
@@ -139,9 +142,7 @@ export async function failVerificationJob(
               last_error = $3,
               not_before = case
                 when $6::boolean then now()
-                else now() + make_interval(
-                  secs => least(300, 30 * (1 << least(attempts - 1, 4)))
-                )
+                else now() + make_interval(secs => ${RETRY_BACKOFF_SECS_SQL})
               end
         where id = $1
           and status = 'running'
@@ -214,13 +215,7 @@ export async function applyVerificationResult(
           and exists (select 1 from job_claim)
         returning id
      ), summary_update as (
-       update run_summaries
-          set avg_fps = $2, p1_low_fps = $3, p01_low_fps = $4,
-              frametime_p50_ms = $5, frametime_p95_ms = $6, frametime_p99_ms = $7,
-              stutter_count = $8, generated_frame_pct = $9, p01_low_confidence = $10,
-              sample_count = $11, duration_seconds = $12
-        where run_id = $1
-          and exists (select 1 from run_update)
+       ${summaryUpdateSql(1, 2, "exists (select 1 from run_update)")}
      ), diagnostics_delete as (
        delete from diagnostics
         where run_id = $1
@@ -229,17 +224,7 @@ export async function applyVerificationResult(
      ${diagnosticInsertSql(1, 20, "exists (select 1 from run_update)")}`,
     [
       runId,
-      result.summary.avgFps,
-      result.summary.onePercentLowFps,
-      result.summary.pointOnePercentLowFps,
-      result.summary.frameTimeP50Ms,
-      result.summary.frameTimeP95Ms,
-      result.summary.frameTimeP99Ms,
-      result.summary.stutterCount,
-      result.summary.generatedFramePct,
-      result.summary.pointOnePercentLowConfidence,
-      result.summary.sampleCount,
-      result.summary.durationSeconds,
+      ...summaryColumns(result.summary),
       result.runStatus,
       result.signatureValid,
       result.generatedFrameTech,
