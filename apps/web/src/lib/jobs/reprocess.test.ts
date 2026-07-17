@@ -62,6 +62,28 @@ const hardware = {
 };
 const capability = deriveCapabilityManifest(validFrames, "capframex", hardware);
 
+function cteScanActualRows(
+  planRows: readonly { "QUERY PLAN": unknown }[],
+  cteName: string,
+): number[] {
+  const rows: number[] = [];
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (typeof value !== "object" || value === null) return;
+    const node = value as Record<string, unknown>;
+    if (node["Node Type"] === "CTE Scan" && node["CTE Name"] === cteName) {
+      const actualRows = node["Actual Rows"];
+      if (typeof actualRows === "number") rows.push(actualRows);
+    }
+    Object.values(node).forEach(visit);
+  };
+  planRows.forEach((row) => visit(row["QUERY PLAN"]));
+  return rows;
+}
+
 function runFixture(id: string, overrides: Partial<Run> = {}): Run {
   return {
     ...validRun,
@@ -641,17 +663,29 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
               'Scale Game', 'capframex', 'public', 'validated',
               'Scale CPU', 'Scale GPU', 'nvidia', '500.00',
               'runs/scale-' || value || '.parquet', 1, 'scale',
-              case when value % 2 = 0 then null else $1::integer end,
-              case when value % 3 = 0 then null else now() end
-         from generate_series(1, 5000) value`,
+               $1::integer,
+               case when value % 3 = 0 then null else now() end
+          from generate_series(1, 5000) value`,
       [CAPABILITY_MANIFEST_VERSION],
+    );
+    // The full queue must be driven by the stale-diagnostic lane here: all
+    // capability manifests are current, while every registry code has an old
+    // finding. That would multiply the old per-rule batch materialization.
+    await db.pool.query(
+      `insert into diagnostics (run_id, code, severity, title, detail, rule_version)
+       select 'run_scale_' || value, code,
+              'warn', 'Scale diagnostic', 'Scale diagnostic', 'legacy'
+         from generate_series(1, 5000) value
+         cross join unnest($1::text[]) code`,
+      [DIAGNOSTIC_RULES.map((rule) => rule.code)],
     );
     const client = await db.pool.connect();
     try {
       await client.query("analyze runs");
+      await client.query("analyze diagnostics");
       await client.query("begin");
       await client.query("set local enable_seqscan = off");
-      const full = await client.query(
+      const full = await client.query<{ "QUERY PLAN": unknown }>(
         `explain (analyze, buffers, format json) ${FULL_REPROCESS_ENQUEUE_SQL}`,
         [
           100,
@@ -672,7 +706,13 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
         `explain (analyze, buffers, format json) ${DRIVER_REFRESH_ENQUEUE_SQL}`,
         [30, 100],
       );
+      const queued = await client.query<{ count: number | string }>(
+        "select count(*) from reprocess_jobs where kind = 'full' and failed_at is null",
+      );
+      expect(Number(queued.rows[0]?.count)).toBe(100);
+      expect(cteScanActualRows(full.rows, "diagnostic_candidates")).toEqual([100]);
       expect(JSON.stringify(full.rows)).toContain("runs_reprocess_capability_idx");
+      expect(JSON.stringify(full.rows)).toContain("diagnostics_rule_version_run_idx");
       expect(JSON.stringify(driver.rows)).toContain("runs_driver_evaluated_at_idx");
       expect(JSON.stringify(driverSweep.rows)).toContain("driver_catalog_fetched_at_idx");
       expect(JSON.stringify(driverSweep.rows)).toContain(

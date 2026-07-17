@@ -104,43 +104,56 @@ export const FULL_REPROCESS_ENQUEUE_SQL = `with current_rules as materialized (
      -- defines what the watermark must record. Until then, bump
      -- CAPABILITY_MANIFEST_VERSION alongside any firing-broadening rule bump so
      -- capability_candidates sweeps every run.
-     ), stale_diagnostic_ids as materialized (
-       select stale.run_id
-         from current_rules current_rule
-         cross join lateral (
-           (select d.run_id
+      ), diagnostic_candidates as materialized (
+        -- Keep the three index-seekable stale-version ranges, but bound their
+        -- UNION ALL only once at the top. The old per-range limits could
+        -- materialize one full batch for every rule/range before candidates
+        -- deduplicated them. UNION ALL streams, so this limit stops after one
+        -- total batch without a sort or a full intermediate result.
+        select stale.id, stale.created_at
+          from current_rules current_rule
+          cross join lateral (
+            select d.run_id as id, r.created_at
               from diagnostics d
+              join runs r on r.id = d.run_id
              where d.code = current_rule.code
                and d.rule_version is null
-             order by d.run_id
-             limit $1)
-           union all
-           (select d.run_id
+               and r.frames_object_key is not null
+               and ${REPROCESSABLE_STATUS_SQL("r")}
+               and not exists (
+                 select 1 from reprocess_jobs existing
+                  where existing.run_id = r.id
+                    and existing.kind = '${REPROCESS_KIND.full}'
+               )
+            union all
+            select d.run_id as id, r.created_at
               from diagnostics d
+              join runs r on r.id = d.run_id
              where d.code = current_rule.code
                and d.rule_version < current_rule.version
-             order by d.rule_version, d.run_id
-             limit $1)
-           union all
-           (select d.run_id
+               and r.frames_object_key is not null
+               and ${REPROCESSABLE_STATUS_SQL("r")}
+               and not exists (
+                 select 1 from reprocess_jobs existing
+                  where existing.run_id = r.id
+                    and existing.kind = '${REPROCESS_KIND.full}'
+               )
+            union all
+            select d.run_id as id, r.created_at
               from diagnostics d
+              join runs r on r.id = d.run_id
              where d.code = current_rule.code
                and d.rule_version > current_rule.version
-             order by d.rule_version, d.run_id
-             limit $1)
-         ) stale
-     ), diagnostic_candidates as materialized (
-       select r.id, r.created_at
-         from stale_diagnostic_ids stale
-         join runs r on r.id = stale.run_id
-        where r.frames_object_key is not null
-          and ${REPROCESSABLE_STATUS_SQL("r")}
-          and not exists (
-            select 1 from reprocess_jobs existing
-             where existing.run_id = r.id
-               and existing.kind = '${REPROCESS_KIND.full}'
-          )
-     ), candidates as materialized (
+               and r.frames_object_key is not null
+               and ${REPROCESSABLE_STATUS_SQL("r")}
+               and not exists (
+                 select 1 from reprocess_jobs existing
+                  where existing.run_id = r.id
+                    and existing.kind = '${REPROCESS_KIND.full}'
+               )
+          ) stale
+         limit $1
+      ), candidates as materialized (
        select id, created_at from capability_candidates
        union
        select id, created_at from diagnostic_candidates
