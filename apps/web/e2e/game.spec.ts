@@ -57,6 +57,22 @@ test("GPU alias search is clearly non-navigating context (§17.6)", async ({ pag
   ).toBeVisible();
 });
 
+test("mobile search results stay within the viewport (§17.6)", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 720 });
+  await page.goto("/");
+  await page.getByRole("combobox", { name: "Search games and hardware" }).fill("Cyberpunk");
+
+  const gameOption = page.getByRole("option").filter({ hasText: E2E_GAME_NAME }).first();
+  await expect(gameOption).toBeVisible();
+  const bounds = await gameOption.boundingBox();
+  expect(bounds).not.toBeNull();
+  expect(bounds!.x).toBeGreaterThanOrEqual(0);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320);
+
+  await gameOption.click();
+  await expect(page).toHaveURL(E2E_GAME_URL);
+});
+
 test("@visual game page matches the Phase 7.0 design boundary", async ({ page }) => {
   await page.goto(E2E_GAME_URL);
   await expect(page.getByRole("heading", { level: 1, name: E2E_GAME_NAME })).toBeVisible();
