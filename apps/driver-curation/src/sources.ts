@@ -539,10 +539,14 @@ export function parseAmdReleaseNotes(
   const canonicalSourceUrl = amdReleaseNotesUrl(sourceUrl, latestVersion);
   if (!canonicalSourceUrl) throw new Error("AMD release-note URL did not match parsed version");
   const releasedAt = isoDate(dateMatch[1]);
+  // Prefix-matched, not anchored: AMD titles this section "Fixed Issues and
+  // Improvements" as often as a bare "Fixed Issues". An unmatched stop does not
+  // end the section, so it would run on through the fixed- and known-issue
+  // bullets — which name games verbatim — and harvest them as game support.
   const games = sectionItems(lines, /^New Game Support:?$/i, [
-    /^Fixed Issues:?$/i,
-    /^Known Issues:?$/i,
-    /^New Product Support:?$/i,
+    /^Fixed Issues/i,
+    /^Known Issues/i,
+    /^New Product Support/i,
   ]);
   const requirementBatch = boundedRequirements(
     "amd",

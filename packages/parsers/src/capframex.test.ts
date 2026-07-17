@@ -181,6 +181,36 @@ describe("parseCapFrameX — JSON (§7.1 hardware extraction)", () => {
     });
   });
 
+  it("keeps a field frame-aligned when a CaptureData array shadows its SensorData2 channel", () => {
+    const result = parseCapFrameX(
+      JSON.stringify({
+        Runs: [
+          {
+            CaptureData: {
+              TimeInSeconds: [0, 0.1, 0.3],
+              MsBetweenPresents: [10, 10, 10],
+              CpuUsage: [11, 12, 13],
+            },
+            SensorData2: [
+              {
+                MeasureTime: { Name: "MeasureTime", Type: "Time", Values: [0.02, 0.25] },
+                cpuLoad: { Name: "CPU Total", Type: "Load", Values: [30, 40] },
+                gpuLoad: { Name: "GPU Core", Type: "Load", Values: [50, 75] },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const { value } = unwrapOk(result);
+    // The per-frame array is the value source, so cpuLoadPct is frame-aligned
+    // even though SensorData2 also carries a cpuLoad channel. gpuLoadPct has no
+    // array behind it and stays periodic.
+    expect(value.frames.map((frame) => frame.cpuLoadPct)).toEqual([11, 12, 13]);
+    expect(value.sensorAlignment?.cpuLoadPct).toBe(true);
+    expect(value.sensorAlignment?.gpuLoadPct).toBe(false);
+  });
+
   it("keeps frame parsing total when SensorData2 arrays have mismatched lengths", () => {
     fc.assert(
       fc.property(

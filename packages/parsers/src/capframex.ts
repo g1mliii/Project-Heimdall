@@ -289,7 +289,6 @@ function parseJson(text: string, maxFrames?: number): ParseResult<ParsedCapture>
     const periodicCursors: Partial<Record<SensorColumnField, number>> = {};
     for (const [field] of periodicEntries) {
       missingSensors.delete(field);
-      sensorAlignment[field] = false;
     }
 
     // Resolve each sensor array once per capture — getCi scans every
@@ -302,8 +301,20 @@ function parseJson(text: string, maxFrames?: number): ParseResult<ParsedCapture>
       const array = getCi(capture, keys);
       if (!Array.isArray(array)) continue;
       missingSensors.delete(field);
-      sensorAlignment[field] ??= true;
       sensorArrays.push([field, array]);
+    }
+
+    // A per-frame CaptureData array is the value source wherever it exists —
+    // attachPeriodicSensors only fills fields the frame does not already carry —
+    // so a field is periodic only when no array backs it. Alignment is
+    // resolved after both sources are known, and a field left periodic by any
+    // run stays unaligned for the whole capture.
+    const arrayBackedFields = new Set(sensorArrays.map(([field]) => field));
+    for (const [field] of periodicEntries) {
+      if (!arrayBackedFields.has(field)) sensorAlignment[field] = false;
+    }
+    for (const field of arrayBackedFields) {
+      sensorAlignment[field] ??= true;
     }
 
     for (let i = 0; i < frameTimes.length; i++) {

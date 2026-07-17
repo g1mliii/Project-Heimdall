@@ -6,6 +6,42 @@ import type { CurationBatch, PersistReport } from "./types";
 const LEGACY_REQUIRED_DRIVER_SOURCE =
   "repo://infra/db/migrations/0012_seed_required_drivers.sql";
 
+/** Compare two dotted driver versions as numbers, ignoring trailing `.0` groups. */
+const versionArraySql = (expression: string) =>
+  `string_to_array(regexp_replace(${expression}, '([.]0)+$', ''), '.')::numeric[]`;
+
+/**
+ * Whether an incoming requirement replaces the stored one outright.
+ *
+ * `min_version` is the OLDEST driver known to support a title, so only an
+ * EARLIER release supersedes it — the mirror of the catalog's newest-wins rule.
+ * Vendors re-list already-supported titles for months (NVIDIA's "best gaming
+ * experience for games including …" prose re-names flagship titles long after
+ * their Game Ready release); adopting the newer mention would ratchet the
+ * requirement up to whatever driver shipped that week and tell a user who
+ * captured on the title's actual Game Ready driver that theirs is too old.
+ *
+ * A re-listing still refreshes `fetched_at` at the upsert — it is proof the
+ * requirement is current, and `readRunForVerification` drops requirements that
+ * fall outside their soak window.
+ */
+const REQUIREMENT_SUPERSEDES_SQL = `(
+       -- Migration 0012 recorded when its synthetic seed was reviewed, not the
+       -- vendor's driver release date. Let the first verified source replace that
+       -- provenance even when its real release date is older.
+       (
+         game_driver_requirements.source_url = '${LEGACY_REQUIRED_DRIVER_SOURCE}'
+         and excluded.source_url <> game_driver_requirements.source_url
+         and excluded.fetched_at >= game_driver_requirements.fetched_at
+       )
+       or excluded.released_at < game_driver_requirements.released_at
+       or (
+         excluded.released_at = game_driver_requirements.released_at
+         and ${versionArraySql("excluded.min_version")}
+           < ${versionArraySql("game_driver_requirements.min_version")}
+       )
+     )`;
+
 /**
  * One HTTP query performs both idempotent upserts. Game-ready titles resolve
  * only through existing canonical rows/aliases. Exact slugs win; conservative
@@ -192,10 +228,14 @@ export const CURATION_UPSERT_SQL = `with catalog_input as (
       select deduplicated.*
         from (
            select resolved.*,
+                  -- Two probe titles can resolve to one game (a truncated list
+                  -- fragment alongside the full title). Earliest wins, matching
+                  -- REQUIREMENT_SUPERSEDES_SQL — min_version is the oldest driver
+                  -- known to support the game, not the newest that named it.
                   row_number() over (
                     partition by game_id, vendor, os
-                    order by released_at desc,
-                             string_to_array(regexp_replace(min_version, '([.]0)+$', ''), '.')::numeric[] desc,
+                    order by released_at asc,
+                             ${versionArraySql("min_version")} asc,
                              fetched_at desc,
                              ordinal
                   ) as target_rank
@@ -204,49 +244,18 @@ export const CURATION_UPSERT_SQL = `with catalog_input as (
        where deduplicated.target_rank = 1
     ) resolved_targets
   on conflict (game_id, vendor, os) do update
-    set min_version = excluded.min_version,
-        source_url = excluded.source_url,
-        released_at = excluded.released_at,
-        fetched_at = excluded.fetched_at
-  -- Migration 0012 recorded when its synthetic seed was reviewed, not the vendor's
-  -- driver release date. Let the first verified source replace that provenance
-  -- even when its real release date is older; later updates stay no-rollback.
-  where (
-        game_driver_requirements.source_url = '${LEGACY_REQUIRED_DRIVER_SOURCE}'
-        and excluded.source_url <> game_driver_requirements.source_url
-        and excluded.fetched_at >= game_driver_requirements.fetched_at
-      )
-     or excluded.released_at > game_driver_requirements.released_at
-     or (
-       excluded.released_at = game_driver_requirements.released_at
-       and (
-          string_to_array(regexp_replace(excluded.min_version, '([.]0)+$', ''), '.')::numeric[]
-            > string_to_array(
-              regexp_replace(game_driver_requirements.min_version, '([.]0)+$', ''),
-              '.'
-            )::numeric[]
-          or (
-            string_to_array(regexp_replace(excluded.min_version, '([.]0)+$', ''), '.')::numeric[]
-              = string_to_array(
-                regexp_replace(game_driver_requirements.min_version, '([.]0)+$', ''),
-                '.'
-              )::numeric[]
-            and (
-              excluded.fetched_at > game_driver_requirements.fetched_at
-              or (
-                excluded.fetched_at = game_driver_requirements.fetched_at
-                and (
-                  excluded.min_version,
-                  excluded.source_url
-                ) is distinct from (
-                  game_driver_requirements.min_version,
-                  game_driver_requirements.source_url
-                )
-              )
-            )
-          )
-        )
-      )
+    set min_version = case when ${REQUIREMENT_SUPERSEDES_SQL}
+          then excluded.min_version else game_driver_requirements.min_version end,
+        source_url = case when ${REQUIREMENT_SUPERSEDES_SQL}
+          then excluded.source_url else game_driver_requirements.source_url end,
+        released_at = case when ${REQUIREMENT_SUPERSEDES_SQL}
+          then excluded.released_at else game_driver_requirements.released_at end,
+        -- Always advance: a later release re-listing the title does not change
+        -- what the minimum is, but it does prove the requirement is still live,
+        -- and a stale fetched_at drops it out of its soak window entirely.
+        fetched_at = greatest(excluded.fetched_at, game_driver_requirements.fetched_at)
+  where ${REQUIREMENT_SUPERSEDES_SQL}
+     or excluded.fetched_at > game_driver_requirements.fetched_at
   returning 1
 )
 select (select count(*)::integer from catalog_upsert) as catalog_upserted,
