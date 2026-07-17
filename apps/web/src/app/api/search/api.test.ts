@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/repo/search", () => ({
+vi.mock("@/lib/repo/search", async (importActual) => ({
+  // Keep the real normalizeSearchQuery (the route's gate) and mock only the DB read.
+  ...(await importActual<typeof import("@/lib/repo/search")>()),
   searchCatalog: vi.fn(async () => ({
     games: [{ id: "1", slug: "cyberpunk-2077", name: "Cyberpunk 2077" }],
     hardware: [],
@@ -40,6 +42,19 @@ describe("GET /api/search (§17.6)", () => {
 
   it("treats a short query as an empty normal state without touching the limiter or repo", async () => {
     const response = await GET(new Request("http://test/api/search?q=rt"));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ games: [], hardware: [] });
+    expect(searchMock).not.toHaveBeenCalled();
+    expect(rateLimitMock).not.toHaveBeenCalled();
+  });
+
+  it("skips the limiter when a query only shrinks below the minimum after normalization", async () => {
+    // "ab™" is 3 chars raw (passes the zod length) but normalizes to "ab" — the
+    // route must gate on the normalized length, matching searchCatalog, so this
+    // never spends a rate-limit token.
+    const response = await GET(
+      new Request(`http://test/api/search?q=${encodeURIComponent("ab™")}`),
+    );
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ games: [], hardware: [] });
     expect(searchMock).not.toHaveBeenCalled();

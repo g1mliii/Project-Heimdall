@@ -72,9 +72,8 @@ describe("game submission contracts (§17.7)", () => {
     },
     isWarmup: false,
     benchmarkSetId: null,
-    gpuDriver: "32.0.15.7688",
-    requiredDriver: "32.0.15.6000",
-    latestDriver: "32.0.15.8000",
+    driverBelowMinimum: false,
+    driverBehindLatest: true,
   };
 
   it("defaults and bounds keyset pages", () => {

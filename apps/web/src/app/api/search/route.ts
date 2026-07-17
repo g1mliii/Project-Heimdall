@@ -5,14 +5,10 @@
  */
 
 import { NextResponse } from "next/server";
-import {
-  SEARCH_MIN_QUERY_LENGTH,
-  searchQuerySchema,
-  type SearchResponse,
-} from "@heimdall/shared";
+import { searchQuerySchema, type SearchResponse } from "@heimdall/shared";
 
 import { jsonError, parseQuery, rateLimits, requireRateLimit } from "@/lib/api/http";
-import { searchCatalog } from "@/lib/repo/search";
+import { normalizeSearchQuery, searchCatalog } from "@/lib/repo/search";
 
 export const runtime = "nodejs";
 
@@ -33,8 +29,11 @@ export async function GET(request: Request): Promise<NextResponse> {
     }
 
     // A too-short typeahead is ordinary UI state, not an error or a reason to
-    // spend a rate-limit/database write.
-    if (parsed.q.length < SEARCH_MIN_QUERY_LENGTH) {
+    // spend a rate-limit/database write. Gate on the same normalized form
+    // searchCatalog uses so a query that only shrinks below the minimum after
+    // normalization does not burn a rate-limit token.
+    const normalizedQuery = normalizeSearchQuery(parsed.q);
+    if (normalizedQuery === null) {
       return catalogResponse(EMPTY_SEARCH);
     }
 
@@ -43,7 +42,7 @@ export async function GET(request: Request): Promise<NextResponse> {
       return limited;
     }
 
-    return catalogResponse(await searchCatalog(parsed.q));
+    return catalogResponse(await searchCatalog(normalizedQuery));
   } catch (error) {
     console.error("GET /api/search failed", error);
     return jsonError(500, "internal", "catalog search failed");

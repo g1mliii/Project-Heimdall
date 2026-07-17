@@ -295,10 +295,14 @@ export interface GameSubmissionRow {
   methodology: GameSubmissionMethodology;
   isWarmup: boolean;
   benchmarkSetId: string | null;
-  /** Installed version plus freshness-gated catalog facts; all are per-run context. */
-  gpuDriver: string | null;
-  requiredDriver: string | null;
-  latestDriver: string | null;
+  /**
+   * Server-computed driver-currency flags. The captured driver and the curated
+   * required/latest versions are normalized per vendor/OS (the same step the
+   * diagnostics engine applies) before comparison, so the client renders badges
+   * without importing parser logic or duplicating the version compare.
+   */
+  driverBelowMinimum: boolean;
+  driverBehindLatest: boolean;
 }
 
 /** Opaque-keyset page of individual submissions. No total count is computed. */

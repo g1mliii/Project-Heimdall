@@ -197,8 +197,8 @@ describe.skipIf(!canRun)("game discovery read (§17.7)", () => {
         submittedBy: "FrameHunter",
         gpu: "NVIDIA GeForce RTX 4070",
         cpu: "AMD Ryzen 7 7800X3D",
-        requiredDriver: "600.00",
-        latestDriver: "610.00",
+        driverBelowMinimum: true,
+        driverBehindLatest: true,
       }),
     );
     expect(result?.submissions.rows[0]?.methodology.profileComplete).toBe(true);
@@ -246,6 +246,56 @@ describe.skipIf(!canRun)("game discovery read (§17.7)", () => {
     expect(result?.submissions.rows.map((row) => row.id)).toEqual(["game_warmup"]);
   });
 
+  it("normalizes device-manager driver strings before flagging currency badges", async () => {
+    // Regression: DriverBadges once compared the raw stored gpu_driver against
+    // the curated marketing-form versions. A Windows Device-Manager string like
+    // "32.0.16.2036" normalizes to marketing "620.36" — newer than both the
+    // 600.00 minimum and the 610.00 latest — yet a raw segment compare
+    // ([32,0,16,2036] < [600]) falsely reported "below minimum"/"outdated" on
+    // essentially every NVIDIA/Windows submission. The server must normalize.
+    const [normGameId, normGpuId, normCpuId] = await Promise.all([
+      resolveGameId("capframex", "Driver Norm Sentinel", db.pool),
+      resolveHardwareId("gpu", "capframex", "NVIDIA GeForce RTX 4080", "nvidia", db.pool),
+      resolveHardwareId("cpu", "capframex", "AMD Ryzen 9 7950X3D", "amd", db.pool),
+    ]);
+    if (!normGameId || !normGpuId || !normCpuId) {
+      throw new Error("expected driver-norm canonical fixtures");
+    }
+
+    const run: Run = {
+      ...validRun,
+      id: "game_devicemanager_driver",
+      createdAt: "2026-07-15T13:00:00.000Z",
+      framesObjectKey: "runs/game_devicemanager_driver.parquet",
+      hardware: {
+        ...validRun.hardware,
+        canonicalGpuId: normGpuId,
+        canonicalCpuId: normCpuId,
+        gpuDriver: "32.0.16.2036",
+      },
+    };
+    await insertRun(run, db.pool);
+    await db.pool.query("update runs set game_id = $2 where id = $1", [run.id, normGameId]);
+    // The nvidia/windows driver_catalog latest (610.00) is a global row already
+    // seeded in beforeAll; only the per-game minimum needs adding here.
+    await db.pool.query(
+      `insert into game_driver_requirements (
+         game_id, vendor, os, min_version, source_url, released_at, fetched_at
+       ) values ($1, 'nvidia', 'windows', '600.00', 'https://example.test/required',
+                 current_date - interval '30 days', now())`,
+      [normGameId],
+    );
+
+    const page = await readGamePage("driver-norm-sentinel", { limit: 1 }, db.pool);
+    expect(page?.submissions.rows[0]).toEqual(
+      expect.objectContaining({
+        id: "game_devicemanager_driver",
+        driverBelowMinimum: false,
+        driverBehindLatest: false,
+      }),
+    );
+  });
+
   it("suppresses stale driver facts and restores them only after refresh", async () => {
     await db.pool.query(
       `update game_driver_requirements
@@ -262,7 +312,7 @@ describe.skipIf(!canRun)("game discovery read (§17.7)", () => {
 
     const stale = await readGamePage("cyberpunk-2077", { limit: 1 }, db.pool);
     expect(stale?.submissions.rows[0]).toEqual(
-      expect.objectContaining({ requiredDriver: null, latestDriver: null }),
+      expect.objectContaining({ driverBelowMinimum: false, driverBehindLatest: false }),
     );
 
     await db.pool.query(
@@ -276,7 +326,7 @@ describe.skipIf(!canRun)("game discovery read (§17.7)", () => {
     );
     const fresh = await readGamePage("cyberpunk-2077", { limit: 1 }, db.pool);
     expect(fresh?.submissions.rows[0]).toEqual(
-      expect.objectContaining({ requiredDriver: "600.00", latestDriver: "610.00" }),
+      expect.objectContaining({ driverBelowMinimum: true, driverBehindLatest: true }),
     );
   });
 

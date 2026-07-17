@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { compareDriverVersions } from "@heimdall/parsers";
 import type { GameSubmissionRow, SceneType } from "@heimdall/shared";
 import {
   Badge,
@@ -45,17 +44,12 @@ function methodologyParts(row: GameSubmissionRow): string[] {
 }
 
 function DriverBadges({ row }: { row: GameSubmissionRow }) {
-  if (!row.gpuDriver) return null;
-  const belowMinimum =
-    row.requiredDriver !== null && compareDriverVersions(row.gpuDriver, row.requiredDriver) < 0;
-  const behindLatest =
-    row.latestDriver !== null && compareDriverVersions(row.gpuDriver, row.latestDriver) < 0;
-  if (!belowMinimum && !behindLatest) return null;
+  if (!row.driverBelowMinimum && !row.driverBehindLatest) return null;
 
   return (
     <span className={styles.badgeRow}>
-      {belowMinimum && <Badge tone="warn">Driver below game minimum</Badge>}
-      {behindLatest && <Badge tone="neutral">Driver outdated</Badge>}
+      {row.driverBelowMinimum && <Badge tone="warn">Driver below game minimum</Badge>}
+      {row.driverBehindLatest && <Badge tone="neutral">Driver outdated</Badge>}
     </span>
   );
 }

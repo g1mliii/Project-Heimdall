@@ -36,9 +36,8 @@ function submission(
     },
     isWarmup: false,
     benchmarkSetId: null,
-    gpuDriver: "566.36",
-    requiredDriver: "600.00",
-    latestDriver: "610.00",
+    driverBelowMinimum: true,
+    driverBehindLatest: true,
     ...overrides,
   };
 }
@@ -59,9 +58,8 @@ describe("GamePageClient (§17.7)", () => {
           rayTracing: null,
           frameGeneration: "none",
         },
-        gpuDriver: null,
-        requiredDriver: null,
-        latestDriver: null,
+        driverBelowMinimum: false,
+        driverBehindLatest: false,
       }),
       submission("warmup", { sceneType: "gameplay", isWarmup: true }),
       submission("set-member", {

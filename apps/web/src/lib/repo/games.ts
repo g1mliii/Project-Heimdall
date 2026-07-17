@@ -8,6 +8,8 @@
  * app memory on this path.
  */
 
+import { compareDriverVersions, normalizeDriverVersion } from "@heimdall/parsers";
+import type { DiagnosticsDriverPlatform } from "@heimdall/parsers";
 import {
   aggregateEligibilitySql,
   GAME_SUBMISSIONS_MAX_PAGE_SIZE,
@@ -19,6 +21,7 @@ import type {
   GameSubmissionsPage,
   GameSubmissionsQuery,
   GeneratedFrameTech,
+  GpuVendor,
   RayTracingMode,
   SceneType,
   SearchGameResult,
@@ -60,6 +63,9 @@ interface GameSubmissionDbRow {
   is_warmup: boolean | null;
   benchmark_set_id: string | null;
   gpu_driver: string | null;
+  gpu_vendor: GpuVendor | null;
+  driver_os: DiagnosticsDriverPlatform["os"] | null;
+  driver_component: DiagnosticsDriverPlatform["component"] | null;
   required_driver: string | null;
   latest_driver: string | null;
 }
@@ -111,20 +117,53 @@ function decodeCursor(cursor: string | undefined): DecodedCursor | null {
   }
 }
 
-function mapSubmission(row: GameSubmissionDbRow): GameSubmissionRow | null {
-  if (
-    row.submission_id === null ||
-    row.created_at === null ||
-    row.gpu === null ||
-    row.cpu === null ||
-    row.avg_fps === null ||
-    row.one_percent_low_fps === null ||
-    row.point_one_percent_low_fps === null ||
-    row.generated_frame_tech === null
-  ) {
-    return null;
-  }
+/**
+ * Whether `captured` is strictly older than `expected` after both are put in
+ * the same comparable form. Mirrors the diagnostics engine: normalize per
+ * vendor/OS first (NVIDIA's Device-Manager form maps to marketing form, AMD's
+ * Windows Driver-Store package no-ops), then compare — either side failing to
+ * normalize yields `false` rather than a guess.
+ */
+function isOlderDriver(
+  captured: string,
+  expected: string,
+  vendor: Exclude<GpuVendor, "unknown">,
+  platform: DiagnosticsDriverPlatform,
+): boolean {
+  const left = normalizeDriverVersion(captured, vendor, platform.os, platform.component);
+  const right = normalizeDriverVersion(expected, vendor, platform.os, platform.component);
+  return left !== null && right !== null && compareDriverVersions(left, right) < 0;
+}
 
+/**
+ * Server-side driver-currency flags for one submission. Self-suppresses (both
+ * false) when the driver, vendor, or resolved platform is absent — exactly the
+ * conditions under which the diagnostics rules no-op.
+ */
+function driverCurrency(row: GameSubmissionDbRow): {
+  belowMinimum: boolean;
+  behindLatest: boolean;
+} {
+  const { gpu_driver: driver, gpu_vendor: vendor, driver_os: os, driver_component: component } = row;
+  if (!driver || !vendor || vendor === "unknown" || !os || !component) {
+    return { belowMinimum: false, behindLatest: false };
+  }
+  const platform: DiagnosticsDriverPlatform = { vendor, os, component };
+  return {
+    belowMinimum:
+      row.required_driver !== null && isOlderDriver(driver, row.required_driver, vendor, platform),
+    behindLatest:
+      row.latest_driver !== null && isOlderDriver(driver, row.latest_driver, vendor, platform),
+  };
+}
+
+/**
+ * Map one populated `run_page` row to a submission. The caller filters the
+ * no-runs sentinel (see {@link readGamePage}), so every row reaching here is a
+ * real submission whose NOT-NULL / inner-joined columns are present.
+ */
+function mapSubmission(row: GameSubmissionDbRow): GameSubmissionRow {
+  const { belowMinimum, behindLatest } = driverCurrency(row);
   const parsedMethodology =
     row.methodology_manifest_version === null
       ? null
@@ -135,14 +174,14 @@ function mapSubmission(row: GameSubmissionDbRow): GameSubmissionRow | null {
     missingComparabilityProfileFields(parsedMethodology.data).length === 0;
 
   return {
-    id: row.submission_id,
-    createdAt: row.created_at.toISOString(),
-    gpu: row.gpu,
-    cpu: row.cpu,
+    id: row.submission_id!,
+    createdAt: row.created_at!.toISOString(),
+    gpu: row.gpu!,
+    cpu: row.cpu!,
     sceneType: row.scene_type,
-    avgFps: row.avg_fps,
-    onePercentLowFps: row.one_percent_low_fps,
-    pointOnePercentLowFps: row.point_one_percent_low_fps,
+    avgFps: row.avg_fps!,
+    onePercentLowFps: row.one_percent_low_fps!,
+    pointOnePercentLowFps: row.point_one_percent_low_fps!,
     submittedBy: row.submitted_by,
     methodology: {
       profileComplete,
@@ -150,13 +189,12 @@ function mapSubmission(row: GameSubmissionDbRow): GameSubmissionRow | null {
       graphicsApi: row.graphics_api,
       upscaler: row.upscaler,
       rayTracing: row.ray_tracing,
-      frameGeneration: row.generated_frame_tech,
+      frameGeneration: row.generated_frame_tech!,
     },
     isWarmup: row.is_warmup ?? false,
     benchmarkSetId: row.benchmark_set_id,
-    gpuDriver: row.gpu_driver,
-    requiredDriver: row.required_driver,
-    latestDriver: row.latest_driver,
+    driverBelowMinimum: belowMinimum,
+    driverBehindLatest: behindLatest,
   };
 }
 
@@ -197,6 +235,9 @@ export async function readGamePage(
               r.is_warmup,
               r.benchmark_set_id,
               r.gpu_driver,
+              r.gpu_vendor,
+              driver_platform.os as driver_os,
+              ${DRIVER_COMPONENT_SQL} as driver_component,
               requirement.min_version as required_driver,
               catalog.latest_version as latest_driver
          from selected_game game
@@ -244,6 +285,9 @@ export async function readGamePage(
             page.is_warmup,
             page.benchmark_set_id,
             page.gpu_driver,
+            page.gpu_vendor,
+            page.driver_os,
+            page.driver_component,
             page.required_driver,
             page.latest_driver
        from selected_game game
@@ -265,7 +309,11 @@ export async function readGamePage(
   const first = rows[0];
   if (!first) return null;
 
-  const mapped = rows.map(mapSubmission).filter((row): row is GameSubmissionRow => row !== null);
+  // `selected_game left join run_page on true` returns a single all-null
+  // sentinel row when the game has no eligible runs, and fully-populated rows
+  // otherwise — never a mix. So one submission_id check on the first row
+  // decides the empty case; the rest are guaranteed real submissions.
+  const mapped = first.submission_id === null ? [] : rows.map(mapSubmission);
   const hasNextPage = mapped.length > limit;
   const pageRows = hasNextPage ? mapped.slice(0, limit) : mapped;
   return {

@@ -113,15 +113,29 @@ select kind, id::text, slug, name, hardware_kind, vendor
 
 const EMPTY_SEARCH: SearchResponse = { games: [], hardware: [] };
 
-export async function searchCatalog(
-  rawQuery: string,
-  db: Queryable = getPool(),
-): Promise<SearchResponse> {
+/**
+ * The single min/max gate for catalog search: the normalized query when it can
+ * produce results, else `null`. Both the route (to skip a rate-limit token on a
+ * too-short typeahead) and `searchCatalog` (its own guard) call this so the
+ * bound is defined once and always measured against the same normalized string.
+ */
+export function normalizeSearchQuery(rawQuery: string): string | null {
   const normalized = normalizeAliasName(rawQuery);
   if (
     normalized.length < SEARCH_MIN_QUERY_LENGTH ||
     normalized.length > MAX_INDEXED_METADATA_TEXT_LENGTH
   ) {
+    return null;
+  }
+  return normalized;
+}
+
+export async function searchCatalog(
+  rawQuery: string,
+  db: Queryable = getPool(),
+): Promise<SearchResponse> {
+  const normalized = normalizeSearchQuery(rawQuery);
+  if (normalized === null) {
     return EMPTY_SEARCH;
   }
 

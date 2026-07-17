@@ -319,9 +319,8 @@ export const gameSubmissionRowSchema = z.object({
   methodology: gameSubmissionMethodologySchema,
   isWarmup: z.boolean(),
   benchmarkSetId: z.string().nullable(),
-  gpuDriver: z.string().nullable(),
-  requiredDriver: z.string().nullable(),
-  latestDriver: z.string().nullable(),
+  driverBelowMinimum: z.boolean(),
+  driverBehindLatest: z.boolean(),
 });
 
 export const gameSubmissionsPageSchema = z.object({
