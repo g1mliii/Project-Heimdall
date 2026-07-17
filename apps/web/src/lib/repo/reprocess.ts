@@ -200,35 +200,59 @@ export const DRIVER_REFRESH_ENQUEUE_SQL = `with catalog_state as materialized (
          from reprocess_watermarks
         where key = 'driver-catalog'
      ), expiry_crossed as materialized (
-       select exists (
-         select 1
-           from driver_catalog catalog
-           cross join stored
-          where catalog.fetched_at > stored.updated_at - make_interval(days => $1)
-            and catalog.fetched_at <= now() - make_interval(days => $1)
-         union all
-         select 1
-           from game_driver_requirements requirement
-           cross join stored
-          where requirement.fetched_at > stored.updated_at - make_interval(days => $1)
-            and requirement.fetched_at <= now() - make_interval(days => $1)
-       ) as value
+       -- A source's expiry deadline is a stable generation. Using now() here
+       -- would make every completed run look stale again on the next bounded
+       -- pass, so a multi-batch expiry sweep could never finish.
+       select greatest(
+                (select max(catalog.fetched_at)
+                   from driver_catalog catalog
+                   cross join stored
+                  where catalog.fetched_at > stored.updated_at - make_interval(days => $1)
+                    and catalog.fetched_at <= now() - make_interval(days => $1)),
+                (select max(requirement.fetched_at)
+                   from game_driver_requirements requirement
+                   cross join stored
+                  where requirement.fetched_at > stored.updated_at - make_interval(days => $1)
+                    and requirement.fetched_at <= now() - make_interval(days => $1))
+              ) + make_interval(days => $1) as watermark
      ), sweep as materialized (
        select catalog_state.catalog_watermark,
-              catalog_state.catalog_watermark is not null
-                and (
-                  catalog_state.catalog_watermark is distinct from stored.value
-                  or expiry_crossed.value
-                ) as requested,
-              case
-                when expiry_crossed.value
-                  or catalog_state.catalog_watermark < stored.value
-                  then now()
-                else catalog_state.catalog_watermark
-              end as evaluate_before
-         from catalog_state
-         left join stored on true
-         cross join expiry_crossed
+               catalog_state.catalog_watermark is not null
+                 and (
+                   catalog_state.catalog_watermark is distinct from stored.value
+                   or expiry_crossed.watermark is not null
+                 ) as requested,
+               case
+                 when catalog_state.catalog_watermark is distinct from stored.value
+                   then catalog_state.catalog_watermark
+                 else expiry_crossed.watermark
+               end as source_watermark
+          from catalog_state
+          left join stored on true
+          cross join expiry_crossed
+     ), active_upsert as (
+       -- updated_at is the stable time generation for this in-progress sweep,
+       -- while value identifies the source state that prompted it. Keeping
+       -- both prevents a retrying expiry/decrease sweep from moving its target
+       -- forward on every bounded invocation.
+       insert into reprocess_watermarks as active (key, value, updated_at)
+       select 'driver-catalog-active', sweep.source_watermark, now()
+         from sweep
+        where sweep.requested
+       on conflict (key) do update
+          set value = excluded.value,
+              updated_at = excluded.updated_at
+        where active.value is distinct from excluded.value
+       returning value, updated_at
+     ), active_sweep as materialized (
+       select value as source_watermark, updated_at as evaluate_before
+         from active_upsert
+       union all
+       select active.value as source_watermark, active.updated_at as evaluate_before
+         from reprocess_watermarks active
+         join sweep on sweep.requested and active.value = sweep.source_watermark
+        where active.key = 'driver-catalog-active'
+          and not exists (select 1 from active_upsert)
      ), live_driver_jobs as materialized (
        select count(*)::integer as count
          from reprocess_jobs
@@ -237,58 +261,74 @@ export const DRIVER_REFRESH_ENQUEUE_SQL = `with catalog_state as materialized (
      ), capacity as materialized (
        select greatest($2::integer - live_driver_jobs.count, 0) as available
          from live_driver_jobs
-     ), candidates as materialized (
-       select r.id
-         from runs r
-         cross join sweep
-         cross join capacity
-        where sweep.requested
-          and ${REPROCESSABLE_STATUS_SQL("r")}
-          and (r.driver_evaluated_at is null or r.driver_evaluated_at < sweep.evaluate_before)
-          -- Only a LIVE job blocks re-enqueue. A tombstone must not, or five
-          -- transient failures would freeze this run's driver findings forever:
-          -- claimNextReprocessJob already skips failed rows, so the row would
-          -- sit unclaimable and un-replaceable with no operator escape hatch.
-          and not exists (
-            select 1 from reprocess_jobs existing
-             where existing.run_id = r.id
-               and existing.kind = '${REPROCESS_KIND.driver}'
-               and existing.failed_at is null
-          )
+      ), candidates as materialized (
+        select r.id, active_sweep.source_watermark
+          from runs r
+          cross join active_sweep
+          cross join capacity
+         where ${REPROCESSABLE_STATUS_SQL("r")}
+           and (
+             r.driver_evaluated_at is null
+             or r.driver_evaluated_at < active_sweep.evaluate_before
+           )
+           -- A terminal tombstone blocks only the generation that produced it.
+           -- A source move or TTL expiry gets a new stable generation and may
+           -- retry; otherwise a failed first row would revive every pass and
+           -- starve the rest of a bounded sweep.
+           and not exists (
+             select 1 from reprocess_jobs existing
+              where existing.run_id = r.id
+                and existing.kind = '${REPROCESS_KIND.driver}'
+                and (
+                  existing.failed_at is null
+                  or existing.driver_source_watermark is not distinct from active_sweep.source_watermark
+                )
+           )
         order by r.driver_evaluated_at nulls first, r.id
         limit (select available + 1 from capacity)
-     ), inserted as (
-       insert into reprocess_jobs (run_id, kind)
-       select id, '${REPROCESS_KIND.driver}'
-         from candidates
-        limit (select available from capacity)
-       -- Revive a tombstone rather than skipping it. Unlike the full lane -- where
-       -- capability_manifest_version can never advance for a run that always
-       -- fails, so retrying would loop forever -- this sweep only fires when a
-       -- source watermark actually moves. That bounds retries to real new
-       -- evidence, which is exactly when a stale failure deserves another look.
-       on conflict (run_id, kind) do update
-          set failed_at = null,
-              attempts = 0,
-              locked_at = null,
-              not_before = now(),
-              last_error = null
-        where reprocess_jobs.failed_at is not null
+      ), inserted as (
+        insert into reprocess_jobs (run_id, kind, driver_source_watermark)
+        select id, '${REPROCESS_KIND.driver}', source_watermark
+          from candidates
+         limit (select available from capacity)
+        on conflict (run_id, kind) do update
+           set driver_source_watermark = excluded.driver_source_watermark,
+               failed_at = null,
+               attempts = 0,
+               locked_at = null,
+               not_before = now(),
+               last_error = null
+         where reprocess_jobs.failed_at is not null
+           and reprocess_jobs.driver_source_watermark
+                 is distinct from excluded.driver_source_watermark
        returning run_id
      ), sweep_status as (
        select sweep.requested,
               sweep.catalog_watermark,
-              (select count(*) from candidates) <= (select available from capacity) as complete
+              (select count(*) from candidates) <= (select available from capacity)
+                and not exists (
+                  -- Keep a newer generation open while a claimed job from an
+                  -- earlier generation can still become a tombstone. Otherwise
+                  -- completing now would make that terminal failure ineligible
+                  -- for the newer generation's one bounded retry.
+                  select 1
+                    from reprocess_jobs live
+                    cross join active_sweep
+                   where live.kind = '${REPROCESS_KIND.driver}'
+                     and live.failed_at is null
+                     and live.driver_source_watermark
+                           is distinct from active_sweep.source_watermark
+                ) as complete
          from sweep
-     ), watermark_update as (
-       insert into reprocess_watermarks (key, value, updated_at)
+      ), watermark_update as (
+        insert into reprocess_watermarks (key, value, updated_at)
        select 'driver-catalog', catalog_watermark, now()
          from sweep_status
         where requested and complete
-       on conflict (key) do update
-         set value = excluded.value,
-             updated_at = excluded.updated_at
-     )
+        on conflict (key) do update
+          set value = excluded.value,
+              updated_at = excluded.updated_at
+      )
      select (select count(*) from inserted) as enqueued,
             coalesce((select requested from sweep_status), false) as sweep_requested,
             coalesce((select complete from sweep_status), true) as sweep_complete`;
@@ -528,24 +568,39 @@ export async function applyDriverRefresh(
   db: Queryable = getPool(),
 ): Promise<void> {
   if (!changed) {
-    // Only the run-level watermark moves. `diagnostics.evaluated_at` records
-    // when a verdict was ESTABLISHED, not when it was last re-checked, so a
-    // no-op refresh deliberately leaves the finding — id and evaluated_at alike
-    // — untouched. `runs.driver_evaluated_at` is what tracks the last check.
+    // Preserve row identity and order, but refresh the source provenance and
+    // last-evaluated timestamp. A current driver recommendation must not report
+    // the date it was first established as if it were its latest evaluation.
     await db.query(
-      `update runs
-          set driver_evaluated_at = now()
-        where id = $1
-          and status <> 'hidden'
-          and exists (
-            select 1 from reprocess_jobs
-             where run_id = $1
-               and kind = '${REPROCESS_KIND.driver}'
-               and attempts = $2
-               and locked_at is not null
-               and failed_at is null
-          )`,
-      [runId, claim.attempts],
+      `with job_claim as (
+         select 1
+           from reprocess_jobs
+          where run_id = $1
+            and kind = '${REPROCESS_KIND.driver}'
+            and attempts = $2
+            and locked_at is not null
+            and failed_at is null
+       ), run_update as (
+         update runs
+            set driver_evaluated_at = now()
+          where id = $1
+            and status <> 'hidden'
+            and exists (select 1 from job_claim)
+          returning id
+       )
+       update diagnostics diagnostic
+          set evidence = refreshed.evidence::jsonb,
+              evaluated_at = now()
+         from unnest($3::text[], $4::text[]) as refreshed(code, evidence)
+        where diagnostic.run_id = $1
+          and diagnostic.code = refreshed.code
+          and exists (select 1 from run_update)`,
+      [
+        runId,
+        claim.attempts,
+        findings.map((finding) => finding.code),
+        findings.map((finding) => (finding.evidence ? JSON.stringify(finding.evidence) : null)),
+      ],
     );
     return;
   }

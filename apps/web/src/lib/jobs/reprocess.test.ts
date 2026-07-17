@@ -322,10 +322,12 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
     const beforeNoop = await db.pool.query<{
       diagnostic_id: string;
       diagnostic_evaluated_at: Date;
+      diagnostic_evidence: { provenance?: { fetchedAt?: string } } | null;
       driver_evaluated_at: Date;
     }>(
       `select d.id as diagnostic_id,
               d.evaluated_at as diagnostic_evaluated_at,
+              d.evidence as diagnostic_evidence,
               r.driver_evaluated_at
          from diagnostics d
          join runs r on r.id = d.run_id
@@ -348,10 +350,12 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
     const afterNoop = await db.pool.query<{
       diagnostic_id: string;
       diagnostic_evaluated_at: Date;
+      diagnostic_evidence: { provenance?: { fetchedAt?: string } } | null;
       driver_evaluated_at: Date;
     }>(
       `select d.id as diagnostic_id,
               d.evaluated_at as diagnostic_evaluated_at,
+              d.evidence as diagnostic_evidence,
               r.driver_evaluated_at
          from diagnostics d
          join runs r on r.id = d.run_id
@@ -359,8 +363,11 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
       [id],
     );
     expect(afterNoop.rows[0]?.diagnostic_id).toBe(beforeNoop.rows[0]?.diagnostic_id);
-    expect(afterNoop.rows[0]?.diagnostic_evaluated_at).toEqual(
-      beforeNoop.rows[0]?.diagnostic_evaluated_at,
+    expect(afterNoop.rows[0]?.diagnostic_evaluated_at.getTime()).toBeGreaterThan(
+      beforeNoop.rows[0]!.diagnostic_evaluated_at.getTime(),
+    );
+    expect(afterNoop.rows[0]?.diagnostic_evidence?.provenance?.fetchedAt).not.toEqual(
+      beforeNoop.rows[0]?.diagnostic_evidence?.provenance?.fetchedAt,
     );
     expect(afterNoop.rows[0]?.driver_evaluated_at.getTime()).toBeGreaterThanOrEqual(
       beforeNoop.rows[0]!.driver_evaluated_at.getTime(),
@@ -517,6 +524,60 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
     expect((await enqueueDriverRefreshJobs({}, db.pool)).enqueued).toBe(1);
     const revived = await claimNextReprocessJob(REPROCESS_KIND.driver, {}, db.pool);
     expect(revived?.runId).toBe(id);
+  });
+
+  it("does not revive a driver tombstone until the sweep generation changes", async () => {
+    for (const suffix of ["a", "b", "c"]) {
+      await insertRun(runFixture(`run_driver_terminal_${suffix}`), db.pool);
+    }
+    await settleDriverWatermark();
+    await db.pool.query(
+      `update driver_catalog
+          set fetched_at = now() + interval '1 millisecond'
+        where vendor = 'nvidia' and os = 'windows' and component = 'gpu'`,
+    );
+
+    expect(await enqueueDriverRefreshJobs({ limit: 1 }, db.pool)).toMatchObject({
+      enqueued: 1,
+      sweepRequested: true,
+      sweepComplete: false,
+    });
+    const failed = await claimNextReprocessJob(REPROCESS_KIND.driver, {}, db.pool);
+    expect(failed?.runId).toBe("run_driver_terminal_a");
+    await failReprocessJob(failed!, "permanent source failure", true, db.pool);
+
+    // The tombstone must not reclaim the only slot in the still-open sweep.
+    expect((await enqueueDriverRefreshJobs({ limit: 1 }, db.pool)).enqueued).toBe(1);
+    const next = await claimNextReprocessJob(REPROCESS_KIND.driver, {}, db.pool);
+    expect(next?.runId).toBe("run_driver_terminal_b");
+  });
+
+  it("keeps a newer sweep open while an older driver job is live", async () => {
+    const id = "run_driver_generation_race";
+    await insertRun(runFixture(id), db.pool);
+    await settleDriverWatermark();
+    await db.pool.query(
+      `update driver_catalog
+          set fetched_at = now() + interval '1 millisecond'
+        where vendor = 'nvidia' and os = 'windows' and component = 'gpu'`,
+    );
+    expect((await enqueueDriverRefreshJobs({}, db.pool)).enqueued).toBe(1);
+    const olderJob = await claimNextReprocessJob(REPROCESS_KIND.driver, {}, db.pool);
+    expect(olderJob?.runId).toBe(id);
+
+    await db.pool.query(
+      `update driver_catalog
+          set fetched_at = now() + interval '2 milliseconds'
+        where vendor = 'nvidia' and os = 'windows' and component = 'gpu'`,
+    );
+    expect(await enqueueDriverRefreshJobs({}, db.pool)).toMatchObject({
+      enqueued: 0,
+      sweepRequested: true,
+      sweepComplete: false,
+    });
+
+    await failReprocessJob(olderJob!, "permanent source failure", true, db.pool);
+    expect((await enqueueDriverRefreshJobs({}, db.pool)).enqueued).toBe(1);
   });
 
   it("keeps a driver refresh sweep within its live-queue capacity", async () => {

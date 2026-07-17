@@ -7,6 +7,10 @@ create table reprocess_jobs (
   kind        text not null
               constraint reprocess_jobs_kind_check
               check (kind in ('full', 'driver')),
+  -- The stable source generation that selected a driver job. Full Parquet jobs
+  -- have no source generation; driver tombstones may revive only for a newer
+  -- catalog/expiry generation.
+  driver_source_watermark timestamptz,
   not_before  timestamptz not null default now(),
   attempts    integer not null default 0
               constraint reprocess_jobs_attempts_nonnegative_check
@@ -15,6 +19,8 @@ create table reprocess_jobs (
   last_error  text,
   failed_at   timestamptz,
   created_at  timestamptz not null default now(),
+  constraint reprocess_jobs_driver_source_watermark_check
+    check ((kind = 'driver') = (driver_source_watermark is not null)),
   primary key (run_id, kind)
 );
 
@@ -32,7 +38,7 @@ create index runs_reprocess_capability_idx
   where frames_object_key is not null
     and status in ('validated', 'flagged');
 create index diagnostics_rule_version_run_idx
-  on diagnostics (code, rule_version, run_id);
+  on diagnostics (code, rule_version nulls first, run_id);
 
 -- The run-level watermark covers findings that do not currently exist, so a
 -- catalog move can make a historical run gain as well as lose a finding.

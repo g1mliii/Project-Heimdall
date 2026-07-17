@@ -374,7 +374,9 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     expect(byName.get("runs_reprocess_capability_idx")?.definition).toContain(
       "capability_manifest_version NULLS FIRST",
     );
-    expect(byName.get("diagnostics_rule_version_run_idx")?.definition).toContain("rule_version");
+    expect(byName.get("diagnostics_rule_version_run_idx")?.definition).toContain(
+      "rule_version NULLS FIRST",
+    );
     expect(byName.get("runs_driver_evaluated_at_idx")?.definition).toContain(
       "driver_evaluated_at NULLS FIRST",
     );
