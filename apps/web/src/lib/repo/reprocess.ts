@@ -396,6 +396,10 @@ export async function applyReprocessResult(
               generated_frame_tech = $14,
               capability_manifest = $16::jsonb,
               capability_manifest_version = ($16::jsonb ->> 'version')::integer,
+              -- DIAGNOSTIC_RULES contains both driver rules, so this replay just
+              -- re-evaluated them against the current catalog. Record it, or the
+              -- driver sweep cannot see the work is done and queues it again.
+              driver_evaluated_at = now(),
               settings_json = coalesce($17::jsonb, runs.settings_json),
               methodology_manifest_version = coalesce(
                 ($17::jsonb ->> 'version')::integer,
@@ -504,6 +508,10 @@ export async function applyDriverRefresh(
   db: Queryable = getPool(),
 ): Promise<void> {
   if (!changed) {
+    // Only the run-level watermark moves. `diagnostics.evaluated_at` records
+    // when a verdict was ESTABLISHED, not when it was last re-checked, so a
+    // no-op refresh deliberately leaves the finding — id and evaluated_at alike
+    // — untouched. `runs.driver_evaluated_at` is what tracks the last check.
     await db.query(
       `update runs
           set driver_evaluated_at = now()

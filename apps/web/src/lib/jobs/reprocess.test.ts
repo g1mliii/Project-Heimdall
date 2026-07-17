@@ -15,6 +15,7 @@ import {
   framesToColumnData,
   validFrames,
   validRun,
+  type DiagnosticFinding,
   type MethodologyManifest,
   type Run,
 } from "@heimdall/shared";
@@ -416,6 +417,57 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
     // The same run becomes eligible the moment it carries a verdict.
     await db.pool.query("update runs set status = 'validated' where id = $1", [pending]);
     expect(await enqueueFullReprocessJobs({}, db.pool)).toBe(1);
+  });
+
+  it("keeps findings in registry order after a driver refresh replaces them", async () => {
+    const id = "run_driver_finding_order";
+    await insertRun(runFixture(id), db.pool);
+    await insertDiagnostics(
+      id,
+      [
+        { code: "vram-saturation", severity: "warn", title: "VRAM", detail: "d" },
+        { code: "driver-update-available", severity: "info", title: "Driver", detail: "d" },
+        { code: "likely-gpu-bound", severity: "info", title: "GPU", detail: "d" },
+      ] as unknown as DiagnosticFinding[],
+      db.pool,
+    );
+    const registryOrder = (await readDiagnostics(id, db.pool)).map((row) => row.code);
+
+    // Replacing the driver findings gives them fresh, higher serial ids. Reading
+    // back by id would sort them below every other finding.
+    await db.pool.query("delete from diagnostics where run_id = $1 and code = $2", [
+      id,
+      "driver-update-available",
+    ]);
+    await insertDiagnostics(
+      id,
+      [
+        { code: "driver-update-available", severity: "info", title: "Driver", detail: "d2" },
+      ] as unknown as DiagnosticFinding[],
+      db.pool,
+    );
+
+    expect((await readDiagnostics(id, db.pool)).map((row) => row.code)).toEqual(registryOrder);
+  });
+
+  it("records driver_evaluated_at when the full lane replays the driver rules", async () => {
+    const id = "run_full_sets_driver_watermark";
+    await insertRun(runFixture(id, { capabilityManifest: undefined }), db.pool);
+    await settleDriverWatermark();
+    await db.pool.query("update runs set driver_evaluated_at = null where id = $1", [id]);
+    expect(await enqueueFullReprocessJobs({}, db.pool)).toBe(1);
+    await drainReprocessJobs(
+      { maxJobs: 5 },
+      { db: db.pool, getObject: async () => parquetBytes },
+    );
+
+    // DIAGNOSTIC_RULES includes both driver rules, so the replay re-evaluated
+    // them; without recording that, the driver sweep re-queues the same work.
+    const row = await db.pool.query<{ driver_evaluated_at: Date | null }>(
+      "select driver_evaluated_at from runs where id = $1",
+      [id],
+    );
+    expect(row.rows[0]?.driver_evaluated_at).toBeInstanceOf(Date);
   });
 
   it("revives a driver tombstone when a source watermark moves again", async () => {

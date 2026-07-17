@@ -25,7 +25,11 @@ import type {
   DiagnosticsDriverCatalog,
   DiagnosticsDriverPlatform,
 } from "@heimdall/parsers";
+import { DIAGNOSTIC_RULES } from "@heimdall/parsers";
 import { getDbEnv } from "./env";
+
+/** Registry order — the order findings are produced, and the order they read back. */
+const DIAGNOSTIC_RULE_CODES = DIAGNOSTIC_RULES.map((rule) => rule.code);
 
 /** A pg.Pool or checked-out pg.PoolClient — anything that can run a query. */
 export type Queryable = Pick<pg.Pool, "query">;
@@ -330,11 +334,16 @@ export async function readDiagnostics(
   db: Queryable = getPool(),
 ): Promise<Diagnostic[]> {
   const rows = await query<DiagnosticRow>(
+    // Order by registry position, not by id. Serial id happens to match the
+    // registry on first insert, but applyDriverRefresh replaces the two driver
+    // findings with fresh (higher) ids, which would permanently sort them below
+    // everything else. `array_position` returns null for a code no longer in the
+    // registry; those sort last and keep a stable id tiebreak.
     `select id, code, severity, title, detail, evidence, rule_version, confidence, evaluated_at
        from diagnostics
       where run_id = $1
-      order by id`,
-    [runId],
+      order by array_position($2::text[], code) nulls last, id`,
+    [runId, DIAGNOSTIC_RULE_CODES],
     db,
   );
   return rows.map((row) => {
