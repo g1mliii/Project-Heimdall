@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Button, Card, Meter, NavTabs, Stat } from "./index";
+import { Button, Card, Meter, NavTabs, Stat, Table } from "./index";
 
 // Server-render smoke tests: prove the primitives mount and emit their .hd-*
 // classes. (Full visual fidelity is covered by the Playwright snapshots.)
@@ -55,5 +55,47 @@ describe("@heimdall/ui primitives render", () => {
     expect(html).toContain('role="progressbar"');
     expect(html).toContain('aria-valuenow="72.4"');
     expect(html).toContain('aria-labelledby=');
+  });
+
+  it("Table keeps consumer order and emits accessible sort + numeric semantics", () => {
+    const html = renderToStaticMarkup(
+      <Table
+        caption="Submissions"
+        columns={[
+          { key: "name", header: "Name", sortable: true, cell: (row) => row.name },
+          { key: "fps", header: "Avg", numeric: true, align: "right", cell: (row) => row.fps },
+        ]}
+        rows={[
+          { id: "2", name: "Second", fps: 98 },
+          { id: "1", name: "First", fps: 145 },
+        ]}
+        rowKey={(row) => row.id}
+        sort={{ key: "name", direction: "asc" }}
+        onSortChange={() => undefined}
+      />,
+    );
+
+    expect(html).toContain('class="hd-table"');
+    expect(html).toContain("<caption");
+    expect(html).toContain('scope="col"');
+    expect(html.match(/aria-sort=/g)).toHaveLength(1);
+    expect(html).toContain('aria-sort="ascending"');
+    expect(html).toContain("<button");
+    expect(html).toContain("data-mono");
+    expect(html.indexOf("Second")).toBeLessThan(html.indexOf("First"));
+  });
+
+  it("Table renders its controlled empty state across all columns", () => {
+    const html = renderToStaticMarkup(
+      <Table
+        caption="Submissions"
+        columns={[{ key: "name", header: "Name", cell: (row: { name: string }) => row.name }]}
+        rows={[]}
+        rowKey={(row) => row.name}
+        empty="No matching submissions."
+      />,
+    );
+    expect(html).toContain('colSpan="1"');
+    expect(html).toContain("No matching submissions.");
   });
 });

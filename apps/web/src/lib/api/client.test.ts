@@ -18,7 +18,14 @@ vi.mock("hyparquet", async (importOriginal) => {
 import { parquetMetadata, parquetRead } from "hyparquet";
 import { parquetWriteBuffer } from "hyparquet-writer";
 import { framesToColumnData, INGEST_LIMITS, makeSyntheticFrames } from "@heimdall/shared";
-import { fetchFrames, getFramesUrl, loadRunFrames, type ApiTransport } from "./client";
+import {
+  fetchFrames,
+  getFramesUrl,
+  loadCatalogSearch,
+  loadGameRuns,
+  loadRunFrames,
+  type ApiTransport,
+} from "./client";
 import { FRAME_CHART_PARQUET_COLUMN_NAMES } from "../parquet/frame-metadata";
 
 function transportReturning(handler: (url: string) => Response | Promise<Response>): ApiTransport {
@@ -171,5 +178,54 @@ describe("loadRunFrames", () => {
     const result = await loadRunFrames("run_x", transport);
     expect(result).toMatchObject({ ok: false, code: "not-finalized" });
     expect(transport.fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("loadGameRuns", () => {
+  it("encodes the slug and bounded query, then validates the response", async () => {
+    let requested = "";
+    const transport = transportReturning((url) => {
+      requested = url;
+      return Response.json({ rows: [], nextCursor: null });
+    });
+
+    await expect(
+      loadGameRuns(
+        "game/with space",
+        { limit: 12, cursor: "next_page", sceneType: "freeform", sortDirection: "asc" },
+        transport,
+      ),
+    ).resolves.toEqual({ ok: true, data: { rows: [], nextCursor: null } });
+    expect(requested).toBe(
+      "/api/games/game%2Fwith%20space/runs?limit=12&cursor=next_page&sceneType=freeform&sortDirection=asc",
+    );
+  });
+
+  it("rejects a malformed success payload", async () => {
+    const transport = transportReturning(() => Response.json({ rows: "private data" }));
+    await expect(loadGameRuns("game", { limit: 25 }, transport)).resolves.toMatchObject({
+      ok: false,
+      code: "invalid-response",
+    });
+  });
+});
+
+describe("loadCatalogSearch", () => {
+  it("encodes the query and validates catalog result kinds", async () => {
+    let requested = "";
+    const transport = transportReturning((url) => {
+      requested = url;
+      return Response.json({
+        games: [{ id: "1", slug: "cyberpunk-2077", name: "Cyberpunk 2077" }],
+        hardware: [
+          { id: "2", kind: "gpu", vendor: "nvidia", canonicalName: "RTX 4070" },
+        ],
+      });
+    });
+
+    await expect(loadCatalogSearch("cyber punk", transport)).resolves.toMatchObject({
+      ok: true,
+    });
+    expect(requested).toBe("/api/search?q=cyber+punk");
   });
 });

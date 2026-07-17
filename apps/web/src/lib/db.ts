@@ -109,7 +109,7 @@ export const DRIVER_UPDATE_GRACE_DAYS = DIAGNOSTICS.driverUpdateGraceDays;
  * opposite: it is evidence of a platform this catalog does not cover. It must
  * still map to null, and must NOT be overridden by the capture tool.
  */
-const DRIVER_OS_SQL = `case
+export const DRIVER_OS_SQL = `case
   when trim(lower(coalesce(r.os_build, ''))) ~ '^(microsoft )?windows$'
     or lower(coalesce(r.os_build, '')) ~ '(^|[^a-z0-9])(?:(?:microsoft[ _-]+)?(?:windows|win)(?:[ _-]+nt[ _-]*|[ _-]*\\[\\s*version\\s+|[ _-]*)(?:10|11)(?:\\.\\d+)?)(?:[^a-z0-9]|$)' then 'windows'
   when lower(coalesce(r.os_build, '')) ~ '(^|[^a-z0-9])(linux|ubuntu|debian|fedora|arch( linux)?|steam ?os|pop!?_?os|manjaro|nobara|bazzite|opensuse|mint)([^a-z0-9]|$)' then 'linux'
@@ -121,16 +121,16 @@ const DRIVER_OS_SQL = `case
 end`;
 
 /** Linux AMD/Intel use Mesa; every other supported cell uses a GPU package. */
-const DRIVER_COMPONENT_SQL = `case
+export const DRIVER_COMPONENT_SQL = `case
   when driver_platform.os = 'linux' and r.gpu_vendor in ('amd', 'intel') then 'mesa'
   else 'gpu'
 end`;
 
-const DRIVER_PLATFORM_JOIN_SQL = `left join lateral (
+export const DRIVER_PLATFORM_JOIN_SQL = `left join lateral (
         select ${DRIVER_OS_SQL} as os
       ) driver_platform on true`;
 
-const REQUIRED_DRIVER_JOIN_SQL = `left join game_driver_requirements requirement
+export const REQUIRED_DRIVER_JOIN_SQL = `left join game_driver_requirements requirement
         on requirement.game_id = r.game_id
        and requirement.vendor = r.gpu_vendor
        and requirement.os = driver_platform.os

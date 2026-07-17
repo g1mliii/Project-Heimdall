@@ -50,6 +50,8 @@ const ingestEnvSchema = z.object({
   RATE_LIMIT_CREATE_RUNS_PER_HOUR: z.coerce.number().int().min(1).default(30),
   RATE_LIMIT_FINALIZE_PER_HOUR: z.coerce.number().int().min(1).default(60),
   RATE_LIMIT_DELETE_PER_HOUR: z.coerce.number().int().min(1).default(20),
+  /** Catalog typeahead is read-only but intentionally chatty. */
+  RATE_LIMIT_SEARCH_PER_HOUR: z.coerce.number().int().min(1).default(600),
 });
 
 function parseEnv<T extends z.ZodRawShape>(schema: z.ZodObject<T>, label: string) {

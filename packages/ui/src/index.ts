@@ -13,6 +13,12 @@ export { Tag, type TagProps } from "./components/core/Tag";
 export { Card, type CardProps, type CardHeaderProps } from "./components/core/Card";
 export { Stat, type StatProps } from "./components/core/Stat";
 export { Avatar, type AvatarProps } from "./components/core/Avatar";
+export {
+  Table,
+  type TableColumn,
+  type TableProps,
+  type TableSort,
+} from "./components/core/Table";
 
 export { Input, type InputProps } from "./components/forms/Input";
 export { Select, type SelectProps, type SelectOption } from "./components/forms/Select";

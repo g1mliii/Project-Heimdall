@@ -5,10 +5,17 @@
  */
 
 import { NextResponse } from "next/server";
-import type { ZodType } from "zod";
+import type { ZodError, ZodType } from "zod";
 import { INGEST_LIMITS, readAllBounded, type ApiError } from "@heimdall/shared";
 import { getIngestEnv } from "../env";
 import { consumeRateLimit } from "../repo/rate-limit";
+
+function validationDetails(error: ZodError) {
+  return error.issues.map((issue) => ({
+    path: issue.path.join("."),
+    message: issue.message,
+  }));
+}
 
 /** Uniform failure envelope (`apiErrorSchema` in @heimdall/shared). */
 export function jsonError(
@@ -72,10 +79,37 @@ export async function parseJsonBody<T>(
   const result = schema.safeParse(raw);
   if (!result.success) {
     return jsonError(400, "invalid-request", "request body failed validation", {
-      details: result.error.issues.map((issue) => ({
-        path: issue.path.join("."),
-        message: issue.message,
-      })),
+      details: validationDetails(result.error),
+    });
+  }
+  return result.data;
+}
+
+/**
+ * Parse + validate URL query parameters with the same ready-to-return 400
+ * contract as {@link parseJsonBody}. Repeated keys become arrays instead of
+ * silently choosing a winner, so scalar schemas reject ambiguous requests.
+ */
+export function parseQuery<T>(
+  request: Request,
+  schema: ZodType<T>,
+): T | NextResponse<ApiError> {
+  const raw: Record<string, string | string[]> = {};
+  for (const [key, value] of new URL(request.url).searchParams) {
+    const existing = raw[key];
+    if (existing === undefined) {
+      raw[key] = value;
+    } else if (Array.isArray(existing)) {
+      existing.push(value);
+    } else {
+      raw[key] = [existing, value];
+    }
+  }
+
+  const result = schema.safeParse(raw);
+  if (!result.success) {
+    return jsonError(400, "invalid-request", "request query failed validation", {
+      details: validationDetails(result.error),
     });
   }
   return result.data;
@@ -133,5 +167,6 @@ export function rateLimits() {
     createRuns: env.RATE_LIMIT_CREATE_RUNS_PER_HOUR,
     finalize: env.RATE_LIMIT_FINALIZE_PER_HOUR,
     delete: env.RATE_LIMIT_DELETE_PER_HOUR,
+    search: env.RATE_LIMIT_SEARCH_PER_HOUR,
   };
 }

@@ -1,16 +1,27 @@
 /**
- * Typed browser API client for the run page (§13.5) — the one place raw
- * `fetch` + response parsing lives, so components never scatter it.
+ * Typed browser API client — the one place raw `fetch` + response parsing
+ * lives, so components never scatter transport and validation logic.
  *
  * Follows the upload-engine conventions (lib/upload/upload-run.ts): never
  * throws, every outcome is a typed result union, responses are validated with
  * the shared zod schemas, and the transport is injectable so tests run in
  * Node. Frames arrive as a signed R2 Parquet URL (two-hop: §11.6), decoded
- * with `hyparquet` via dynamic import so the reader stays off non-run pages.
+ * Run frames use `hyparquet` via dynamic import so that reader stays off
+ * search and game pages.
  */
 
-import { INGEST_LIMITS, framesUrlResponseSchema } from "@heimdall/shared";
-import type { FramesUrlResponse } from "@heimdall/shared";
+import {
+  INGEST_LIMITS,
+  framesUrlResponseSchema,
+  gameSubmissionsPageSchema,
+  searchResponseSchema,
+} from "@heimdall/shared";
+import type {
+  FramesUrlResponse,
+  GameSubmissionsPage,
+  GameSubmissionsQuery,
+  SearchResponse,
+} from "@heimdall/shared";
 import { readApiFailure } from "./errors";
 import { decodeFrameParquetToSeries } from "../parquet/frame-metadata";
 import type { FrameSeries } from "../run/frame-series";
@@ -117,4 +128,40 @@ export async function loadRunFrames(
   const urlResult = await getFramesUrl(id, transport, signal);
   if (!urlResult.ok) return urlResult;
   return fetchFrames(urlResult.data.url, transport, signal);
+}
+
+/** Bounded individual-run page for the game discovery screen (§17.7). */
+export function loadGameRuns(
+  slug: string,
+  options: GameSubmissionsQuery,
+  transport: ApiTransport = defaultTransport(),
+  signal?: AbortSignal,
+): Promise<ApiResult<GameSubmissionsPage>> {
+  const query = new URLSearchParams({ limit: String(options.limit) });
+  if (options.cursor) query.set("cursor", options.cursor);
+  if (options.sceneType) query.set("sceneType", options.sceneType);
+  if (options.sortDirection) query.set("sortDirection", options.sortDirection);
+  return getJson(
+    `/api/games/${encodeURIComponent(slug)}/runs?${query}`,
+    (body) => gameSubmissionsPageSchema.parse(body),
+    "game submissions fetch failed",
+    transport,
+    signal,
+  );
+}
+
+/** Debounced global catalog typeahead (§17.6). */
+export function loadCatalogSearch(
+  query: string,
+  transport: ApiTransport = defaultTransport(),
+  signal?: AbortSignal,
+): Promise<ApiResult<SearchResponse>> {
+  const params = new URLSearchParams({ q: query });
+  return getJson(
+    `/api/search?${params}`,
+    (body) => searchResponseSchema.parse(body),
+    "catalog search failed",
+    transport,
+    signal,
+  );
 }

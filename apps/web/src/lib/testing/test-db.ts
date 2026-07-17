@@ -67,11 +67,11 @@ export async function createTestDb(): Promise<TestDb> {
     const pool = new pg.Pool({
       connectionString: testDbUrl,
       max: 2,
-      options: `-csearch_path=${schema}`,
+      options: `-csearch_path=${schema},public`,
     });
     await migrate(pool);
     const separator = testDbUrl.includes("?") ? "&" : "?";
-    const connectionString = `${testDbUrl}${separator}options=${encodeURIComponent(`-csearch_path=${schema}`)}`;
+    const connectionString = `${testDbUrl}${separator}options=${encodeURIComponent(`-csearch_path=${schema},public`)}`;
     return {
       pool,
       connectionString,

@@ -1,0 +1,96 @@
+.page {
+  max-width: var(--container-max);
+  margin: var(--space-0) auto;
+  padding: var(--space-8) var(--space-6) var(--space-16);
+  container-type: inline-size;
+}
+
+.title {
+  margin-top: var(--space-1);
+  color: var(--fg-1);
+  font: var(--type-title);
+  overflow-wrap: anywhere;
+}
+
+.subtitle {
+  margin-top: var(--space-1);
+  color: var(--fg-2);
+  font: var(--type-body);
+}
+
+.distributionCard {
+  margin-top: var(--space-6);
+}
+
+.submissionsCard {
+  margin-top: var(--space-5);
+}
+
+.tableToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-bottom: var(--border-thin) solid var(--line-1);
+  background: var(--bg-raised);
+}
+
+.tableFooter {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-4) var(--space-5);
+  border-top: var(--border-thin) solid var(--line-1);
+}
+
+.tableFooter > * {
+  width: 100%;
+}
+
+.retryButton {
+  margin-top: var(--space-3);
+}
+
+.cellStack {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+
+.badgeRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.runLink {
+  color: var(--fg-1);
+  font: var(--type-label);
+  text-decoration-color: var(--line-3);
+  text-underline-offset: var(--space-1);
+}
+
+.runLink:hover {
+  color: var(--brand-teal);
+}
+
+.avgMetric {
+  color: var(--tier-avg);
+  font-weight: var(--weight-semibold);
+}
+
+.submittedAt {
+  color: var(--fg-4);
+  font: var(--type-caption);
+  white-space: nowrap;
+}
+
+@container (max-width: 40rem) {
+  .page {
+    padding-inline: var(--space-4);
+  }
+}
