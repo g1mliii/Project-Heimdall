@@ -192,12 +192,12 @@ describe("loadGameRuns", () => {
     await expect(
       loadGameRuns(
         "game/with space",
-        { limit: 12, cursor: "next_page", sceneType: "freeform" },
+        { limit: 12, cursor: "next_page", sceneType: "freeform", sortDirection: "asc" },
         transport,
       ),
     ).resolves.toEqual({ ok: true, data: { rows: [], nextCursor: null } });
     expect(requested).toBe(
-      "/api/games/game%2Fwith%20space/runs?limit=12&cursor=next_page&sceneType=freeform",
+      "/api/games/game%2Fwith%20space/runs?limit=12&cursor=next_page&sceneType=freeform&sortDirection=asc",
     );
   });
 

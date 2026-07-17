@@ -196,6 +196,11 @@ export async function readGamePage(
 ): Promise<GamePageRead | null> {
   const cursor = decodeCursor(options.cursor);
   const limit = Math.min(options.limit, GAME_SUBMISSIONS_MAX_PAGE_SIZE);
+  const sortDirection = options.sortDirection ?? "desc";
+  // These fragments are selected from a closed shared-schema enum, never
+  // interpolated from an unchecked request value.
+  const cursorOperator = sortDirection === "asc" ? ">" : "<";
+  const orderDirection = sortDirection === "asc" ? "asc" : "desc";
   const rows = await query<GameSubmissionDbRow>(
     `with selected_game as (
        select g.id, g.slug, g.name
@@ -244,9 +249,9 @@ export async function readGamePage(
           and catalog.fetched_at >= now() - ($3::integer * interval '1 day')
           and catalog.released_at <= current_date - $4::integer
         where ${aggregateEligibilitySql("r")}
-          and ($5::timestamptz is null or (r.created_at, r.id) < ($5::timestamptz, $6::text))
+          and ($5::timestamptz is null or (r.created_at, r.id) ${cursorOperator} ($5::timestamptz, $6::text))
           and ($7::text is null or r.scene_type = $7::text)
-        order by r.created_at desc, r.id desc
+        order by r.created_at ${orderDirection}, r.id ${orderDirection}
         limit $8
      )
      select game.id::text as game_id,
@@ -278,7 +283,7 @@ export async function readGamePage(
             page.latest_driver
        from selected_game game
        left join run_page page on true
-      order by page.created_at desc, page.submission_id desc`,
+      order by page.created_at ${orderDirection}, page.submission_id ${orderDirection}`,
     [
       slug,
       REQUIRED_DRIVER_MAX_AGE_DAYS,

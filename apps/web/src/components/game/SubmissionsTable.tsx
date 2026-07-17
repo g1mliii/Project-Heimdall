@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { GameSubmissionRow, SceneType } from "@heimdall/shared";
+import type { GameSubmissionRow, GameSubmissionsQuery, SceneType } from "@heimdall/shared";
 import {
   Badge,
   Button,
@@ -28,7 +28,12 @@ const SCENE_LABELS: Record<NonNullable<GameSubmissionRow["sceneType"]>, string> 
   freeform: "Freeform",
 };
 
-const SUBMISSION_DATE_FORMATTER = new Intl.DateTimeFormat("en", { dateStyle: "medium" });
+const SUBMISSION_DATE_FORMATTER = new Intl.DateTimeFormat("en", {
+  dateStyle: "medium",
+  // Client Components render on the server before hydration. Fixing the
+  // timezone makes this date deterministic across the server and browser.
+  timeZone: "UTC",
+});
 
 /** Upscaler values that carry no methodology signal, so they are not shown. */
 const HIDDEN_UPSCALERS = new Set(["none", "unknown"]);
@@ -126,8 +131,9 @@ const columns: readonly TableColumn<GameSubmissionRow>[] = [
     cell: (row) => row.pointOnePercentLowFps.toFixed(1),
   },
   {
-    key: "by",
-    header: "By",
+    key: "submitted",
+    header: "Submitted",
+    sortable: true,
     cell: (row) => (
       <span className={styles.cellStack}>
         <span>{row.submittedBy ?? "Anonymous"}</span>
@@ -145,6 +151,8 @@ export function SubmissionsTable({
   rows,
   sceneFilter,
   onSceneFilterChange,
+  sortDirection,
+  onSortDirectionChange,
   loading,
   error,
   canLoadMore,
@@ -154,6 +162,8 @@ export function SubmissionsTable({
   rows: readonly GameSubmissionRow[];
   sceneFilter: SceneFilter;
   onSceneFilterChange(value: SceneFilter): void;
+  sortDirection: NonNullable<GameSubmissionsQuery["sortDirection"]>;
+  onSortDirectionChange(value: NonNullable<GameSubmissionsQuery["sortDirection"]>): void;
   loading: boolean;
   error: string | null;
   canLoadMore: boolean;
@@ -183,6 +193,10 @@ export function SubmissionsTable({
         columns={columns}
         rows={rows}
         rowKey={(row) => row.id}
+        sort={{ key: "submitted", direction: sortDirection }}
+        onSortChange={(sort) => {
+          if (sort.key === "submitted") onSortDirectionChange(sort.direction);
+        }}
         empty={
           loading ? (
             <Spinner label="Loading submissions" />

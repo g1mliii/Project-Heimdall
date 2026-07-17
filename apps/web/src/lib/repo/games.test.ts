@@ -237,6 +237,28 @@ describe.skipIf(!canRun)("game discovery read (§17.7)", () => {
     ).toBe(visibleIds.length);
   });
 
+  it("keyset-paginates oldest-first when the table recency direction is ascending", async () => {
+    const expected = [...visibleIds].reverse();
+    const first = await readGamePage(
+      "cyberpunk-2077",
+      { limit: 2, sortDirection: "asc" },
+      db.pool,
+    );
+    expect(first?.submissions.rows.map((row) => row.id)).toEqual(expected.slice(0, 2));
+
+    const second = await readGamePage(
+      "cyberpunk-2077",
+      {
+        limit: 2,
+        sortDirection: "asc",
+        cursor: first?.submissions.nextCursor ?? undefined,
+      },
+      db.pool,
+    );
+    expect(second?.submissions.rows.map((row) => row.id)).toEqual(expected.slice(2));
+    expect(second?.submissions.nextCursor).toBeNull();
+  });
+
   it("filters individual rows by scene type", async () => {
     const result = await readGamePage(
       "cyberpunk-2077",

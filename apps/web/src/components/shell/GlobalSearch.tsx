@@ -123,6 +123,7 @@ export function GlobalSearch({ search = defaultSearchLoader }: { search?: Search
           open && activeIndex >= 0 ? `${listboxId}-game-${activeIndex}` : undefined
         }
         autoComplete="off"
+        name="catalog-search"
         icon={<SearchIcon size={16} />}
         placeholder="Search games, GPUs…"
         value={query}

@@ -43,6 +43,17 @@ describe("GET /api/games/:slug/runs (§17.7)", () => {
     expect(readGamePage).toHaveBeenCalledWith("cyberpunk-2077", { limit: 25 });
   });
 
+  it("passes the requested individual-table recency direction to the repository", async () => {
+    await GET(
+      new Request("http://test/api/games/cyberpunk-2077/runs?sortDirection=asc"),
+      context(),
+    );
+    expect(readGamePage).toHaveBeenCalledWith("cyberpunk-2077", {
+      limit: 25,
+      sortDirection: "asc",
+    });
+  });
+
   it("rejects duplicate, unknown, malformed, and oversized query values", async () => {
     for (const query of [
       "?limit=2&limit=3",
@@ -50,6 +61,7 @@ describe("GET /api/games/:slug/runs (§17.7)", () => {
       "?sceneType=cutscene",
       "?cursor=not+padded",
       "?sort=avg",
+      "?sortDirection=sideways",
     ]) {
       const response = await GET(
         new Request(`http://test/api/games/cyberpunk-2077/runs${query}`),

@@ -293,6 +293,8 @@ export const gameSubmissionsQuerySchema = z
       .max(GAME_SUBMISSIONS_MAX_PAGE_SIZE)
       .default(GAME_SUBMISSIONS_PAGE_SIZE),
     sceneType: sceneTypeSchema.optional(),
+    /** Oldest/newest toggle for the individual, recency-ordered table. */
+    sortDirection: z.enum(["asc", "desc"]).optional(),
   })
   .strict();
 export type GameSubmissionsQuery = z.infer<typeof gameSubmissionsQuerySchema>;

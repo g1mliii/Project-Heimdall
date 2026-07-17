@@ -140,6 +140,7 @@ export function loadGameRuns(
   const query = new URLSearchParams({ limit: String(options.limit) });
   if (options.cursor) query.set("cursor", options.cursor);
   if (options.sceneType) query.set("sceneType", options.sceneType);
+  if (options.sortDirection) query.set("sortDirection", options.sortDirection);
   return getJson(
     `/api/games/${encodeURIComponent(slug)}/runs?${query}`,
     (body) => gameSubmissionsPageSchema.parse(body),

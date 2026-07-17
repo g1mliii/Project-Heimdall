@@ -43,6 +43,26 @@ describe("game page route", () => {
     expect(page.props).toEqual({
       game: result.game,
       initialSubmissions: result.submissions,
+      initialSceneFilter: "all",
+      initialSortDirection: "desc",
+    });
+  });
+
+  it("restores a valid shared submissions filter and recency direction", async () => {
+    readGamePage.mockResolvedValue(result);
+    const page = await GamePage({
+      params: Promise.resolve({ slug: "filtered-cyberpunk" }),
+      searchParams: Promise.resolve({ sceneType: "gameplay", sortDirection: "asc" }),
+    });
+
+    expect(readGamePage).toHaveBeenCalledWith("filtered-cyberpunk", {
+      limit: 25,
+      sceneType: "gameplay",
+      sortDirection: "asc",
+    });
+    expect(page.props).toMatchObject({
+      initialSceneFilter: "gameplay",
+      initialSortDirection: "asc",
     });
   });
 

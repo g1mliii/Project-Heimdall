@@ -37,6 +37,7 @@ interface PageRequest {
   cursor?: string;
   append: boolean;
   sceneFilter: SceneFilter;
+  sortDirection: NonNullable<GameSubmissionsQuery["sortDirection"]>;
 }
 
 interface FailedLoad extends PageRequest {
@@ -46,15 +47,20 @@ interface FailedLoad extends PageRequest {
 export function GamePageClient({
   game,
   initialSubmissions,
+  initialSceneFilter = "all",
+  initialSortDirection = "desc",
   loadRuns = defaultGameRunsLoader,
 }: {
   game: SearchGameResult;
   initialSubmissions: GameSubmissionsPage;
+  initialSceneFilter?: SceneFilter;
+  initialSortDirection?: NonNullable<GameSubmissionsQuery["sortDirection"]>;
   loadRuns?: GameRunsLoader;
 }) {
   const [rows, setRows] = React.useState(initialSubmissions.rows);
   const [nextCursor, setNextCursor] = React.useState(initialSubmissions.nextCursor);
-  const [sceneFilter, setSceneFilter] = React.useState<SceneFilter>("all");
+  const [sceneFilter, setSceneFilter] = React.useState<SceneFilter>(initialSceneFilter);
+  const [sortDirection, setSortDirection] = React.useState(initialSortDirection);
   const [loading, setLoading] = React.useState(false);
   const [failedLoad, setFailedLoad] = React.useState<FailedLoad | null>(null);
   const requestId = React.useRef(0);
@@ -69,7 +75,7 @@ export function GamePageClient({
   );
 
   async function requestPage(request: PageRequest) {
-    const { sceneFilter: requestedFilter, cursor, append } = request;
+    const { sceneFilter: requestedFilter, sortDirection: requestedSortDirection, cursor, append } = request;
     controller.current?.abort();
     const nextController = new AbortController();
     controller.current = nextController;
@@ -85,6 +91,7 @@ export function GamePageClient({
       limit: GAME_SUBMISSIONS_PAGE_SIZE,
       ...(cursor ? { cursor } : {}),
       ...(requestedFilter === "all" ? {} : { sceneType: requestedFilter }),
+      ...(requestedSortDirection === "desc" ? {} : { sortDirection: requestedSortDirection }),
     };
 
     try {
@@ -110,7 +117,33 @@ export function GamePageClient({
   function changeSceneFilter(value: SceneFilter) {
     if (value === sceneFilter) return;
     setSceneFilter(value);
-    void requestPage({ sceneFilter: value, append: false });
+    updateUrl(value, sortDirection);
+    void requestPage({ sceneFilter: value, sortDirection, append: false });
+  }
+
+  function changeSortDirection(value: NonNullable<GameSubmissionsQuery["sortDirection"]>) {
+    if (value === sortDirection) return;
+    setSortDirection(value);
+    updateUrl(sceneFilter, value);
+    void requestPage({ sceneFilter, sortDirection: value, append: false });
+  }
+
+  function updateUrl(
+    nextSceneFilter: SceneFilter,
+    nextSortDirection: NonNullable<GameSubmissionsQuery["sortDirection"]>,
+  ) {
+    const url = new URL(window.location.href);
+    if (nextSceneFilter === "all") {
+      url.searchParams.delete("sceneType");
+    } else {
+      url.searchParams.set("sceneType", nextSceneFilter);
+    }
+    if (nextSortDirection === "desc") {
+      url.searchParams.delete("sortDirection");
+    } else {
+      url.searchParams.set("sortDirection", nextSortDirection);
+    }
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
   }
 
   return (
@@ -121,12 +154,14 @@ export function GamePageClient({
         rows={rows}
         sceneFilter={sceneFilter}
         onSceneFilterChange={changeSceneFilter}
+        sortDirection={sortDirection}
+        onSortDirectionChange={changeSortDirection}
         loading={loading}
         error={failedLoad?.message ?? null}
         canLoadMore={nextCursor !== null}
         onLoadMore={() => {
           if (nextCursor) {
-            void requestPage({ sceneFilter, cursor: nextCursor, append: true });
+            void requestPage({ sceneFilter, sortDirection, cursor: nextCursor, append: true });
           }
         }}
         onRetry={() => {

@@ -42,7 +42,10 @@ function submission(
   };
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  window.history.replaceState(null, "", "/");
+});
 
 describe("GamePageClient (§17.7)", () => {
   it("renders mixed individual-run facts without pooled statistics or verified shields", () => {
@@ -115,6 +118,31 @@ describe("GamePageClient (§17.7)", () => {
       { limit: 25, sceneType: "gameplay" },
       expect.any(AbortSignal),
     );
+    expect(new URL(window.location.href).searchParams.get("sceneType")).toBe("gameplay");
+  });
+
+  it("restarts from the first page when the submitted-date direction changes", async () => {
+    const user = userEvent.setup();
+    const loadRuns = vi.fn<GameRunsLoader>().mockResolvedValue({
+      ok: true,
+      data: { rows: [submission("oldest")], nextCursor: null },
+    });
+    render(
+      <GamePageClient
+        game={game}
+        initialSubmissions={{ rows: [submission("newest")], nextCursor: "cursor_one" }}
+        loadRuns={loadRuns}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Submitted" }));
+    expect(await screen.findByRole("link", { name: "NVIDIA GeForce RTX 4070" })).toBeInTheDocument();
+    expect(loadRuns).toHaveBeenCalledWith(
+      game.slug,
+      { limit: 25, sortDirection: "asc" },
+      expect.any(AbortSignal),
+    );
+    expect(new URL(window.location.href).searchParams.get("sortDirection")).toBe("asc");
   });
 
   it("appends the next keyset page", async () => {

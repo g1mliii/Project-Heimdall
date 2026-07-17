@@ -35,7 +35,11 @@ test("search opens the game page with honest individual-run states (§17a.1)", a
   await expect(page.getByText("Insufficient comparable data")).toBeVisible();
   await expect(page.locator("svg[data-chart], canvas")).toHaveCount(0);
 
+  await page.getByRole("button", { name: "Submitted" }).click();
+  await expect(page).toHaveURL(/sortDirection=asc/);
+
   await page.getByRole("button", { name: "Gameplay" }).click();
+  await expect(page).toHaveURL(/sceneType=gameplay/);
   await expect(page.getByText("0 shown")).toBeVisible();
   await expect(page.getByText("No public, validated submissions match this view yet.")).toBeVisible();
 });
