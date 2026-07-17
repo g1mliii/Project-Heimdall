@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom/vitest";
+import { MAX_INDEXED_METADATA_TEXT_LENGTH } from "@heimdall/shared";
 
 const { push } = vi.hoisted(() => ({ push: vi.fn() }));
 
@@ -39,6 +40,7 @@ describe("GlobalSearch (§17.6)", () => {
     render(<GlobalSearch search={search} />);
 
     const input = screen.getByRole("combobox", { name: "Search games and hardware" });
+    expect(input).toHaveAttribute("maxlength", String(MAX_INDEXED_METADATA_TEXT_LENGTH));
     await user.type(input, "rt");
     expect(screen.getByText("Keep typing…")).toBeInTheDocument();
     expect(input).toHaveAttribute("aria-expanded", "true");

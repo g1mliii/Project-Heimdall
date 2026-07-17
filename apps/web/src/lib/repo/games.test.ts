@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
+  aggregateEligibilitySql,
   GAME_SUBMISSIONS_PAGE_SIZE,
   RUN_STATUS,
   RUN_VISIBILITY,
@@ -266,6 +267,31 @@ describe.skipIf(!canRun)("game discovery read (§17.7)", () => {
       db.pool,
     );
     expect(result?.submissions.rows.map((row) => row.id)).toEqual(["game_warmup"]);
+  });
+
+  it("uses the scene-aware recency index for selective submissions filters", async () => {
+    const client = await db.pool.connect();
+    try {
+      await client.query("begin");
+      await client.query("analyze runs");
+      await client.query("set local enable_seqscan = off");
+      const { rows } = await client.query<{ "QUERY PLAN": unknown }>(
+        `explain (analyze, buffers, format json)
+         select r.id
+          from runs r
+          where r.game_id = $1
+            and ${aggregateEligibilitySql("r")}
+            and r.scene_type = $2
+          order by r.created_at desc, r.id desc
+          limit $3`,
+        [gameId, "gameplay", GAME_SUBMISSIONS_PAGE_SIZE],
+      );
+      const plan = JSON.stringify(rows[0]?.["QUERY PLAN"]);
+      expect(plan).toContain("runs_game_scene_recent_idx");
+    } finally {
+      await client.query("rollback").catch(() => undefined);
+      client.release();
+    }
   });
 
   it("normalizes device-manager driver strings before flagging currency badges", async () => {

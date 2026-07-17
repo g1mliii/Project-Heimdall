@@ -4,6 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  MAX_INDEXED_METADATA_TEXT_LENGTH,
   normalizeAliasName,
   SEARCH_MIN_QUERY_LENGTH,
   type SearchResponse,
@@ -126,6 +127,7 @@ export function GlobalSearch({ search = defaultSearchLoader }: { search?: Search
         name="catalog-search"
         icon={<SearchIcon size={16} />}
         placeholder="Search games, GPUs…"
+        maxLength={MAX_INDEXED_METADATA_TEXT_LENGTH}
         value={query}
         onChange={(event) => setQuery(event.currentTarget.value)}
         onFocus={() => setFocused(true)}

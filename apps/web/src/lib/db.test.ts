@@ -116,6 +116,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0025_runs_game_fk_index.sql",
       "0026_reprocess_jobs.sql",
       "0027_catalog_search_and_game_recency_indexes.sql",
+      "0028_game_scene_recency_index.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
@@ -286,6 +287,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "hardware_canonical_name_trgm_idx",
       "hardware_aliases_normalized_name_trgm_idx",
       "runs_game_recent_idx",
+      "runs_game_scene_recent_idx",
     ]) {
       expect(names).toContain(expected);
     }
@@ -367,7 +369,8 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
           'game_aliases_normalized_name_trgm_idx',
           'hardware_canonical_name_trgm_idx',
           'hardware_aliases_normalized_name_trgm_idx',
-          'runs_game_recent_idx'
+          'runs_game_recent_idx',
+          'runs_game_scene_recent_idx'
         )`,
     );
     const byName = new Map(rows.map((row) => [row.name, row]));
@@ -391,6 +394,17 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "visibility = 'public'::text",
     );
     expect(byName.get("runs_game_recent_idx")?.predicate).toContain("game_id IS NOT NULL");
+    expect(byName.get("runs_game_scene_recent_idx")?.definition).toContain(
+      "game_id, scene_type, created_at DESC, id DESC",
+    );
+    expect(byName.get("runs_game_scene_recent_idx")?.predicate).toContain(
+      "status = 'validated'::text",
+    );
+    expect(byName.get("runs_game_scene_recent_idx")?.predicate).toContain(
+      "visibility = 'public'::text",
+    );
+    expect(byName.get("runs_game_scene_recent_idx")?.predicate).toContain("game_id IS NOT NULL");
+    expect(byName.get("runs_game_scene_recent_idx")?.predicate).toContain("scene_type IS NOT NULL");
     expect(byName.get("reprocess_jobs_claim_idx")?.definition).toContain("not_before");
     expect(byName.get("reprocess_jobs_claim_idx")?.definition).toContain("kind");
     expect(byName.get("reprocess_jobs_claim_idx")?.predicate).toContain("failed_at IS NULL");
