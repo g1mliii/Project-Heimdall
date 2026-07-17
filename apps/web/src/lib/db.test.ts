@@ -351,6 +351,8 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
           'runs_reprocess_capability_idx',
           'diagnostics_rule_version_run_idx',
           'runs_driver_evaluated_at_idx',
+          'driver_catalog_fetched_at_idx',
+          'game_driver_requirements_fetched_at_idx',
           'games_normalized_name_tokens_gin_idx',
           'game_aliases_normalized_name_tokens_gin_idx'
         )`,
@@ -375,6 +377,10 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     expect(byName.get("diagnostics_rule_version_run_idx")?.definition).toContain("rule_version");
     expect(byName.get("runs_driver_evaluated_at_idx")?.definition).toContain(
       "driver_evaluated_at NULLS FIRST",
+    );
+    expect(byName.get("driver_catalog_fetched_at_idx")?.definition).toContain("fetched_at");
+    expect(byName.get("game_driver_requirements_fetched_at_idx")?.definition).toContain(
+      "fetched_at",
     );
     expect(byName.get("verification_jobs_active_claim_idx")?.definition).toContain(
       "created_at",

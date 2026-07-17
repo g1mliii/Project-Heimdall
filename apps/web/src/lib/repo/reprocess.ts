@@ -20,6 +20,9 @@ import {
   diagnosticInsertSql,
   getPool,
   query,
+  RETRY_BACKOFF_SECS_SQL,
+  summaryColumns,
+  summaryUpdateSql,
   type Queryable,
 } from "../db";
 
@@ -31,7 +34,8 @@ export const REPROCESS_KIND = {
 export type ReprocessKind = (typeof REPROCESS_KIND)[keyof typeof REPROCESS_KIND];
 
 export interface ClaimedReprocessJob {
-  id: string;
+  /** Composite queue identity, encoded only for the claim-exclusion SQL parameter. */
+  key: string;
   runId: string;
   kind: ReprocessKind;
   attempts: number;
@@ -90,6 +94,16 @@ export const FULL_REPROCESS_ENQUEUE_SQL = `with current_rules as materialized (
           )
         order by r.capability_manifest_version nulls first, r.created_at, r.id
         limit $1
+     -- KNOWN GAP (IMPLEMENTATION_PLAN 17.8.0): the lane below joins diagnostics,
+     -- so it only reaches runs that ALREADY store a finding for a bumped code. A
+     -- rule version that makes a rule NEWLY fire never reaches a clean run, and
+     -- "no finding stored" stays indistinguishable from "never evaluated at this
+     -- version" -- which 17.8's rate denominators must tell apart. The driver
+     -- lane avoids this by watermarking at run level (runs.driver_evaluated_at);
+     -- the fix here is the same, and is deferred to 17.8.0 where the denominator
+     -- defines what the watermark must record. Until then, bump
+     -- CAPABILITY_MANIFEST_VERSION alongside any firing-broadening rule bump so
+     -- capability_candidates sweeps every run.
      ), stale_diagnostic_ids as materialized (
        select stale.run_id
          from current_rules current_rule
@@ -159,7 +173,115 @@ export interface DriverRefreshEnqueueResult {
 }
 
 /**
- * Enumerate one bounded driver-refresh batch only when the catalog watermark
+ * One bounded driver-refresh sweep. `limit` is the maximum number of live
+ * driver jobs this sweep may retain, not a new-jobs batch size: a slow drain
+ * must never turn a catalog update into an ever-growing queue.
+ */
+export const DRIVER_REFRESH_ENQUEUE_SQL = `with catalog_state as materialized (
+       select greatest(
+                (select max(fetched_at) from driver_catalog),
+                (select max(fetched_at) from game_driver_requirements)
+              ) as catalog_watermark
+     ), stored as materialized (
+       select value, updated_at
+         from reprocess_watermarks
+        where key = 'driver-catalog'
+     ), expiry_crossed as materialized (
+       select exists (
+         select 1
+           from driver_catalog catalog
+           cross join stored
+          where catalog.fetched_at > stored.updated_at - make_interval(days => $1)
+            and catalog.fetched_at <= now() - make_interval(days => $1)
+         union all
+         select 1
+           from game_driver_requirements requirement
+           cross join stored
+          where requirement.fetched_at > stored.updated_at - make_interval(days => $1)
+            and requirement.fetched_at <= now() - make_interval(days => $1)
+       ) as value
+     ), sweep as materialized (
+       select catalog_state.catalog_watermark,
+              catalog_state.catalog_watermark is not null
+                and (
+                  catalog_state.catalog_watermark is distinct from stored.value
+                  or expiry_crossed.value
+                ) as requested,
+              case
+                when expiry_crossed.value
+                  or catalog_state.catalog_watermark < stored.value
+                  then now()
+                else catalog_state.catalog_watermark
+              end as evaluate_before
+         from catalog_state
+         left join stored on true
+         cross join expiry_crossed
+     ), live_driver_jobs as materialized (
+       select count(*)::integer as count
+         from reprocess_jobs
+        where kind = '${REPROCESS_KIND.driver}'
+          and failed_at is null
+     ), capacity as materialized (
+       select greatest($2::integer - live_driver_jobs.count, 0) as available
+         from live_driver_jobs
+     ), candidates as materialized (
+       select r.id
+         from runs r
+         cross join sweep
+         cross join capacity
+        where sweep.requested
+          and ${REPROCESSABLE_STATUS_SQL("r")}
+          and (r.driver_evaluated_at is null or r.driver_evaluated_at < sweep.evaluate_before)
+          -- Only a LIVE job blocks re-enqueue. A tombstone must not, or five
+          -- transient failures would freeze this run's driver findings forever:
+          -- claimNextReprocessJob already skips failed rows, so the row would
+          -- sit unclaimable and un-replaceable with no operator escape hatch.
+          and not exists (
+            select 1 from reprocess_jobs existing
+             where existing.run_id = r.id
+               and existing.kind = '${REPROCESS_KIND.driver}'
+               and existing.failed_at is null
+          )
+        order by r.driver_evaluated_at nulls first, r.id
+        limit (select available + 1 from capacity)
+     ), inserted as (
+       insert into reprocess_jobs (run_id, kind)
+       select id, '${REPROCESS_KIND.driver}'
+         from candidates
+        limit (select available from capacity)
+       -- Revive a tombstone rather than skipping it. Unlike the full lane -- where
+       -- capability_manifest_version can never advance for a run that always
+       -- fails, so retrying would loop forever -- this sweep only fires when a
+       -- source watermark actually moves. That bounds retries to real new
+       -- evidence, which is exactly when a stale failure deserves another look.
+       on conflict (run_id, kind) do update
+          set failed_at = null,
+              attempts = 0,
+              locked_at = null,
+              not_before = now(),
+              last_error = null
+        where reprocess_jobs.failed_at is not null
+       returning run_id
+     ), sweep_status as (
+       select sweep.requested,
+              sweep.catalog_watermark,
+              (select count(*) from candidates) <= (select available from capacity) as complete
+         from sweep
+     ), watermark_update as (
+       insert into reprocess_watermarks (key, value, updated_at)
+       select 'driver-catalog', catalog_watermark, now()
+         from sweep_status
+        where requested and complete
+       on conflict (key) do update
+         set value = excluded.value,
+             updated_at = excluded.updated_at
+     )
+     select (select count(*) from inserted) as enqueued,
+            coalesce((select requested from sweep_status), false) as sweep_requested,
+            coalesce((select complete from sweep_status), true) as sweep_complete`;
+
+/**
+ * Enumerate a bounded driver-refresh slice only when the catalog watermark
  * moves or an individual catalog row crosses its TTL. The limit+1 probe keeps
  * the watermark open until every candidate is either queued or tombstoned.
  */
@@ -179,104 +301,7 @@ export async function enqueueDriverRefreshJobs(
     sweep_requested: boolean;
     sweep_complete: boolean;
   }>(
-    // The two driver rules read two INDEPENDENT tables: driverUpdateAvailable
-    // from driver_catalog, gpuDriverOutdated from game_driver_requirements.
-    // Watermarking only the catalog meant an empty/unpopulated driver_catalog
-    // left the watermark null, `requested` permanently false, and no driver
-    // work ever ran — including for requirement-driven findings that need no
-    // catalog at all. Track both sources, and expire against both.
-    `with catalog_state as materialized (
-       select greatest(
-                (select max(fetched_at) from driver_catalog),
-                (select max(fetched_at) from game_driver_requirements)
-              ) as catalog_watermark
-     ), expiring_sources as materialized (
-       select fetched_at from driver_catalog
-       union all
-       select fetched_at from game_driver_requirements
-     ), stored as materialized (
-       select value, updated_at
-         from reprocess_watermarks
-        where key = 'driver-catalog'
-     ), sweep as materialized (
-       select catalog_state.catalog_watermark,
-              catalog_state.catalog_watermark is not null
-                and (
-                  catalog_state.catalog_watermark is distinct from stored.value
-                  or exists (
-                    select 1 from expiring_sources expiring
-                     where stored.updated_at is not null
-                       and expiring.fetched_at + make_interval(days => $1) > stored.updated_at
-                       and expiring.fetched_at + make_interval(days => $1) <= now()
-                  )
-                ) as requested,
-              case
-                when exists (
-                  select 1 from expiring_sources expiring
-                   where stored.updated_at is not null
-                     and expiring.fetched_at + make_interval(days => $1) > stored.updated_at
-                     and expiring.fetched_at + make_interval(days => $1) <= now()
-                )
-                  or catalog_state.catalog_watermark < stored.value
-                  then now()
-                else catalog_state.catalog_watermark
-              end as evaluate_before
-         from catalog_state
-         left join stored on true
-     ), candidates as materialized (
-       select r.id
-         from runs r
-         cross join sweep
-        where sweep.requested
-          and ${REPROCESSABLE_STATUS_SQL("r")}
-          and (r.driver_evaluated_at is null or r.driver_evaluated_at < sweep.evaluate_before)
-          -- Only a LIVE job blocks re-enqueue. A tombstone must not, or five
-          -- transient failures would freeze this run's driver findings forever:
-          -- claimNextReprocessJob already skips failed rows, so the row would
-          -- sit unclaimable and un-replaceable with no operator escape hatch.
-          and not exists (
-            select 1 from reprocess_jobs existing
-             where existing.run_id = r.id
-               and existing.kind = '${REPROCESS_KIND.driver}'
-               and existing.failed_at is null
-          )
-        order by r.driver_evaluated_at nulls first, r.id
-        limit $2 + 1
-     ), inserted as (
-       insert into reprocess_jobs (run_id, kind)
-       select id, '${REPROCESS_KIND.driver}'
-         from candidates
-        limit $2
-       -- Revive a tombstone rather than skipping it. Unlike the full lane -- where
-       -- capability_manifest_version can never advance for a run that always
-       -- fails, so retrying would loop forever -- this sweep only fires when a
-       -- source watermark actually moves. That bounds retries to real new
-       -- evidence, which is exactly when a stale failure deserves another look.
-       on conflict (run_id, kind) do update
-          set failed_at = null,
-              attempts = 0,
-              locked_at = null,
-              not_before = now(),
-              last_error = null
-        where reprocess_jobs.failed_at is not null
-       returning run_id
-     ), sweep_status as (
-       select sweep.requested,
-              sweep.catalog_watermark,
-              (select count(*) from candidates) <= $2 as complete
-         from sweep
-     ), watermark_update as (
-       insert into reprocess_watermarks (key, value, updated_at)
-       select 'driver-catalog', catalog_watermark, now()
-         from sweep_status
-        where requested and complete
-       on conflict (key) do update
-         set value = excluded.value,
-             updated_at = excluded.updated_at
-     )
-     select (select count(*) from inserted) as enqueued,
-            coalesce((select requested from sweep_status), false) as sweep_requested,
-            coalesce((select complete from sweep_status), true) as sweep_complete`,
+    DRIVER_REFRESH_ENQUEUE_SQL,
     [catalogMaxAgeDays, boundedLimit],
     db,
   );
@@ -323,7 +348,7 @@ export async function claimNextReprocessJob(
   const row = rows[0];
   return row
     ? {
-        id: claimKey(row.kind, row.run_id),
+        key: claimKey(row.kind, row.run_id),
         runId: row.run_id,
         kind: row.kind,
         attempts: row.attempts,
@@ -360,9 +385,7 @@ export async function failReprocessJob(
             failed_at = case when $5::boolean then now() else null end,
             not_before = case
               when $5::boolean then now()
-              else now() + make_interval(
-                secs => least(300, 30 * (1 << least(attempts - 1, 4)))
-              )
+              else now() + make_interval(secs => ${RETRY_BACKOFF_SECS_SQL})
             end
       where run_id = $1
         and kind = $2
@@ -410,13 +433,7 @@ export async function applyReprocessResult(
           and exists (select 1 from job_claim)
         returning id
      ), summary_update as (
-       update run_summaries
-          set avg_fps = $2, p1_low_fps = $3, p01_low_fps = $4,
-              frametime_p50_ms = $5, frametime_p95_ms = $6, frametime_p99_ms = $7,
-              stutter_count = $8, generated_frame_pct = $9, p01_low_confidence = $10,
-              sample_count = $11, duration_seconds = $12
-        where run_id = $1
-          and exists (select 1 from run_update)
+       ${summaryUpdateSql(1, 2, "exists (select 1 from run_update)")}
      ), diagnostics_delete as (
        delete from diagnostics
         where run_id = $1
@@ -425,17 +442,7 @@ export async function applyReprocessResult(
      ${diagnosticInsertSql(1, 18, "exists (select 1 from run_update)")}`,
     [
       runId,
-      result.summary.avgFps,
-      result.summary.onePercentLowFps,
-      result.summary.pointOnePercentLowFps,
-      result.summary.frameTimeP50Ms,
-      result.summary.frameTimeP95Ms,
-      result.summary.frameTimeP99Ms,
-      result.summary.stutterCount,
-      result.summary.generatedFramePct,
-      result.summary.pointOnePercentLowConfidence,
-      result.summary.sampleCount,
-      result.summary.durationSeconds,
+      ...summaryColumns(result.summary),
       result.signatureValid,
       result.generatedFrameTech,
       claim.attempts,
@@ -489,11 +496,11 @@ export function driverFindingsEqual(
     // and recommendation do not. The run-level watermark records that fresh
     // evaluation; treating the timestamp alone as a changed finding would
     // recreate every driver diagnostic and generate dead tuples every week.
-    const { catalogFetchedAt, ...catalogBasis } = provenance;
-    void catalogFetchedAt;
+    const { fetchedAt, ...sourceBasis } = provenance;
+    void fetchedAt;
     return {
       ...finding,
-      evidence: { ...finding.evidence, provenance: catalogBasis },
+      evidence: { ...finding.evidence, provenance: sourceBasis },
     };
   };
   return isDeepStrictEqual(stored.map(semanticFinding), recomputed.map(semanticFinding));

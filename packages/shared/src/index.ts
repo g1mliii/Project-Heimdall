@@ -17,6 +17,7 @@ export * from "./naming";
 export * from "./comparability";
 export * from "./methodology";
 export * from "./eligibility";
+export * from "./stream";
 
 export { PHYSICS } from "./integrity";
 export {

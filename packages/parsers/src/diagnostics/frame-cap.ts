@@ -1,4 +1,5 @@
 import { DIAGNOSTICS } from "@heimdall/shared";
+import type { DiagnosticRuleContext } from "./types";
 
 /** A configured cap's cadence, resolved once so a scan needn't re-derive it. */
 export interface FrameCapCadence {
@@ -60,6 +61,30 @@ export function stableCommonFrameCap(
   return observed > 0 && atCap / observed >= DIAGNOSTICS.frameCapMinStableFraction
     ? cadence
     : undefined;
+}
+
+/**
+ * `runDiagnostics` shares one context among all rules, and more than one rule
+ * asks about the cap. A WeakMap keeps the O(frameCount) scan to once per
+ * invocation without retaining captures after the engine returns — the same
+ * memo `bottleneck-attribution` uses for its own scan.
+ */
+const capByContext = new WeakMap<DiagnosticRuleContext, FrameCapCadence | undefined>();
+
+/** {@link stableCommonFrameCap} for the shared rule context, scanned at most once. */
+export function contextStableCommonFrameCap(
+  ctx: DiagnosticRuleContext,
+): FrameCapCadence | undefined {
+  // `undefined` is a real result here, so probe with `has` rather than treating
+  // a missing entry and a cached "no cap" as the same thing.
+  if (capByContext.has(ctx)) return capByContext.get(ctx);
+
+  const cadence = stableCommonFrameCap(
+    ctx.input.frames.frameTimeMs,
+    ctx.input.summary.frameTimeP50Ms,
+  );
+  capByContext.set(ctx, cadence);
+  return cadence;
 }
 
 export function hasStableCommonFrameCap(

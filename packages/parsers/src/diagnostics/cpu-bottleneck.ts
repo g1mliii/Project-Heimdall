@@ -11,13 +11,14 @@
 
 import { DIAGNOSTICS } from "@heimdall/shared";
 import type { DiagnosticRule } from "./types";
-import { hasStableCommonFrameCap } from "./frame-cap";
+import { contextStableCommonFrameCap } from "./frame-cap";
 
 export const cpuBottleneckRule: DiagnosticRule = {
   code: "cpu-bottleneck",
   version: "1.0.0",
   requiredSensors: ["cpuLoadPct", "gpuLoadPct"],
-  evaluate({ input, frameCount }) {
+  evaluate(ctx) {
+    const { input, frameCount } = ctx;
     const sensors = input.capabilityManifest?.sensors;
     // SensorData2 utilization samples are periodically polled, not tied to a
     // specific presented frame. They remain useful for display/telemetry, but
@@ -31,7 +32,7 @@ export const cpuBottleneckRule: DiagnosticRule = {
     const cpu = input.frames.cpuLoadPct;
     const gpu = input.frames.gpuLoadPct;
     if (!cpu || !gpu) return null;
-    if (hasStableCommonFrameCap(input.frames.frameTimeMs, input.summary.frameTimeP50Ms)) {
+    if (contextStableCommonFrameCap(ctx) !== undefined) {
       return null;
     }
 

@@ -321,8 +321,10 @@ export interface DiagnosticEvidence {
   /** Curated source basis for time-sensitive driver findings (§16e.3). */
   provenance?: {
     sourceUrl?: string;
-    latestVersion?: string;
-    catalogFetchedAt?: string;
+    /** Driver version the source cites: a catalog latest or a game-ready minimum. */
+    referencedVersion?: string;
+    /** When the source fact was retrieved, independent of its source kind. */
+    fetchedAt?: string;
   };
 }
 

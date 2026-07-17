@@ -225,24 +225,26 @@ interface NvidiaLookup {
   }>;
 }
 
-export function parseNvidiaLookup(
-  raw: string,
-  os: "windows" | "linux",
-  fetchedAt: string,
-): SourceBatch {
+/**
+ * Windows only. Linux publishes a plain-text version pointer instead, parsed by
+ * {@link parseNvidiaLinuxPointer} — this lookup's release notes carry the Game
+ * Ready prose that yields requirements, and `boundedRequirements` mints Windows
+ * requirements unconditionally.
+ */
+export function parseNvidiaLookup(raw: string, fetchedAt: string): SourceBatch {
   const parsed = JSON.parse(raw) as NvidiaLookup;
   const info = parsed.IDS?.[0]?.downloadInfo;
   if (parsed.Success !== "1" || !info?.Version || !info.ReleaseDateTime || !info.DetailsURL) {
-    throw new Error(`NVIDIA ${os} response did not contain one driver`);
+    throw new Error("NVIDIA windows response did not contain one driver");
   }
-  const latestVersion = validVersion(info.Version, "nvidia", os, "gpu");
+  const latestVersion = validVersion(info.Version, "nvidia", "windows", "gpu");
   const releasedAt = isoDate(info.ReleaseDateTime);
   const source = new URL(info.DetailsURL);
   if (source.protocol !== "https:" || source.hostname !== "www.nvidia.com") {
     throw new Error("NVIDIA details URL left the vendor host");
   }
 
-  const notes = os === "windows" ? htmlLines(info.ReleaseNotes ?? "") : [];
+  const notes = htmlLines(info.ReleaseNotes ?? "");
   const gameTitles: string[] = [];
   for (const line of notes) {
     if (/^Game Ready for\s+/i.test(line)) {
@@ -263,7 +265,7 @@ export function parseNvidiaLookup(
     catalog: [
       {
         vendor: "nvidia",
-        os,
+        os: "windows",
         component: "gpu",
         latestVersion,
         releasedAt,
@@ -271,8 +273,7 @@ export function parseNvidiaLookup(
         fetchedAt,
       },
     ],
-    requirements: os === "windows" ? requirementBatch.requirements : [],
-    dropped: os === "windows" ? requirementBatch.dropped : 0,
+    ...requirementBatch,
   };
 }
 
@@ -773,7 +774,7 @@ export const LIVE_DRIVER_SOURCES = [
         allowedHosts: ["gfwsl.geforce.com"],
         fetchImpl,
       });
-      return parseNvidiaLookup(raw, "windows", fetchedAt);
+      return parseNvidiaLookup(raw, fetchedAt);
     },
   },
   {

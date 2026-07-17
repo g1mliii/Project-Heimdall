@@ -20,7 +20,7 @@
 
 import { DIAGNOSTICS, type ConfidenceLevel, type DiagnosticEvidence } from "@heimdall/shared";
 import type { DiagnosticRule, DiagnosticRuleContext, RuleVerdict } from "./types";
-import { holdsCadence, stableCommonFrameCap } from "./frame-cap";
+import { contextStableCommonFrameCap, holdsCadence } from "./frame-cap";
 
 const RULE_VERSION = "1.0.0";
 const BUSY_SENSORS = ["cpuBusyMs", "gpuBusyMs"] as const;
@@ -97,7 +97,7 @@ export function analyzeBottleneck(ctx: DiagnosticRuleContext): BottleneckAnalysi
   // cap when the capture as a whole holds that same cadence. Testing each frame
   // against every configured cap instead would attribute ordinary uncapped runs
   // to a cap that isn't there and suppress the true CPU/GPU-bound finding.
-  const capCadence = stableCommonFrameCap(frameTimes, input.summary.frameTimeP50Ms);
+  const capCadence = contextStableCommonFrameCap(ctx);
 
   if (cpu && gpu) {
     for (let i = 0; i < frameCount; i++) {

@@ -1,3 +1,5 @@
+import { readAllBounded } from "@heimdall/shared";
+
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_REDIRECTS = 5;
@@ -77,26 +79,8 @@ export async function fetchText(
     }
     if (!response.body) throw new Error("source returned no body");
 
-    const reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > maxBytes) {
-        await reader.cancel("source body too large");
-        throw new Error(`source body exceeds ${maxBytes} bytes`);
-      }
-      chunks.push(value);
-    }
-
-    const bytes = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
+    const bytes = await readAllBounded(response.body, maxBytes);
+    if (bytes === null) throw new Error(`source body exceeds ${maxBytes} bytes`);
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } finally {
     clearTimeout(timer);

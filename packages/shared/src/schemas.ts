@@ -110,8 +110,8 @@ export const diagnosticEvidenceSchema = z.object({
   provenance: z
     .object({
       sourceUrl: z.string().trim().min(1).max(2048).optional(),
-      latestVersion: indexedMetadataTextSchema.optional(),
-      catalogFetchedAt: z.string().datetime({ offset: true }).optional(),
+      referencedVersion: indexedMetadataTextSchema.optional(),
+      fetchedAt: z.string().datetime({ offset: true }).optional(),
     })
     .optional(),
 });

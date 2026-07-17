@@ -57,6 +57,25 @@ export interface ReprocessDrainResult {
   reprocessFailed: number;
 }
 
+/** A pass that did no work. Counters start here and a skipped pass returns it. */
+function emptyDrainResult(): DrainResult {
+  return { claimed: 0, validated: 0, flagged: 0, retried: 0, failed: 0 };
+}
+
+/** @see emptyDrainResult */
+function emptyReprocessDrainResult(): ReprocessDrainResult {
+  return {
+    driverEnqueued: 0,
+    reprocessClaimed: 0,
+    reprocessed: 0,
+    reprocessSummaryDrifted: 0,
+    driverRefreshed: 0,
+    driverFindingsChanged: 0,
+    reprocessRetried: 0,
+    reprocessFailed: 0,
+  };
+}
+
 export interface DrainDeps extends VerifyDeps {
   deleteObject(key: string): Promise<void>;
 }
@@ -87,7 +106,7 @@ export async function drainJobs(
   deps: DrainDeps = realDeps(),
 ): Promise<DrainResult> {
   const deadline = deadlineAt ?? Date.now() + budgetMs;
-  const result: DrainResult = { claimed: 0, validated: 0, flagged: 0, retried: 0, failed: 0 };
+  const result: DrainResult = emptyDrainResult();
   const attemptedThisPass = new Set<string>();
 
   while (result.claimed < maxJobs && Date.now() < deadline) {
@@ -144,34 +163,29 @@ export async function drainReprocessJobs(
     maxJobs = 2,
     budgetMs = 25_000,
     deadlineAt,
-    driverEnqueueLimit = 1_000,
   }: {
     maxJobs?: number;
     budgetMs?: number;
     deadlineAt?: number;
-    driverEnqueueLimit?: number;
   } = {},
   deps: Pick<DrainDeps, "db" | "getObject" | "publicKeyBase64"> = realDeps(),
 ): Promise<ReprocessDrainResult> {
   const deadline = deadlineAt ?? Date.now() + budgetMs;
-  const result: ReprocessDrainResult = {
-    driverEnqueued: 0,
-    reprocessClaimed: 0,
-    reprocessed: 0,
-    reprocessSummaryDrifted: 0,
-    driverRefreshed: 0,
-    driverFindingsChanged: 0,
-    reprocessRetried: 0,
-    reprocessFailed: 0,
-  };
-  if (!hasTimeRemaining(deadline)) return result;
+  const result: ReprocessDrainResult = emptyReprocessDrainResult();
+  const jobLimit = Math.max(0, Math.floor(maxJobs));
+  if (!hasTimeRemaining(deadline) || jobLimit === 0) return result;
 
+  // The alternating claim order can drain at most half the pass as driver
+  // work when full replays are also backlogged. Keep the live driver queue at
+  // that capacity so a large catalog update cannot grow it faster than cron
+  // consumes it.
+  const driverQueueCapacity = Math.ceil(jobLimit / 2);
   result.driverEnqueued = (
-    await enqueueDriverRefreshJobs({ limit: driverEnqueueLimit }, deps.db)
+    await enqueueDriverRefreshJobs({ limit: driverQueueCapacity }, deps.db)
   ).enqueued;
   const attemptedThisPass = new Set<string>();
 
-  while (result.reprocessClaimed < maxJobs && hasTimeRemaining(deadline)) {
+  while (result.reprocessClaimed < jobLimit && hasTimeRemaining(deadline)) {
     // Alternate the preferred kind. A mass full backfill cannot starve weekly
     // driver work, and continuous driver churn cannot monopolize the lane.
     const preferred: readonly ReprocessKind[] =
@@ -189,7 +203,7 @@ export async function drainReprocessJobs(
     }
     if (job === null) break;
 
-    attemptedThisPass.add(job.id);
+    attemptedThisPass.add(job.key);
     result.reprocessClaimed += 1;
     if (job.attempts > MAX_REPROCESS_ATTEMPTS) {
       await failReprocessJob(job, "attempts cap exceeded", true, deps.db);
@@ -355,20 +369,11 @@ export async function runMaintenancePass(
         ),
       ]);
   } else {
-    drained = { claimed: 0, validated: 0, flagged: 0, retried: 0, failed: 0 };
+    drained = emptyDrainResult();
     cleanedStalePending = 0;
     cleanedFinalizedStaging = 0;
     prunedRateLimitWindows = 0;
-    reprocessed = {
-      driverEnqueued: 0,
-      reprocessClaimed: 0,
-      reprocessed: 0,
-      reprocessSummaryDrifted: 0,
-      driverRefreshed: 0,
-      driverFindingsChanged: 0,
-      reprocessRetried: 0,
-      reprocessFailed: 0,
-    };
+    reprocessed = emptyReprocessDrainResult();
   }
   return {
     ...drained,

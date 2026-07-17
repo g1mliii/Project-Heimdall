@@ -26,6 +26,7 @@ import {
   enqueueDriverRefreshJobs,
   enqueueFullReprocessJobs,
   failReprocessJob,
+  DRIVER_REFRESH_ENQUEUE_SQL,
   FULL_REPROCESS_ENQUEUE_SQL,
   REPROCESS_KIND,
 } from "../repo/reprocess";
@@ -292,7 +293,7 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
       "driver-update-available",
     ]);
     expect(findings[1]?.evidence?.provenance).toMatchObject({
-      latestVersion: "610.74",
+      referencedVersion: "610.74",
     });
     expect(findings[1]?.ruleVersion).toBe("1.1.0");
 
@@ -428,7 +429,7 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
         { code: "vram-saturation", severity: "warn", title: "VRAM", detail: "d" },
         { code: "driver-update-available", severity: "info", title: "Driver", detail: "d" },
         { code: "likely-gpu-bound", severity: "info", title: "GPU", detail: "d" },
-      ] as unknown as DiagnosticFinding[],
+      ] satisfies DiagnosticFinding[],
       db.pool,
     );
     const registryOrder = (await readDiagnostics(id, db.pool)).map((row) => row.code);
@@ -443,7 +444,7 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
       id,
       [
         { code: "driver-update-available", severity: "info", title: "Driver", detail: "d2" },
-      ] as unknown as DiagnosticFinding[],
+      ] satisfies DiagnosticFinding[],
       db.pool,
     );
 
@@ -494,6 +495,26 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
     expect((await enqueueDriverRefreshJobs({}, db.pool)).enqueued).toBe(1);
     const revived = await claimNextReprocessJob(REPROCESS_KIND.driver, {}, db.pool);
     expect(revived?.runId).toBe(id);
+  });
+
+  it("keeps a driver refresh sweep within its live-queue capacity", async () => {
+    for (const suffix of ["a", "b", "c"]) {
+      await insertRun(runFixture(`run_driver_capacity_${suffix}`), db.pool);
+    }
+    await settleDriverWatermark();
+    await db.pool.query(
+      `update driver_catalog
+          set fetched_at = now() + interval '1 hour'
+        where vendor = 'nvidia' and os = 'windows' and component = 'gpu'`,
+    );
+
+    expect((await enqueueDriverRefreshJobs({ limit: 2 }, db.pool)).enqueued).toBe(2);
+    expect((await enqueueDriverRefreshJobs({ limit: 2 }, db.pool)).enqueued).toBe(0);
+    const active = await db.pool.query<{ count: number | string }>(
+      `select count(*) from reprocess_jobs
+        where kind = 'driver' and failed_at is null`,
+    );
+    expect(Number(active.rows[0]?.count)).toBe(2);
   });
 
   it("sweeps driver findings from game_driver_requirements with an empty catalog", async () => {
@@ -642,13 +663,21 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
       const driver = await client.query(
         `explain (analyze, buffers, format json)
          select id from runs
-          where status <> 'hidden'
+          where status in ('validated', 'flagged')
             and (driver_evaluated_at is null or driver_evaluated_at < now())
           order by driver_evaluated_at nulls first, id
           limit 100`,
       );
+      const driverSweep = await client.query(
+        `explain (analyze, buffers, format json) ${DRIVER_REFRESH_ENQUEUE_SQL}`,
+        [30, 100],
+      );
       expect(JSON.stringify(full.rows)).toContain("runs_reprocess_capability_idx");
       expect(JSON.stringify(driver.rows)).toContain("runs_driver_evaluated_at_idx");
+      expect(JSON.stringify(driverSweep.rows)).toContain("driver_catalog_fetched_at_idx");
+      expect(JSON.stringify(driverSweep.rows)).toContain(
+        "game_driver_requirements_fetched_at_idx",
+      );
       await client.query("rollback");
     } finally {
       client.release();

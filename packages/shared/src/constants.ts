@@ -146,6 +146,14 @@ export type CapabilitySensorField = (typeof CAPABILITY_SENSOR_FIELDS)[number];
  * Capability-manifest schema version (Phase 6.5 §16a.3). Bump when the manifest
  * shape changes incompatibly, exactly as {@link CURRENT_SCHEMA_VERSION} governs
  * the ingest DTO — a stored manifest records the version it was derived under.
+ *
+ * ALSO bump this whenever you bump a diagnostic rule's `version` in a way that
+ * can make the rule newly fire, until IMPLEMENTATION_PLAN §17.8.0 lands. The
+ * reprocess full lane finds stale-rule runs by joining `diagnostics`, so it only
+ * reaches runs that ALREADY store a finding for that code — a clean run that the
+ * new version would flag is never re-evaluated. Bumping here sweeps every run
+ * instead (`capability_candidates` matches `capability_manifest_version < N`),
+ * which is bounded and resumable because each job advances the version.
  */
 export const CAPABILITY_MANIFEST_VERSION = 1;
 

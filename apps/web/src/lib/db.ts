@@ -14,6 +14,7 @@ import pg from "pg";
 import { DIAGNOSTICS, normalizeMethodologyManifest } from "@heimdall/shared";
 import type {
   CapabilityManifest,
+  ConfidenceLevel,
   Diagnostic,
   DiagnosticFinding,
   HardwareSnapshot,
@@ -259,6 +260,86 @@ interface DiagnosticRow extends pg.QueryResultRow {
 }
 
 /**
+ * The canonical `run_summaries` column order, shared by every writer so the
+ * insert, the verification update, and the reprocess update cannot drift.
+ */
+const SUMMARY_COLUMNS = [
+  "avg_fps",
+  "p1_low_fps",
+  "p01_low_fps",
+  "frametime_p50_ms",
+  "frametime_p95_ms",
+  "frametime_p99_ms",
+  "stutter_count",
+  "generated_frame_pct",
+  "p01_low_confidence",
+  "sample_count",
+  "duration_seconds",
+] as const;
+
+/**
+ * Transpose a summary into positional parameters in {@link SUMMARY_COLUMNS}
+ * order.
+ *
+ * The parameters are positional, so a transposed pair here writes the wrong
+ * value into the right column with no type error and no test failure. Every
+ * writer goes through this one function so that ordering is stated once.
+ */
+export function summaryColumns(summary: RunSummary): (number | ConfidenceLevel)[] {
+  return [
+    summary.avgFps,
+    summary.onePercentLowFps,
+    summary.pointOnePercentLowFps,
+    summary.frameTimeP50Ms,
+    summary.frameTimeP95Ms,
+    summary.frameTimeP99Ms,
+    summary.stutterCount,
+    summary.generatedFramePct,
+    summary.pointOnePercentLowConfidence,
+    summary.sampleCount,
+    summary.durationSeconds,
+  ];
+}
+
+/** `$n, $n+1, …` for the summary values, for the insert form. */
+export function summaryValuesSql(firstSummaryParameter: number): string {
+  return SUMMARY_COLUMNS.map((_, i) => `$${firstSummaryParameter + i}`).join(", ");
+}
+
+/** The `run_summaries` column list, for the insert form. */
+export function summaryInsertColumnsSql(): string {
+  return SUMMARY_COLUMNS.join(", ");
+}
+
+/**
+ * The complete `run_summaries` update. `runIdParameter` and
+ * `firstSummaryParameter` make it usable from any CTE without restating the
+ * column order; `guardSql` gates the write on the caller's claim.
+ */
+export function summaryUpdateSql(
+  runIdParameter: number,
+  firstSummaryParameter: number,
+  guardSql?: string,
+): string {
+  const assignments = SUMMARY_COLUMNS.map(
+    (column, i) => `${column} = $${firstSummaryParameter + i}`,
+  ).join(", ");
+  return `update run_summaries
+          set ${assignments}
+        where run_id = $${runIdParameter}${guardSql ? `\n          and ${guardSql}` : ""}`;
+}
+
+/**
+ * Retry backoff for a failed queue job, in seconds: 30s doubling per attempt,
+ * capped at 5 doublings and a 300s ceiling. Reads `attempts` from the row being
+ * updated, so it is only valid inside an update on a job table.
+ *
+ * Shared by the verification and reprocess lanes — `runMaintenancePass` drains
+ * both under one budget, so their retry policies must not drift apart.
+ */
+export const RETRY_BACKOFF_SECS_SQL = "least(300, 30 * (1 << least(attempts - 1, 4)))";
+
+/**
  * Transpose findings into the seven positional arrays a diagnostics multi-row
  * insert unnests (code, severity, title, detail, evidence, rule_version,
  * confidence). Evidence is JSON-encoded per row (or null) and cast back to jsonb
@@ -458,11 +539,8 @@ export async function insertRun(
        returning id
      )
      insert into run_summaries (
-       run_id, avg_fps, p1_low_fps, p01_low_fps,
-       frametime_p50_ms, frametime_p95_ms, frametime_p99_ms,
-       stutter_count, generated_frame_pct, p01_low_confidence,
-       sample_count, duration_seconds
-     ) select $1, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35
+       run_id, ${summaryInsertColumnsSql()}
+     ) select $1, ${summaryValuesSql(25)}
          from run_row
        returning run_id`,
     [
@@ -475,10 +553,7 @@ export async function insertRun(
       hw.os ?? null, resolution,
       run.generatedFrameTech, run.framesObjectKey ?? null,
       run.schemaVersion, run.parserVersion, run.createdAt, hw.gpuVramTotalMb ?? null,
-      summary.avgFps, summary.onePercentLowFps, summary.pointOnePercentLowFps,
-      summary.frameTimeP50Ms, summary.frameTimeP95Ms, summary.frameTimeP99Ms,
-      summary.stutterCount, summary.generatedFramePct, summary.pointOnePercentLowConfidence,
-      summary.sampleCount, summary.durationSeconds,
+      ...summaryColumns(summary),
       run.capabilityManifest ? JSON.stringify(run.capabilityManifest) : null,
       run.capabilityManifest?.version ?? null,
       methodologyManifest ? JSON.stringify(methodologyManifest) : null,

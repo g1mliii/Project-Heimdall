@@ -161,8 +161,8 @@ export const driverUpdateAvailableRule: DiagnosticRule = {
       evidence: {
         provenance: {
           ...(catalog.sourceUrl === undefined ? {} : { sourceUrl: catalog.sourceUrl }),
-          latestVersion: catalog.latestVersion,
-          ...(catalog.fetchedAt === undefined ? {} : { catalogFetchedAt: catalog.fetchedAt }),
+          referencedVersion: catalog.latestVersion,
+          ...(catalog.fetchedAt === undefined ? {} : { fetchedAt: catalog.fetchedAt }),
         },
       },
     };
@@ -189,10 +189,10 @@ export const gpuDriverOutdatedRule: DiagnosticRule = {
           ...(input.game?.requiredDriverSourceUrl === undefined
             ? {}
             : { sourceUrl: input.game.requiredDriverSourceUrl }),
-          latestVersion: required,
+          referencedVersion: required,
           ...(input.game?.requiredDriverFetchedAt === undefined
             ? {}
-            : { catalogFetchedAt: input.game.requiredDriverFetchedAt }),
+            : { fetchedAt: input.game.requiredDriverFetchedAt }),
         },
       },
     };

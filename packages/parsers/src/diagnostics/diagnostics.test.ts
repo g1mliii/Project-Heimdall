@@ -195,8 +195,8 @@ describe("runDiagnostics — per-rule fixtures", () => {
     expect(driver?.ruleVersion).toBe("1.1.0");
     expect(driver?.evidence?.provenance).toEqual({
       sourceUrl: "https://example.com/game-ready",
-      latestVersion: "566.36",
-      catalogFetchedAt: "2026-07-14T12:00:00.000Z",
+      referencedVersion: "566.36",
+      fetchedAt: "2026-07-14T12:00:00.000Z",
     });
   });
 
@@ -350,8 +350,8 @@ describe("runDiagnostics — per-rule fixtures", () => {
       expect(finding?.ruleVersion).toBe("1.1.0");
       expect(finding?.evidence?.provenance).toEqual({
         sourceUrl: "https://example.com/latest-driver",
-        latestVersion: cell.latest,
-        catalogFetchedAt: "2026-07-14T12:00:00.000Z",
+        referencedVersion: cell.latest,
+        fetchedAt: "2026-07-14T12:00:00.000Z",
       });
     });
   }

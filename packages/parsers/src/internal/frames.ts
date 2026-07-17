@@ -11,6 +11,25 @@ import { BAD_ROW_FRACTION_LIMIT, failure, type ParseResult, type ParseWarning } 
 import { parseLocaleNumber, splitCsvLine, findColumn, type CsvDialect, type FoundHeader } from "./csv";
 import { SENSOR_COLUMN_FIELDS, type SensorColumnField, type SourceColumns } from "./columns";
 
+type TimeUnit = "seconds" | "milliseconds" | "nanoseconds";
+
+/**
+ * Convert a raw timestamp to milliseconds.
+ *
+ * Keep the arithmetic exactly as written — `/ 1e6` is not bit-identical to
+ * `* 1e-6`, and these values are pinned by golden `.expected.json` fixtures.
+ */
+function toMs(rawTime: number, unit: TimeUnit): number {
+  switch (unit) {
+    case "seconds":
+      return rawTime * 1000;
+    case "milliseconds":
+      return rawTime;
+    case "nanoseconds":
+      return rawTime / 1e6;
+  }
+}
+
 export interface FrameRowsInput {
   source: CaptureSource;
   /** Source lines; callers may point `lineStart` at the first data row to avoid slicing. */
@@ -28,7 +47,7 @@ export interface FrameRowsInput {
    * When absent, `columns.timeSeconds` is used; when that is also missing the
    * timestamp falls back to the cumulative sum of frame times.
    */
-  timeColumn?: { index: number; unit: "seconds" | "milliseconds" | "nanoseconds" };
+  timeColumn?: { index: number; unit: TimeUnit };
   /** Per-field multiplier for unit conversion (e.g. MangoHud VRAM GB→MB). */
   sensorScale?: Partial<Record<SensorColumnField, number>>;
   /**
@@ -183,12 +202,7 @@ export function parseFrameRows(input: FrameRowsInput): ParseResult<FrameSample[]
         markBad(lineIndex);
         continue;
       }
-      rawTimeMs =
-        timeColumn.unit === "seconds"
-          ? rawTime * 1000
-          : timeColumn.unit === "milliseconds"
-            ? rawTime
-            : rawTime / 1e6;
+      rawTimeMs = toMs(rawTime, timeColumn.unit);
     }
 
     if (lastRawMs !== undefined && rawTimeMs < lastRawMs) {

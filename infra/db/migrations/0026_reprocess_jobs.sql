@@ -30,7 +30,7 @@ create index reprocess_jobs_claim_idx
 create index runs_reprocess_capability_idx
   on runs (capability_manifest_version nulls first, created_at, id)
   where frames_object_key is not null
-    and status <> 'hidden';
+    and status in ('validated', 'flagged');
 create index diagnostics_rule_version_run_idx
   on diagnostics (code, rule_version, run_id);
 
@@ -39,7 +39,42 @@ create index diagnostics_rule_version_run_idx
 alter table runs add column driver_evaluated_at timestamptz;
 create index runs_driver_evaluated_at_idx
   on runs (driver_evaluated_at nulls first, id)
-  where status <> 'hidden';
+  where status in ('validated', 'flagged');
+
+-- The driver sweep probes the latest source state and TTL crossings every
+-- maintenance pass. These indexes keep both reads bounded as the per-game
+-- requirements catalog grows.
+create index driver_catalog_fetched_at_idx on driver_catalog (fetched_at);
+create index game_driver_requirements_fetched_at_idx on game_driver_requirements (fetched_at);
+
+-- Phase 6.6 named both source kinds as a catalog latest. Preserve stored
+-- provenance while normalizing it to the Phase 6.7 source-neutral contract:
+-- `referencedVersion` can be either a latest catalog row or a game minimum.
+update diagnostics
+   set evidence = jsonb_set(
+         evidence,
+         '{provenance}',
+         ((evidence -> 'provenance') - 'latestVersion' - 'catalogFetchedAt')
+         || case
+              when (evidence -> 'provenance') ? 'latestVersion'
+                then jsonb_build_object(
+                  'referencedVersion', evidence -> 'provenance' -> 'latestVersion'
+                )
+              else '{}'::jsonb
+            end
+         || case
+              when (evidence -> 'provenance') ? 'catalogFetchedAt'
+                then jsonb_build_object(
+                  'fetchedAt', evidence -> 'provenance' -> 'catalogFetchedAt'
+                )
+              else '{}'::jsonb
+            end
+       )
+ where evidence ? 'provenance'
+   and (
+     (evidence -> 'provenance') ? 'latestVersion'
+     or (evidence -> 'provenance') ? 'catalogFetchedAt'
+   );
 
 -- Display provenance only; never use a finding timestamp as the sweep key.
 alter table diagnostics add column evaluated_at timestamptz;

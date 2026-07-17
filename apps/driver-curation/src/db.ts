@@ -79,17 +79,11 @@ export const CURATION_UPSERT_SQL = `with catalog_input as (
        and (
           -- Source parsing admits only numeric dot-separated versions; arrays
           -- compare those segments numerically rather than lexically.
-          string_to_array(regexp_replace(excluded.latest_version, '([.]0)+$', ''), '.')::numeric[]
-            > string_to_array(
-              regexp_replace(driver_catalog.latest_version, '([.]0)+$', ''),
-              '.'
-            )::numeric[]
+          ${versionArraySql("excluded.latest_version")}
+            > ${versionArraySql("driver_catalog.latest_version")}
           or (
-            string_to_array(regexp_replace(excluded.latest_version, '([.]0)+$', ''), '.')::numeric[]
-              = string_to_array(
-                regexp_replace(driver_catalog.latest_version, '([.]0)+$', ''),
-                '.'
-              )::numeric[]
+            ${versionArraySql("excluded.latest_version")}
+              = ${versionArraySql("driver_catalog.latest_version")}
             and (
               excluded.fetched_at > driver_catalog.fetched_at
               or (
