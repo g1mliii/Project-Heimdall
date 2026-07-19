@@ -2,14 +2,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   COHORT_ASSESSMENT_VERSION,
-  cohortObservationsSql,
-  comparabilityKeySql,
   validRun,
   validSummary,
 } from "@heimdall/shared";
 import type { MethodologyManifest, Run } from "@heimdall/shared";
 
-import { insertRun } from "../db";
+import { insertRun, type Queryable } from "../db";
 import { createTestDb, testDbAvailable, type TestDb } from "../testing/test-db";
 import { resolveGameId, resolveHardwareId } from "./catalog";
 import { readGamePage } from "./games";
@@ -344,25 +342,39 @@ describe.skipIf(!canRun)("cohort distribution + integrity (§17/§18/§19)", () 
       [scaleGameId, scaleGpuId],
     );
 
+    const tracedQueries: { text: string; values: unknown[] }[] = [];
+    const tracingDb = {
+      query: (text: string, values: unknown[] = []) => {
+        tracedQueries.push({ text, values });
+        return db.pool.query(text, values as never[]);
+      },
+    } as Queryable;
+    const distribution = await readGameDistribution("scale-title", { metric: "avg-fps" }, tracingDb);
+    const scaleCohort = distribution?.cohorts[0];
+    expect(scaleCohort?.observationCount).toBe(400);
+    expect(scaleCohort?.distribution?.sampleCount).toBe(400);
+    // The response remains bounded even when the source cohort grows: the
+    // database returns a histogram, not one value/id per observation.
+    expect(scaleCohort?.distribution?.bins).toHaveLength(20);
+    expect(scaleCohort?.distribution?.bins.reduce((sum, bin) => sum + bin.count, 0)).toBe(400);
+
     const client = await db.pool.connect();
     try {
       await client.query("analyze runs");
       await client.query("analyze run_summaries");
       await client.query("begin");
       await client.query("set local enable_seqscan = off");
-      const plan = await client.query<{ "QUERY PLAN": unknown }>(
-        `explain (format json)
-         with observations as ${cohortObservationsSql()}
-         select ${comparabilityKeySql("r")} as ck, count(*)
-           from observations obs
-           join runs r on r.id = obs.run_id
-           join run_summaries s on s.run_id = r.id
-          where r.game_id = $1
-          group by ck`,
-        [scaleGameId],
+      const bucketQuery = tracedQueries.find(({ text }) => text.includes("bucket_summaries"));
+      if (!bucketQuery) throw new Error("expected the distribution bucket query");
+      const plan = await client.query<{ "QUERY PLAN": string }>(
+        `explain (analyze, buffers, format text) ${bucketQuery.text}`,
+        bucketQuery.values as never[],
       );
-      // The game filter must ride the partial game index, never a full runs scan.
-      expect(JSON.stringify(plan.rows)).toContain("runs_game_id_idx");
+      const renderedPlan = plan.rows.map((row) => row["QUERY PLAN"]).join("\n");
+      // The actual distribution pipeline must still start from the partial
+      // game index, and its bounded fixture must not spill CTE/sort data to disk.
+      expect(renderedPlan).toContain("runs_game_id_idx");
+      expect(renderedPlan).not.toContain("Disk:");
     } finally {
       await client.query("rollback").catch(() => {});
       client.release();

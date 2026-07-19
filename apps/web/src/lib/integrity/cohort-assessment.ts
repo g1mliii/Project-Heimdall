@@ -42,6 +42,60 @@ export interface CohortAssessmentResult {
 }
 
 /**
+ * Shared Postgres form of {@link statisticalOutlierMask}. `base` must expose
+ * `ck`, `run_id`, `value`, and `observation_count`; callers own the observation
+ * selection, while this keeps the MAD/sigma verdict identical for the live
+ * curve and the durable assessment lane.
+ */
+export function cohortOutlierClassificationSql(base = "base"): string {
+  return `centres as materialized (
+       select ck,
+              avg(value) as mean_value,
+              stddev_pop(value) as sigma,
+              percentile_disc(0.5) within group (order by value) as median_value
+         from ${base}
+        where value is not null
+        group by ck
+     ), deviations as materialized (
+       select ${base}.ck,
+              ${base}.run_id,
+              ${base}.value,
+              ${base}.observation_count,
+              centres.mean_value,
+              centres.sigma,
+              centres.median_value,
+              abs(${base}.value - centres.median_value) as absolute_deviation
+         from ${base}
+         join centres using (ck)
+        where ${base}.value is not null
+     ), spreads as materialized (
+       select ck,
+              min(mean_value) as mean_value,
+              min(sigma) as sigma,
+              min(median_value) as median_value,
+              percentile_disc(0.5) within group (order by absolute_deviation) as mad
+         from deviations
+        group by ck
+     ), classified as materialized (
+       select deviations.run_id,
+              deviations.ck,
+              deviations.value,
+              case
+                when deviations.observation_count < ${OUTLIER.minSampleSize} then false
+                when spreads.mad > 0 then abs(
+                  (${OUTLIER.madScale} * (deviations.value - spreads.median_value)) / spreads.mad
+                ) > ${OUTLIER.madZScoreThreshold}
+                when spreads.sigma > 0 then abs(
+                  (deviations.value - spreads.mean_value) / spreads.sigma
+                ) > ${OUTLIER.sigmaThreshold}
+                else false
+              end as is_outlier
+         from deviations
+         join spreads using (ck)
+     )`;
+}
+
+/**
  * Recompute and persist the cohort assessment for every observation of one
  * game, grouping by the shared comparability key and running the MAD/sigma
  * outlier rule per exact bucket over avg FPS — the same metric the set
@@ -61,51 +115,27 @@ export async function recomputeGameCohortAssessments(
     // population-sigma fallback only when MAD has zero spread.
     `with observations as materialized ${cohortObservationsSql({ scopeSql: "r.game_id = $1" })},
      base as materialized (
-       select ${comparabilityKeySql("r")} as ck,
-              r.id as run_id,
-              s.avg_fps::double precision as value
-         from observations obs
-         join runs r on r.id = obs.run_id
-         join run_summaries s on s.run_id = r.id
-     ), centres as materialized (
-       select ck,
-              count(*) as member_count,
-              avg(value) as mean_value,
-              stddev_pop(value) as sigma,
-              percentile_disc(0.5) within group (order by value) as median_value
-         from base
-        group by ck
-     ), deviations as materialized (
-       select base.*, centres.member_count, centres.mean_value, centres.sigma,
-              centres.median_value,
-              abs(base.value - centres.median_value) as absolute_deviation
-         from base
-         join centres using (ck)
-     ), spreads as materialized (
-       select ck,
-              min(member_count) as member_count,
-              min(mean_value) as mean_value,
-              min(sigma) as sigma,
-              min(median_value) as median_value,
-              percentile_disc(0.5) within group (order by absolute_deviation) as mad
-         from deviations
-        group by ck
-     ), classified as materialized (
-       select deviations.run_id,
-              case
-                when spreads.member_count < ${OUTLIER.minSampleSize} then null
-                when spreads.mad > 0
-                  and abs((${OUTLIER.madScale} * (deviations.value - spreads.median_value)) / spreads.mad)
-                    > ${OUTLIER.madZScoreThreshold}
-                  then '${AGGREGATE_EXCLUSION.statisticalOutlier}'
-                when spreads.mad = 0 and spreads.sigma > 0
-                  and abs((deviations.value - spreads.mean_value) / spreads.sigma)
-                    > ${OUTLIER.sigmaThreshold}
-                  then '${AGGREGATE_EXCLUSION.statisticalOutlier}'
+       select values.*,
+              count(*) over (partition by ck) as observation_count
+         from (
+           select ${comparabilityKeySql("r")} as ck,
+                  r.id as run_id,
+                  s.avg_fps::double precision as value
+             from observations obs
+             join runs r on r.id = obs.run_id
+             join run_summaries s on s.run_id = r.id
+         ) values
+     ), ${cohortOutlierClassificationSql()}, assessment_candidates as materialized (
+       -- Keep a durable no-outlier assessment for every observation, including
+       -- an unexpected null metric value that the statistical calculation
+       -- correctly omits.
+       select base.run_id,
+              case when classified.is_outlier
+                then '${AGGREGATE_EXCLUSION.statisticalOutlier}'
                 else null
               end as exclusion_reason
-         from deviations
-         join spreads using (ck)
+         from base
+         left join classified on classified.run_id = base.run_id
      ), stale_assessments as (
        delete from run_cohort_assessments assessment
         using runs run
@@ -117,7 +147,7 @@ export async function recomputeGameCohortAssessments(
      ), upserted as (
        insert into run_cohort_assessments (run_id, assessment_version, exclusion_reason, evaluated_at)
        select run_id, $2, exclusion_reason, now()
-         from classified
+         from assessment_candidates
        on conflict (run_id) do update
           set assessment_version = excluded.assessment_version,
               exclusion_reason = excluded.exclusion_reason,

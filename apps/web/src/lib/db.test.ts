@@ -1,14 +1,11 @@
 /**
  * Storage regression coverage — Postgres (IMPLEMENTATION_PLAN §6.1/§6.2).
  *
- * Runs against a real Postgres: `TEST_DATABASE_URL` when set (a DISPOSABLE
- * database — its public schema is dropped), otherwise an ephemeral
- * Testcontainers instance (needs Docker). Locally with neither available the
- * suite skips loudly; in CI it FAILS instead — migration coverage must never
- * vanish silently from the gate.
+ * Runs against the shared isolated Postgres harness. Locally with neither
+ * TEST_DATABASE_URL nor Docker available the suite skips loudly; in CI it
+ * fails instead — migration coverage must never vanish from the gate.
  */
 
-import { execFileSync } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -25,9 +22,9 @@ import {
   validRun,
 } from "@heimdall/shared";
 import { migrate } from "../../../../infra/db/migrate.mjs";
+import { createTestDb, testDbAvailable, type TestDb } from "./testing/test-db";
 import { insertRun, readRun } from "./db";
 
-const testDbUrl = process.env.TEST_DATABASE_URL;
 const BENCHMARK_SET_ID = "57ba4bd4-8b3e-4a2b-a0d0-92fb48367d5d";
 const BENCHMARK_SET_SECRET_HASH = "a".repeat(64);
 
@@ -39,53 +36,21 @@ function fixtureRunWithId(id: string): typeof validRun {
   };
 }
 
-function dockerAvailable(): boolean {
-  try {
-    // Module-level (describe.skipIf needs a collection-time answer); keep the
-    // timeout short so a wedged daemon can't stall test collection for long.
-    execFileSync("docker", ["info"], { stdio: "ignore", timeout: 5_000 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const canRun = Boolean(testDbUrl) || dockerAvailable();
-if (!canRun) {
-  if (process.env.CI) {
-    throw new Error(
-      "[db.test] no Postgres available in CI — provide Docker or TEST_DATABASE_URL; " +
-        "refusing to silently skip migration coverage.",
-    );
-  }
-  console.warn(
-    "[db.test] SKIPPED: no Postgres available — set TEST_DATABASE_URL to a disposable " +
-      "database or start Docker (Testcontainers).",
-  );
-}
+const canRun = testDbAvailable("db.test");
 
 describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
+  let db: TestDb;
   let pool: pg.Pool;
-  let stopContainer: (() => Promise<unknown>) | undefined;
   let appliedOnFresh: string[];
 
   beforeAll(async () => {
-    if (testDbUrl) {
-      pool = new pg.Pool({ connectionString: testDbUrl, max: 2 });
-      // TEST_DATABASE_URL is documented-disposable: reset to a fresh state.
-      await pool.query("drop schema public cascade; create schema public;");
-    } else {
-      const { PostgreSqlContainer } = await import("@testcontainers/postgresql");
-      const container = await new PostgreSqlContainer("postgres:17-alpine").start();
-      stopContainer = () => container.stop();
-      pool = new pg.Pool({ connectionString: container.getConnectionUri(), max: 2 });
-    }
-    appliedOnFresh = await migrate(pool);
+    db = await createTestDb();
+    pool = db.pool;
+    appliedOnFresh = db.appliedMigrations;
   }, 240_000); // first run may pull the postgres image
 
   afterAll(async () => {
-    await pool?.end();
-    await stopContainer?.();
+    await db?.teardown();
   });
 
   it("applies all migrations cleanly on a fresh DB (§6.1)", async () => {
@@ -124,7 +89,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
-      "select table_name from information_schema.tables where table_schema = 'public'",
+      "select table_name from information_schema.tables where table_schema = current_schema()",
     );
     expect(rows.map((r) => r.table_name).sort()).toEqual(
       [
@@ -191,6 +156,8 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     const schema = "phase_6_7_populated_migration";
     await pool.query(`drop schema if exists "${schema}" cascade; create schema "${schema}"`);
     const populated = new pg.Pool({
+      // Use the bare service URL here: this probe owns a second schema, while
+      // `db.connectionString` pins the fresh-suite schema in its URL options.
       connectionString: pool.options.connectionString,
       max: 1,
       options: `-csearch_path=${schema}`,
@@ -259,7 +226,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
 
   it("creates the §4.2 indexes", async () => {
     const { rows } = await pool.query<{ indexname: string }>(
-      "select indexname from pg_indexes where schemaname = 'public'",
+      "select indexname from pg_indexes where schemaname = current_schema()",
     );
     const names = rows.map((r) => r.indexname);
     for (const expected of [
@@ -510,13 +477,13 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       ["verification_jobs_status_check", verificationJobStatuses],
     ];
     for (const [constraint, values] of cases) {
-      // API/worker/repo suites migrate isolated schemas in parallel in CI; this
-      // suite owns public, so inspect only its constraints.
+      // Every DB suite migrates an isolated schema in parallel in CI; inspect
+      // this suite's constraints rather than an unrelated concurrent schema.
       const { rows } = await pool.query<{ def: string }>(
         `select pg_get_constraintdef(oid) as def
            from pg_constraint
           where conname = $1
-            and connamespace = 'public'::regnamespace`,
+            and connamespace = current_schema()::regnamespace`,
         [constraint],
       );
       expect(rows, `constraint ${constraint} exists`).toHaveLength(1);
@@ -538,7 +505,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
   it("has NO per-frame table — frames are Parquet in R2 (invariant §4.3)", async () => {
     const { rows } = await pool.query<{ table_name: string }>(
       `select table_name from information_schema.tables
-        where table_schema = 'public' and table_name ~* 'frame'`,
+        where table_schema = current_schema() and table_name ~* 'frame'`,
     );
     expect(rows).toEqual([]);
   });

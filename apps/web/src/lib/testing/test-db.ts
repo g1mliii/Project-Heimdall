@@ -49,6 +49,8 @@ export function testDbAvailable(label: string): boolean {
 
 export interface TestDb {
   pool: pg.Pool;
+  /** Migrations applied while creating this fresh database or schema. */
+  appliedMigrations: string[];
   /**
    * URL other code (e.g. route handlers using the default app pool) can use
    * to reach this same database/schema — encodes the search_path when the
@@ -63,36 +65,53 @@ export async function createTestDb(): Promise<TestDb> {
   if (testDbUrl) {
     const schema = `heimdall_test_${randomBytes(6).toString("hex")}`;
     const admin = new pg.Pool({ connectionString: testDbUrl, max: 1 });
-    await admin.query(`create schema "${schema}"`);
-    const pool = new pg.Pool({
-      connectionString: testDbUrl,
-      max: 2,
-      options: `-csearch_path=${schema},public`,
-    });
-    await migrate(pool);
-    const separator = testDbUrl.includes("?") ? "&" : "?";
-    const connectionString = `${testDbUrl}${separator}options=${encodeURIComponent(`-csearch_path=${schema},public`)}`;
-    return {
-      pool,
-      connectionString,
-      teardown: async () => {
-        await pool.end();
-        await admin.query(`drop schema "${schema}" cascade`);
-        await admin.end();
-      },
-    };
+    let pool: pg.Pool | undefined;
+    try {
+      await admin.query(`create schema "${schema}"`);
+      const testPool = new pg.Pool({
+        connectionString: testDbUrl,
+        max: 2,
+        options: `-csearch_path=${schema},public`,
+      });
+      pool = testPool;
+      const appliedMigrations = await migrate(testPool);
+      const separator = testDbUrl.includes("?") ? "&" : "?";
+      const connectionString = `${testDbUrl}${separator}options=${encodeURIComponent(`-csearch_path=${schema},public`)}`;
+      return {
+        pool: testPool,
+        appliedMigrations,
+        connectionString,
+        teardown: async () => {
+          await testPool.end();
+          await admin.query(`drop schema "${schema}" cascade`);
+          await admin.end();
+        },
+      };
+    } catch (error) {
+      await pool?.end();
+      await admin.query(`drop schema if exists "${schema}" cascade`).catch(() => undefined);
+      await admin.end();
+      throw error;
+    }
   }
 
   const { PostgreSqlContainer } = await import("@testcontainers/postgresql");
   const container = await new PostgreSqlContainer("postgres:17-alpine").start();
   const pool = new pg.Pool({ connectionString: container.getConnectionUri(), max: 2 });
-  await migrate(pool);
-  return {
-    pool,
-    connectionString: container.getConnectionUri(),
-    teardown: async () => {
-      await pool.end();
-      await container.stop();
-    },
-  };
+  try {
+    const appliedMigrations = await migrate(pool);
+    return {
+      pool,
+      appliedMigrations,
+      connectionString: container.getConnectionUri(),
+      teardown: async () => {
+        await pool.end();
+        await container.stop();
+      },
+    };
+  } catch (error) {
+    await pool.end();
+    await container.stop();
+    throw error;
+  }
 }

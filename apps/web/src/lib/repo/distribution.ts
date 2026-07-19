@@ -27,13 +27,13 @@ import {
   cohortObservationsSql,
   comparabilityKeySql,
   comparabilityProfileSql,
-  empiricalDistributionBins,
-  statisticalOutlierMask,
 } from "@heimdall/shared";
 import type {
   CohortDistribution,
   DiagnosticRate,
+  DistributionBin,
   DistributionMetric,
+  DistributionMarker,
   GameDistributionQuery,
   GameDistributionResponse,
   GeneratedFrameTech,
@@ -43,6 +43,7 @@ import type {
 } from "@heimdall/shared";
 
 import { getPool, query, type Queryable } from "../db";
+import { cohortOutlierClassificationSql } from "../integrity/cohort-assessment";
 
 /** At most this many buckets per response; `truncated` flags when more existed. */
 const MAX_COHORTS = 50;
@@ -106,9 +107,20 @@ interface BucketRow {
   graphics_api: string | null;
   generated_frame_tech: GeneratedFrameTech;
   observation_count: string | number;
-  metric_values: (string | number | null)[] | null;
-  /** Observation run ids, aggregated in the SAME order as `metric_values`. */
-  observation_run_ids: string[] | null;
+  raw_run_count: string | number | null;
+  excluded_outlier_count: string | number;
+  viewer_is_observation: boolean;
+  viewer_is_outlier: boolean;
+  viewer_at_or_worse: string | number;
+  sample_count: string | number | null;
+  min_value: string | number | null;
+  max_value: string | number | null;
+  mean_value: string | number | null;
+  marker_p1: string | number | null;
+  marker_p50: string | number | null;
+  marker_p99: string | number | null;
+  /** At most 40 server-bucketed histogram bins — never raw cohort values. */
+  bins: unknown;
 }
 
 /**
@@ -122,11 +134,6 @@ interface ViewerRow {
   value: string | number | null;
 }
 
-interface RawCountRow {
-  ck: string;
-  raw_run_count: string | number;
-}
-
 interface SummaryRow {
   aggregate_eligible_runs: string | number;
   pooled_observations: string | number;
@@ -136,6 +143,7 @@ interface SummaryRow {
 
 /** `{alias}_denom` / `{alias}_num` per {@link RATE_SPECS} entry, plus the total. */
 type RatesRow = Record<string, string | number>;
+type AggregateRow = SummaryRow & RatesRow;
 
 /** A run's sensor is usable for an aggregate rate only if present AND frame-aligned. */
 function sensorReadySql(field: string): string {
@@ -215,17 +223,51 @@ function filterParams(q: GameDistributionQuery): [
  * number always reads as "higher is a better result".
  */
 function viewerStandingPercentile(
-  values: number[],
+  sampleCount: number,
+  atOrWorse: string | number,
   viewerValue: number | null,
-  direction: "higher" | "lower" | "neutral",
 ): number | null {
-  if (viewerValue === null || values.length === 0) return null;
-  const atOrWorse = values.reduce(
-    (count, value) =>
-      (direction === "lower" ? value >= viewerValue : value <= viewerValue) ? count + 1 : count,
-    0,
-  );
-  return Math.round((atOrWorse / values.length) * 100);
+  if (viewerValue === null || sampleCount === 0) return null;
+  return Math.round((Number(atOrWorse) / sampleCount) * 100);
+}
+
+function numeric(value: string | number | null): number {
+  return value === null ? 0 : Number(value);
+}
+
+function distributionBins(value: unknown): DistributionBin[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((bin) => {
+    if (
+      bin === null ||
+      typeof bin !== "object" ||
+      !("lower" in bin) ||
+      !("upper" in bin) ||
+      !("count" in bin)
+    ) {
+      return [];
+    }
+    const { lower, upper, count } = bin;
+    if (
+      typeof lower !== "number" ||
+      typeof upper !== "number" ||
+      typeof count !== "number" ||
+      !Number.isFinite(lower) ||
+      !Number.isFinite(upper) ||
+      !Number.isSafeInteger(count)
+    ) {
+      return [];
+    }
+    return [{ lower, upper, count }];
+  });
+}
+
+function distributionMarkers(row: BucketRow): DistributionMarker[] {
+  return [
+    { p: 1, value: numeric(row.marker_p1) },
+    { p: 50, value: numeric(row.marker_p50) },
+    { p: 99, value: numeric(row.marker_p99) },
+  ];
 }
 
 /**
@@ -288,17 +330,17 @@ export async function readGameDistribution(
     ? await readViewerObservation(game.id, q.viewerRunId, metricSql, db)
     : null;
 
-  const [bucketRows, summaryRows, ratesRows] = await Promise.all([
+  const [bucketRows, aggregateRows] = await Promise.all([
     query<BucketRow>(
-      `with observations as ${observationsSql}
-       , cohort_counts as materialized (
-       select ${comparabilityKeySql("r")} as ck,
+      `with observations as materialized ${observationsSql},
+       cohort_counts as materialized (
+        select ${comparabilityKeySql("r")} as ck,
                min(coalesce(gpu.canonical_name, r.gpu_model)) as gpu_name,
                min(r.gpu_hardware_id::text) as gpu_id,
-              min(r.resolution) as resolution,
-              min(r.scene_type) as scene_type,
-              min(r.settings_preset) as settings_preset,
-              min(r.upscaler) as upscaler,
+               min(r.resolution) as resolution,
+               min(r.scene_type) as scene_type,
+               min(r.settings_preset) as settings_preset,
+               min(r.upscaler) as upscaler,
                min(r.ray_tracing) as ray_tracing,
                min(r.graphics_api) as graphics_api,
                min(r.generated_frame_tech) as generated_frame_tech,
@@ -319,45 +361,161 @@ export async function readGameDistribution(
           order by ($8::text is not null and ck = $8::text) desc,
                    observation_count desc, ck
           limit $9
-       )
-       -- Select the top exact profiles before collecting point values. The old
-       -- one-stage GROUP BY built arrays for every profile in a popular title,
-       -- even though the response exposes at most MAX_COHORTS. Values and ids
-       -- are now retained only for the bounded response set.
-       select selected.ck,
-              selected.gpu_name,
-              selected.gpu_id,
-              selected.resolution,
-              selected.scene_type,
-              selected.settings_preset,
-              selected.upscaler,
-              selected.ray_tracing,
-              selected.graphics_api,
-              selected.generated_frame_tech,
-              selected.observation_count,
-              array_agg(${metricSql} order by r.id) as metric_values,
-              array_agg(r.id order by r.id) as observation_run_ids
-         from selected_cohorts selected
+       ),
+       -- The response renders at most 40 bins per selected cohort. Keep the
+       -- value scan in Postgres for exact MAD/sigma exclusion and percentile
+       -- math, but never materialize an unbounded value/id array in either the
+       -- database aggregate state sent to Node or the RSC payload.
+       metrics as materialized (
+         select selected.*,
+                r.id as run_id,
+                (${metricSql})::double precision as value
+           from selected_cohorts selected
          join observations obs on true
          join runs r on r.id = obs.run_id
          join run_summaries s on s.run_id = r.id
         where ${comparabilityKeySql("r")} = selected.ck
-        group by selected.ck, selected.gpu_name, selected.gpu_id,
-                 selected.resolution, selected.scene_type, selected.settings_preset,
-                 selected.upscaler, selected.ray_tracing, selected.graphics_api,
-                 selected.generated_frame_tech, selected.observation_count,
-                 selected.bucket_order
-        order by selected.bucket_order`,
-      [game.id, ...filters, viewer?.ck ?? null, MAX_COHORTS + 1],
+       ),
+       ${cohortOutlierClassificationSql("metrics")},
+       distribution_stats as materialized (
+         select ck,
+                count(*) as sample_count,
+                min(value) as min_value,
+                max(value) as max_value,
+                avg(value) as mean_value,
+                percentile_disc(0.01) within group (order by value) as marker_p1,
+                percentile_disc(0.5) within group (order by value) as marker_p50,
+                percentile_disc(0.99) within group (order by value) as marker_p99,
+                least(40, greatest(1, ceil(sqrt(count(*)::double precision))::integer)) as bin_count
+           from classified
+          where not is_outlier
+          group by ck
+       ),
+       binned_values as materialized (
+         select classified.ck,
+                case
+                  when distribution_stats.min_value = distribution_stats.max_value then 1
+                  else least(
+                    distribution_stats.bin_count,
+                    greatest(
+                      1,
+                      floor(
+                        (classified.value - distribution_stats.min_value) /
+                        ((distribution_stats.max_value - distribution_stats.min_value) /
+                         distribution_stats.bin_count)
+                      )::integer + 1
+                    )
+                  )
+                end as bin_number
+           from classified
+           join distribution_stats using (ck)
+          where not classified.is_outlier
+       ),
+       bin_counts as materialized (
+         select ck, bin_number, count(*) as bin_count
+           from binned_values
+          group by ck, bin_number
+       ),
+       histograms as materialized (
+         select distribution_stats.ck,
+                jsonb_agg(
+                  jsonb_build_object(
+                    'lower', case
+                      when distribution_stats.min_value = distribution_stats.max_value
+                        then distribution_stats.min_value
+                      else distribution_stats.min_value +
+                        (series.bin_number - 1) *
+                        ((distribution_stats.max_value - distribution_stats.min_value) /
+                         distribution_stats.bin_count)
+                    end,
+                    'upper', case
+                      when distribution_stats.min_value = distribution_stats.max_value
+                        then distribution_stats.max_value
+                      when series.bin_number = distribution_stats.bin_count
+                        then distribution_stats.max_value
+                      else distribution_stats.min_value +
+                        series.bin_number *
+                        ((distribution_stats.max_value - distribution_stats.min_value) /
+                         distribution_stats.bin_count)
+                    end,
+                    'count', coalesce(bin_counts.bin_count, 0)
+                  )
+                  order by series.bin_number
+                ) as bins
+           from distribution_stats
+           cross join lateral generate_series(1, distribution_stats.bin_count) as series(bin_number)
+           left join bin_counts
+             on bin_counts.ck = distribution_stats.ck
+            and bin_counts.bin_number = series.bin_number
+          group by distribution_stats.ck
+       ),
+       raw_counts as materialized (
+         select selected.ck,
+                count(*) as raw_run_count
+           from selected_cohorts selected
+           join runs r on ${comparabilityKeySql("r")} = selected.ck
+          where r.game_id = $1
+            and ${cohortEligibilitySql("r", { allowBenchmarkSetMembers: true })}
+            ${FILTER_SQL}
+          group by selected.ck
+       ),
+       bucket_summaries as materialized (
+         select metrics.ck,
+                min(metrics.gpu_name) as gpu_name,
+                min(metrics.gpu_id) as gpu_id,
+                min(metrics.resolution) as resolution,
+                min(metrics.scene_type) as scene_type,
+                min(metrics.settings_preset) as settings_preset,
+                min(metrics.upscaler) as upscaler,
+                min(metrics.ray_tracing) as ray_tracing,
+                min(metrics.graphics_api) as graphics_api,
+                min(metrics.generated_frame_tech) as generated_frame_tech,
+                min(metrics.observation_count) as observation_count,
+                count(classified.run_id) filter (where classified.is_outlier) as excluded_outlier_count,
+                coalesce(bool_or(metrics.run_id = $10::text), false) as viewer_is_observation,
+                coalesce(
+                  bool_or(metrics.run_id = $10::text and classified.is_outlier),
+                  false
+                ) as viewer_is_outlier,
+                count(classified.run_id) filter (
+                  where not classified.is_outlier
+                    and (
+                      ${direction === "lower"
+                        ? "classified.value >= $11::double precision"
+                        : "classified.value <= $11::double precision"}
+                    )
+                ) as viewer_at_or_worse,
+                min(metrics.bucket_order) as bucket_order
+           from metrics
+           left join classified using (ck, run_id)
+          group by metrics.ck
+       )
+       select bucket_summaries.*,
+              raw_counts.raw_run_count,
+              distribution_stats.sample_count,
+              distribution_stats.min_value,
+              distribution_stats.max_value,
+              distribution_stats.mean_value,
+              distribution_stats.marker_p1,
+              distribution_stats.marker_p50,
+              distribution_stats.marker_p99,
+              histograms.bins
+         from bucket_summaries
+         left join distribution_stats using (ck)
+         left join histograms using (ck)
+         left join raw_counts using (ck)
+        order by bucket_summaries.bucket_order`,
+      [game.id, ...filters, viewer?.ck ?? null, MAX_COHORTS + 1, q.viewerRunId ?? null, viewer?.value ?? null],
       db,
     ),
-    // Game-level inclusion summary — independent of the current filter, so the
-    // caveat line reads over the whole title, not just the shown bucket.
-    // One scan over the title's aggregate-eligible runs with FILTER clauses,
-    // rather than three scalar subqueries repeating the same predicate.
-    query<SummaryRow>(
-      `with observations as ${observationsSql}
-       select
+    // Reuse one materialized observation set for both the title-level caveat
+    // and diagnostic rates. The old two-query shape independently expanded the
+    // benchmark-set representative window for each read; that cost grows with
+    // every public run even though the response needs one combined summary.
+    query<AggregateRow>(
+      `with observations as materialized ${observationsSql},
+       summary as materialized (
+         select
          count(*) as aggregate_eligible_runs,
          count(*) filter (where not (${comparabilityProfileSql("r")})) as unprofiled_runs,
          count(*) filter (where r.capability_manifest_version is null
@@ -365,21 +523,12 @@ export async function readGameDistribution(
            as capability_unestablished_runs,
          (select count(*) from observations) as pooled_observations
          from runs r
-        where r.game_id = $1 and ${aggregateEligibilitySql("r")}`,
-      [game.id],
-      db,
-    ),
-    // §17.8 aggregate diagnostic rates. Denominators count only observations
-    // evaluated at the CURRENT diagnostics generation (§17.8.0 — so "evaluated,
-    // did not fire" is distinct from "never evaluated") that ALSO carry the
-    // telemetry the rule needs. A sensor-derived rate with no eligible telemetry
-    // reports a zero denominator → the caller renders "unavailable", never 0%.
-    //
-    // The per-observation gates are computed ONCE in the inner select, and the
-    // diagnostics table is probed once per observation by a lateral rather than
-    // by one correlated `exists` per rate.
-    query<RatesRow>(
-      `with observations as ${observationsSql}
+        where r.game_id = $1 and ${aggregateEligibilitySql("r")}
+       ),
+       -- §17.8 denominators include only observations evaluated at the current
+       -- rule generation. The per-observation gates are computed once, and the
+       -- diagnostics table is probed once per observation by this lateral.
+       diagnostic_rates as materialized (
        select ${RATE_SPECS.map(
                 ({ alias }) => `count(*) filter (where evaluated and ${alias}_ready)
                 as ${alias}_denom,
@@ -406,72 +555,32 @@ export async function readGameDistribution(
                  from diagnostics d
                 where d.run_id = r.id
              ) dx on true
-         ) gated`,
+         ) gated
+       )
+       select summary.*, diagnostic_rates.*
+         from summary
+         cross join diagnostic_rates`,
       [game.id, DIAGNOSTICS_RULE_GENERATION],
       db,
     ),
   ]);
 
-  // Raw run counts are needed only for the profiles that will actually render.
-  // This stays separate from the observation query because a benchmark set
-  // weighs once in a curve but every submitted member must remain visible in
-  // the count. Querying just the bounded result keys avoids grouping every raw
-  // profile solely to discard it after the response cap.
-  const displayedKeys = bucketRows.slice(0, MAX_COHORTS).map((row) => row.ck);
-  const rawCountRows =
-    displayedKeys.length === 0
-      ? []
-      : await query<RawCountRow>(
-          `select ${comparabilityKeySql("r")} as ck, count(*) as raw_run_count
-             from runs r
-            where r.game_id = $1
-              and ${cohortEligibilitySql("r", { allowBenchmarkSetMembers: true })}
-              ${FILTER_SQL}
-              and ${comparabilityKeySql("r")} = any($8::text[])
-            group by ck`,
-          [game.id, ...filters, displayedKeys],
-          db,
-        );
-
-  const rawByKey = new Map(rawCountRows.map((row) => [row.ck, Number(row.raw_run_count)]));
-
   const truncated = bucketRows.length > MAX_COHORTS;
   const cohorts: CohortDistribution[] = bucketRows.slice(0, MAX_COHORTS).map((row) => {
-    const rawValues = row.metric_values ?? [];
-    const runIds = row.observation_run_ids ?? [];
-    // Keep run ids aligned with values across the null filter, so an outlier
-    // index still identifies the right run.
-    const kept = rawValues
-      .map((value, index) => ({ value, runId: runIds[index] }))
-      .filter((entry): entry is { value: string | number; runId: string | undefined } =>
-        entry.value !== null,
-      );
-    const values = kept.map((entry) => Number(entry.value));
     const observationCount = Number(row.observation_count);
-
-    // Cold-start guard: a curve — and outlier rejection — only above the shared
-    // threshold (§17.4/§18.2). Outliers are dropped from the curve but stay
-    // counted and never hidden; their runs remain in the submissions list.
     const belowColdStart = observationCount < OUTLIER.minSampleSize;
-    const outlierMask = belowColdStart ? [] : statisticalOutlierMask(values);
-    const included = belowColdStart ? values : values.filter((_, i) => !outlierMask[i]);
-    const excludedOutlierCount = values.length - included.length;
-
-    // The viewer's value belongs to THIS bucket only when their run's own
-    // comparability key matches it.
     const isViewerBucket = viewer !== null && viewer.ck === row.ck;
     const viewerValue = isViewerBucket ? viewer.value : null;
-    const viewerIndex =
-      viewer === null ? -1 : kept.findIndex((entry) => entry.runId === q.viewerRunId);
     const viewerExclusion = !isViewerBucket
       ? null
-      : viewerIndex === -1
+      : !row.viewer_is_observation
         ? // Eligible and in this bucket, but not an observation: it is a
-          // benchmark-set member whose set is represented by another run.
-          ("benchmark-set-member" as const)
-        : outlierMask[viewerIndex]
+        // benchmark-set member whose set is represented by another run.
+        ("benchmark-set-member" as const)
+        : row.viewer_is_outlier
           ? ("statistical-outlier" as const)
           : null;
+    const sampleCount = numeric(row.sample_count);
 
     return {
       comparability: {
@@ -486,21 +595,29 @@ export async function readGameDistribution(
         frameGeneration: row.generated_frame_tech,
       },
       observationCount,
-      rawRunCount: rawByKey.get(row.ck) ?? observationCount,
-      distribution: belowColdStart ? null : empiricalDistributionBins(included),
+      rawRunCount: row.raw_run_count === null ? observationCount : Number(row.raw_run_count),
+      distribution: belowColdStart
+        ? null
+        : {
+            bins: distributionBins(row.bins),
+            min: numeric(row.min_value),
+            max: numeric(row.max_value),
+            mean: numeric(row.mean_value),
+            markers: distributionMarkers(row),
+            sampleCount,
+          },
       // The viewer's standing is against the same curve the cohort is shown.
-      viewerPercentile: viewerStandingPercentile(included, viewerValue, direction),
+      viewerPercentile: viewerStandingPercentile(sampleCount, row.viewer_at_or_worse, viewerValue),
       viewerValue,
       viewerExclusion,
-      excludedOutlierCount,
+      excludedOutlierCount: Number(row.excluded_outlier_count),
     };
   });
 
-  const summary = summaryRows[0];
-  const ratesRow = ratesRows[0];
+  const aggregate = aggregateRows[0];
   const diagnosticRates: DiagnosticRate[] = RATE_SPECS.map(({ alias, key, label }) => {
-    const numerator = Number(ratesRow?.[`${alias}_num`] ?? 0);
-    const denominator = Number(ratesRow?.[`${alias}_denom`] ?? 0);
+    const numerator = Number(aggregate?.[`${alias}_num`] ?? 0);
+    const denominator = Number(aggregate?.[`${alias}_denom`] ?? 0);
     return { key, label, numerator, denominator, ratePct: rate(numerator, denominator) };
   });
 
@@ -513,10 +630,10 @@ export async function readGameDistribution(
     cohorts,
     truncated,
     exclusionSummary: {
-      aggregateEligibleRuns: Number(summary?.aggregate_eligible_runs ?? 0),
-      pooledObservations: Number(summary?.pooled_observations ?? 0),
-      unprofiledRuns: Number(summary?.unprofiled_runs ?? 0),
-      capabilityUnestablishedRuns: Number(summary?.capability_unestablished_runs ?? 0),
+      aggregateEligibleRuns: Number(aggregate?.aggregate_eligible_runs ?? 0),
+      pooledObservations: Number(aggregate?.pooled_observations ?? 0),
+      unprofiledRuns: Number(aggregate?.unprofiled_runs ?? 0),
+      capabilityUnestablishedRuns: Number(aggregate?.capability_unestablished_runs ?? 0),
     },
     diagnosticRates,
   };

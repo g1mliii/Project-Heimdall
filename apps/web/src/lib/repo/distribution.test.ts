@@ -15,18 +15,26 @@ function fakeDb(responses: {
   game?: unknown[];
   viewer?: unknown[];
   buckets?: unknown[];
-  rawCounts?: unknown[];
   summary?: unknown[];
   rates?: unknown[];
+  onQuery?: (text: string) => void;
 }): Queryable {
   const query = (text: string): Promise<{ rows: unknown[] }> => {
+    responses.onQuery?.(text);
     let rows: unknown[] = [];
     if (text.includes("from games where slug")) rows = responses.game ?? [];
     else if (text.includes("where r.id = $2::text")) rows = responses.viewer ?? [];
-    else if (text.includes("array_agg")) rows = responses.buckets ?? [];
-    else if (text.includes("raw_run_count")) rows = responses.rawCounts ?? [];
-    else if (text.includes("pooled_observations")) rows = responses.summary ?? [];
-    else if (text.includes("driver_num")) rows = responses.rates ?? [];
+    else if (text.includes("bucket_summaries")) rows = responses.buckets ?? [];
+    else if (text.includes("pooled_observations")) {
+      const summary = responses.summary?.[0];
+      const rates = responses.rates?.[0];
+      rows = [
+        {
+          ...(summary !== null && typeof summary === "object" ? summary : {}),
+          ...(rates !== null && typeof rates === "object" ? rates : {}),
+        },
+      ];
+    }
     return Promise.resolve({ rows });
   };
   return { query } as unknown as Queryable;
@@ -57,8 +65,19 @@ function bucketRow(overrides: Record<string, unknown>) {
     graphics_api: "dx12",
     generated_frame_tech: "dlss3",
     observation_count: 30,
-    metric_values: Array.from({ length: 30 }, (_, i) => 100 + i),
-    observation_run_ids: Array.from({ length: 30 }, (_, i) => `run-${i}`),
+    raw_run_count: 30,
+    excluded_outlier_count: 0,
+    viewer_is_observation: true,
+    viewer_is_outlier: false,
+    viewer_at_or_worse: 21,
+    sample_count: 30,
+    min_value: 100,
+    max_value: 129,
+    mean_value: 114.5,
+    marker_p1: 100,
+    marker_p50: 114,
+    marker_p99: 129,
+    bins: [{ lower: 100, upper: 129, count: 30 }],
     ...overrides,
   };
 }
@@ -69,19 +88,36 @@ describe("readGameDistribution", () => {
     expect(result).toBeNull();
   });
 
+  it("keeps the selected-cohort payload bounded to histogram bins", async () => {
+    const sql: string[] = [];
+    await readGameDistribution(
+      "cyberpunk-2077",
+      baseQuery,
+      fakeDb({ game: GAME, buckets: [bucketRow({})], summary: SUMMARY, onQuery: (text) => sql.push(text) }),
+    );
+
+    const bucketQuery = sql.find((text) => text.includes("bucket_summaries"));
+    expect(bucketQuery).toContain("histograms");
+    expect(bucketQuery).not.toContain("array_agg");
+  });
+
   it("draws a curve at/above the cold-start threshold and withholds it below", async () => {
     const buckets = [
       bucketRow({ ck: "big", observation_count: 30 }),
       bucketRow({
         ck: "small",
         observation_count: OUTLIER.minSampleSize - 1,
-        metric_values: [90, 91, 92],
+        raw_run_count: null,
       }),
     ];
     const result = await readGameDistribution(
       "cyberpunk-2077",
       baseQuery,
-      fakeDb({ game: GAME, buckets, rawCounts: [{ ck: "big", raw_run_count: 45 }], summary: SUMMARY }),
+      fakeDb({
+        game: GAME,
+        buckets: [{ ...buckets[0], raw_run_count: 45 }, buckets[1]],
+        summary: SUMMARY,
+      }),
     );
 
     expect(result).not.toBeNull();
@@ -108,7 +144,6 @@ describe("readGameDistribution", () => {
         game: GAME,
         viewer: [{ ck: "ck-viewer", value: 120 }],
         buckets,
-        rawCounts: [],
         summary: SUMMARY,
       }),
     );
@@ -127,8 +162,7 @@ describe("readGameDistribution", () => {
       fakeDb({
         game: GAME,
         viewer: [{ ck: "ck-viewer", value: 120 }],
-        buckets: [bucketRow({ ck: "ck-viewer" })],
-        rawCounts: [],
+        buckets: [bucketRow({ ck: "ck-viewer", viewer_at_or_worse: 10 })],
         summary: SUMMARY,
       }),
     );
@@ -144,8 +178,7 @@ describe("readGameDistribution", () => {
       fakeDb({
         game: GAME,
         viewer: [{ ck: "ck-viewer", value: 120 }],
-        buckets: [bucketRow({ ck: "ck-viewer" })],
-        rawCounts: [],
+        buckets: [bucketRow({ ck: "ck-viewer", viewer_is_observation: false })],
         summary: SUMMARY,
       }),
     );
@@ -155,8 +188,6 @@ describe("readGameDistribution", () => {
 
   it("reports the viewer's run when it is the outlier dropped from the curve", async () => {
     // 29 tight values plus one far-out run that IS the viewer's.
-    const values = [...Array.from({ length: 29 }, () => 100), 5_000];
-    const runIds = [...Array.from({ length: 29 }, (_, i) => `run-${i}`), "run-outlier"];
     const result = await readGameDistribution(
       "cyberpunk-2077",
       { ...baseQuery, viewerRunId: "run-outlier" },
@@ -164,9 +195,18 @@ describe("readGameDistribution", () => {
         game: GAME,
         viewer: [{ ck: "ck-viewer", value: 5_000 }],
         buckets: [
-          bucketRow({ ck: "ck-viewer", metric_values: values, observation_run_ids: runIds }),
+          bucketRow({
+            ck: "ck-viewer",
+            excluded_outlier_count: 1,
+            viewer_is_outlier: true,
+            viewer_at_or_worse: 29,
+            sample_count: 29,
+            max_value: 100,
+            mean_value: 100,
+            marker_p99: 100,
+            bins: [{ lower: 100, upper: 100, count: 29 }],
+          }),
         ],
-        rawCounts: [],
         summary: SUMMARY,
       }),
     );
@@ -181,7 +221,7 @@ describe("readGameDistribution", () => {
     const result = await readGameDistribution(
       "cyberpunk-2077",
       { metric: "frametime-p99-ms" },
-      fakeDb({ game: GAME, buckets: [], rawCounts: [], summary: SUMMARY }),
+      fakeDb({ game: GAME, buckets: [], summary: SUMMARY }),
     );
     expect(result!.betterDirection).toBe("lower");
     expect(result!.cohortDefinitionVersion).toBe(2);
@@ -201,7 +241,6 @@ describe("readGameDistribution", () => {
       fakeDb({
         game: GAME,
         buckets: [],
-        rawCounts: [],
         summary: SUMMARY,
         // 40 runs evaluated; 6 driver-outdated; VRAM telemetry present on 20 (4
         // flagged); no CPU/GPU util telemetry at all.
@@ -233,12 +272,12 @@ describe("readGameDistribution", () => {
 
   it("flags truncation when more buckets exist than the cap returns", async () => {
     const buckets = Array.from({ length: 51 }, (_, i) =>
-      bucketRow({ ck: `ck-${i}`, observation_count: 5, metric_values: [60] }),
+      bucketRow({ ck: `ck-${i}`, observation_count: 5 }),
     );
     const result = await readGameDistribution(
       "cyberpunk-2077",
       baseQuery,
-      fakeDb({ game: GAME, buckets, rawCounts: [], summary: SUMMARY }),
+      fakeDb({ game: GAME, buckets, summary: SUMMARY }),
     );
     expect(result!.truncated).toBe(true);
     expect(result!.cohorts).toHaveLength(50);
