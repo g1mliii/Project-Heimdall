@@ -173,6 +173,15 @@ describe.skipIf(!canRun)("cohort distribution + integrity (§17/§18/§19)", () 
     const normal = await readCohortAssessment(NORMAL_ID, db.pool);
     expect(normal?.exclusionReason).toBeNull();
 
+    // A queued recompute with unchanged verdicts must not rewrite every row or
+    // fabricate a new evaluation time. This is important for popular games,
+    // whose cohort-changing trigger runs often.
+    await db.pool.query("select pg_sleep(0.01)");
+    const noOpSummary = await recomputeGameCohortAssessments(gameId, db.pool);
+    const outlierAfterNoOp = await readCohortAssessment(OUTLIER_ID, db.pool);
+    expect(noOpSummary).toEqual(summary);
+    expect(outlierAfterNoOp?.evaluatedAt).toBe(outlier?.evaluatedAt);
+
     // The run's lifecycle status is untouched by the assessment.
     const rows = await db.pool.query<{ status: string }>("select status from runs where id = $1", [
       OUTLIER_ID,
@@ -243,11 +252,44 @@ describe.skipIf(!canRun)("cohort distribution + integrity (§17/§18/§19)", () 
     const changed = await claimNextCohortAssessmentJob({}, db.pool);
     expect(changed?.gameId).toBe(queueGameId);
     await recomputeGameCohortAssessments(changed!.gameId, db.pool);
-    await completeCohortAssessmentJob(changed!, db.pool);
+    // A mutation during the lease must survive completion of the stale
+    // snapshot. The next claim receives the newer generation for replay.
+    await db.pool.query("update run_summaries set avg_fps = 122 where run_id = 'queue_1'");
+    expect(await completeCohortAssessmentJob(changed!, db.pool)).toBe(false);
+    const replay = await claimNextCohortAssessmentJob({}, db.pool);
+    expect(replay?.gameId).toBe(queueGameId);
+    expect(replay!.enqueueGeneration).toBeGreaterThan(changed!.enqueueGeneration);
+    await recomputeGameCohortAssessments(replay!.gameId, db.pool);
+    expect(await completeCohortAssessmentJob(replay!, db.pool)).toBe(true);
 
     // Converged: re-enqueuing finds nothing new for this game.
     await enqueueStaleCohortAssessments({}, db.pool);
     expect(await queuedFor(queueGameId)).toBe(0);
+
+    // A bounded scan advances through inactive catalog ids as well as eligible
+    // games. Otherwise every later pass would rescan an ever-growing inactive
+    // tail after the last eligible game.
+    const inactiveTail = await db.pool.query<{ id: string }>(
+      `insert into games (slug, name)
+       values ('inactive-tail-one', 'Inactive Tail One'),
+              ('inactive-tail-two', 'Inactive Tail Two'),
+              ('inactive-tail-three', 'Inactive Tail Three')
+       returning id`,
+    );
+    await db.pool.query(
+      "update cohort_assessment_scan_state set last_game_id = $1 where singleton = true",
+      [queueGameId],
+    );
+    expect(await enqueueStaleCohortAssessments({ limit: 2 }, db.pool)).toBe(0);
+    const scanAfterFirstSlice = await db.pool.query<{ last_game_id: string }>(
+      "select last_game_id from cohort_assessment_scan_state where singleton = true",
+    );
+    expect(scanAfterFirstSlice.rows[0]?.last_game_id).toBe(inactiveTail.rows[1]?.id);
+    expect(await enqueueStaleCohortAssessments({ limit: 2 }, db.pool)).toBe(0);
+    const scanAfterSecondSlice = await db.pool.query<{ last_game_id: string }>(
+      "select last_game_id from cohort_assessment_scan_state where singleton = true",
+    );
+    expect(scanAfterSecondSlice.rows[0]?.last_game_id).toBe(inactiveTail.rows[2]?.id);
 
     // A terminally failed game is quarantined: it stays queued as a tombstone
     // but is never claimed again, so it cannot consume a slot on every pass.

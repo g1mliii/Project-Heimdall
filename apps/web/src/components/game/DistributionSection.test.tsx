@@ -20,12 +20,16 @@ function comparability(overrides: Partial<CohortComparability> = {}): CohortComp
     gpu: "GeForce RTX 4070",
     gpuId: "7",
     resolution: "2560x1440",
+    scene: "Downtown loop",
     sceneType: "benchmark-scene",
     settingsPreset: "Ultra",
     upscaler: "dlss",
     rayTracing: "on",
     graphicsApi: "dx12",
     frameGeneration: "dlss3",
+    frameCapFps: 120,
+    vsync: false,
+    vrr: true,
     ...overrides,
   };
 }
@@ -185,22 +189,22 @@ describe("DistributionSection (§17.1–17.5)", () => {
     ).toBeInTheDocument();
   });
 
-  it("keeps exact cohorts separately selectable when they share a GPU", async () => {
+  it("keeps exact cohorts separately selectable when only frame pacing differs", async () => {
     const user = userEvent.setup();
     const secondCohort = {
       ...bigCohort,
-      comparability: comparability({ resolution: "3840x2160" }),
+      comparability: comparability({ frameCapFps: 60, vsync: true, vrr: false }),
       observationCount: 31,
       rawRunCount: 31,
     };
     render(<DistributionSection game={game} initial={response([bigCohort, secondCohort])} />);
 
     const selector = screen.getByLabelText("Exact cohort");
-    expect(selector).toHaveTextContent("2560x1440");
-    expect(selector).toHaveTextContent("3840x2160");
+    expect(selector).toHaveTextContent("120 FPS cap");
+    expect(selector).toHaveTextContent("60 FPS cap");
 
     await user.selectOptions(selector, selector.querySelectorAll("option")[1]!.value);
-    expect(screen.getByText("3840x2160")).toBeInTheDocument();
+    expect(selector).toHaveValue(selector.querySelectorAll("option")[1]!.value);
     expect(screen.getByText("31 runs")).toBeInTheDocument();
   });
 

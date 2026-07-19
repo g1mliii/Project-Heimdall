@@ -30,7 +30,11 @@ const deps = { db: {}, deleteObject: async () => undefined } as never;
 function queue(gameIds: string[]) {
   let index = 0;
   claimNextCohortAssessmentJob.mockImplementation(() =>
-    Promise.resolve(index < gameIds.length ? { gameId: gameIds[index++], attempts: 1 } : null),
+    Promise.resolve(
+      index < gameIds.length
+        ? { gameId: gameIds[index++], attempts: 1, enqueueGeneration: 0 }
+        : null,
+    ),
   );
 }
 
@@ -73,7 +77,11 @@ describe("drainCohortAssessments (§18.5)", () => {
   });
 
   it("counts a failing game against the pass budget so it cannot spin", async () => {
-    claimNextCohortAssessmentJob.mockResolvedValue({ gameId: "always-broken", attempts: 1 });
+    claimNextCohortAssessmentJob.mockResolvedValue({
+      gameId: "always-broken",
+      attempts: 1,
+      enqueueGeneration: 0,
+    });
     recomputeGameCohortAssessments.mockRejectedValue(new Error("boom"));
 
     const result = await drainCohortAssessments({ maxGames: 3 }, deps);
@@ -87,6 +95,7 @@ describe("drainCohortAssessments (§18.5)", () => {
     claimNextCohortAssessmentJob.mockResolvedValue({
       gameId: "always-broken",
       attempts: MAX_COHORT_ASSESSMENT_ATTEMPTS,
+      enqueueGeneration: 0,
     });
     recomputeGameCohortAssessments.mockRejectedValue(new Error("boom"));
 
@@ -106,6 +115,7 @@ describe("drainCohortAssessments (§18.5)", () => {
     claimNextCohortAssessmentJob.mockResolvedValue({
       gameId: "wedged",
       attempts: MAX_COHORT_ASSESSMENT_ATTEMPTS + 1,
+      enqueueGeneration: 0,
     });
 
     const result = await drainCohortAssessments({ maxGames: 1 }, deps);

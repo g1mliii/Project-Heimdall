@@ -397,12 +397,16 @@ export const cohortComparabilitySchema = z.object({
   gpu: z.string().nullable(),
   gpuId: z.string().nullable(),
   resolution: z.string().nullable(),
+  scene: z.string().nullable(),
   sceneType: sceneTypeSchema.nullable(),
   settingsPreset: z.string().nullable(),
   upscaler: upscalerModeSchema.nullable(),
   rayTracing: rayTracingModeSchema.nullable(),
   graphicsApi: z.string().nullable(),
   frameGeneration: generatedFrameTechSchema,
+  frameCapFps: z.number().int().nullable(),
+  vsync: z.boolean(),
+  vrr: z.boolean(),
 });
 
 export const cohortDistributionSchema = z.object({

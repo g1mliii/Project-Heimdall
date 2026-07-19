@@ -100,12 +100,16 @@ interface BucketRow {
   gpu_name: string | null;
   gpu_id: string | null;
   resolution: string | null;
+  scene: string | null;
   scene_type: SceneType | null;
   settings_preset: string | null;
   upscaler: UpscalerMode | null;
   ray_tracing: RayTracingMode | null;
   graphics_api: string | null;
   generated_frame_tech: GeneratedFrameTech;
+  frame_pacing_cap: string | number | null;
+  vsync: boolean;
+  vrr: boolean;
   observation_count: string | number;
   raw_run_count: string | number | null;
   excluded_outlier_count: string | number;
@@ -336,15 +340,19 @@ export async function readGameDistribution(
        cohort_counts as materialized (
         select ${comparabilityKeySql("r")} as ck,
                min(coalesce(gpu.canonical_name, r.gpu_model)) as gpu_name,
-               min(r.gpu_hardware_id::text) as gpu_id,
-               min(r.resolution) as resolution,
-               min(r.scene_type) as scene_type,
-               min(r.settings_preset) as settings_preset,
-               min(r.upscaler) as upscaler,
-               min(r.ray_tracing) as ray_tracing,
-               min(r.graphics_api) as graphics_api,
-               min(r.generated_frame_tech) as generated_frame_tech,
-               count(*) as observation_count
+                min(r.gpu_hardware_id::text) as gpu_id,
+                min(r.resolution) as resolution,
+                min(r.scene) as scene,
+                min(r.scene_type) as scene_type,
+                min(r.settings_preset) as settings_preset,
+                min(r.upscaler) as upscaler,
+                min(r.ray_tracing) as ray_tracing,
+                min(r.graphics_api) as graphics_api,
+                min(r.generated_frame_tech) as generated_frame_tech,
+                min(r.frame_pacing_cap) as frame_pacing_cap,
+                bool_or(r.vsync) as vsync,
+                bool_or(r.vrr) as vrr,
+                count(*) as observation_count
           from observations obs
           join runs r on r.id = obs.run_id
           left join hardware gpu on gpu.id = r.gpu_hardware_id and gpu.kind = 'gpu'
@@ -461,16 +469,20 @@ export async function readGameDistribution(
        ),
        bucket_summaries as materialized (
          select metrics.ck,
-                min(metrics.gpu_name) as gpu_name,
-                min(metrics.gpu_id) as gpu_id,
-                min(metrics.resolution) as resolution,
-                min(metrics.scene_type) as scene_type,
-                min(metrics.settings_preset) as settings_preset,
-                min(metrics.upscaler) as upscaler,
-                min(metrics.ray_tracing) as ray_tracing,
-                min(metrics.graphics_api) as graphics_api,
-                min(metrics.generated_frame_tech) as generated_frame_tech,
-                min(metrics.observation_count) as observation_count,
+                 min(metrics.gpu_name) as gpu_name,
+                 min(metrics.gpu_id) as gpu_id,
+                 min(metrics.resolution) as resolution,
+                 min(metrics.scene) as scene,
+                 min(metrics.scene_type) as scene_type,
+                 min(metrics.settings_preset) as settings_preset,
+                 min(metrics.upscaler) as upscaler,
+                 min(metrics.ray_tracing) as ray_tracing,
+                 min(metrics.graphics_api) as graphics_api,
+                 min(metrics.generated_frame_tech) as generated_frame_tech,
+                 min(metrics.frame_pacing_cap) as frame_pacing_cap,
+                 bool_or(metrics.vsync) as vsync,
+                 bool_or(metrics.vrr) as vrr,
+                 min(metrics.observation_count) as observation_count,
                 count(classified.run_id) filter (where classified.is_outlier) as excluded_outlier_count,
                 coalesce(bool_or(metrics.run_id = $10::text), false) as viewer_is_observation,
                 coalesce(
@@ -587,12 +599,16 @@ export async function readGameDistribution(
         gpu: row.gpu_name,
         gpuId: row.gpu_id,
         resolution: row.resolution,
+        scene: row.scene,
         sceneType: row.scene_type,
         settingsPreset: row.settings_preset,
         upscaler: row.upscaler,
         rayTracing: row.ray_tracing,
         graphicsApi: row.graphics_api,
         frameGeneration: row.generated_frame_tech,
+        frameCapFps: row.frame_pacing_cap === null ? null : Number(row.frame_pacing_cap),
+        vsync: row.vsync,
+        vrr: row.vrr,
       },
       observationCount,
       rawRunCount: row.raw_run_count === null ? observationCount : Number(row.raw_run_count),

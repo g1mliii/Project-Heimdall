@@ -86,6 +86,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0030_diagnostics_watermark.sql",
       "0031_cohort_assessment_queue.sql",
       "0032_cohort_assessment_enqueue.sql",
+      "0033_cohort_assessment_enqueue_generation.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(

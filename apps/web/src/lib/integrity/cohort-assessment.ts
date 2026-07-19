@@ -144,19 +144,24 @@ export async function recomputeGameCohortAssessments(
           and not exists (
             select 1 from observations observation where observation.run_id = assessment.run_id
           )
+     ), candidate_summary as materialized (
+       select count(*) as assessed,
+              count(*) filter (where exclusion_reason = '${AGGREGATE_EXCLUSION.statisticalOutlier}') as excluded
+         from assessment_candidates
      ), upserted as (
        insert into run_cohort_assessments (run_id, assessment_version, exclusion_reason, evaluated_at)
        select run_id, $2, exclusion_reason, now()
          from assessment_candidates
        on conflict (run_id) do update
           set assessment_version = excluded.assessment_version,
-              exclusion_reason = excluded.exclusion_reason,
-              evaluated_at = excluded.evaluated_at
-       returning exclusion_reason
+              exclusion_reason = excluded.exclusion_reason
+        -- Recomputes are queued on every cohort-changing write. Avoid a full
+        -- table rewrite when the resulting durable verdict is unchanged.
+        where run_cohort_assessments.assessment_version is distinct from excluded.assessment_version
+           or run_cohort_assessments.exclusion_reason is distinct from excluded.exclusion_reason
      )
-     select count(*) as assessed,
-            count(*) filter (where exclusion_reason = '${AGGREGATE_EXCLUSION.statisticalOutlier}') as excluded
-       from upserted`,
+     select assessed, excluded
+       from candidate_summary`,
     [gameId, COHORT_ASSESSMENT_VERSION],
     db,
   );
@@ -192,24 +197,27 @@ export async function enqueueStaleCohortAssessments(
          from cohort_assessment_scan_state
         where singleton = true and assessment_version = $1
         for update
-     ), candidates as materialized (
+     ), game_slice as materialized (
        select game.id
          from games game
          cross join scan_state
         where game.id > scan_state.last_game_id
-          and exists (
-            select 1
-              from runs r
-             where r.game_id = game.id
-               and ${cohortEligibilitySql("r", { allowBenchmarkSetMembers: true })}
-          )
         order by game.id
         limit $2
+     ), candidates as materialized (
+       select game_slice.id
+         from game_slice
+        where exists (
+            select 1
+              from runs r
+             where r.game_id = game_slice.id
+               and ${cohortEligibilitySql("r", { allowBenchmarkSetMembers: true })}
+          )
      ), advanced as (
        update cohort_assessment_scan_state scan
           set last_game_id = greatest(
                 scan.last_game_id,
-                coalesce((select max(id) from candidates), scan.last_game_id)
+                coalesce((select max(id) from game_slice), scan.last_game_id)
               ),
               updated_at = now()
         where scan.singleton = true and scan.assessment_version = $1
@@ -241,6 +249,8 @@ export interface ClaimedCohortAssessmentJob {
   gameId: string;
   /** Claim count INCLUDING this one, so the caller can cap retries. */
   attempts: number;
+  /** Enqueue generation observed by this lease; protects a newer mutation. */
+  enqueueGeneration: number;
 }
 
 /**
@@ -253,7 +263,7 @@ export async function claimNextCohortAssessmentJob(
   { leaseMinutes = 10 }: { leaseMinutes?: number } = {},
   db: Queryable = getPool(),
 ): Promise<ClaimedCohortAssessmentJob | null> {
-  const rows = await query<{ game_id: string; attempts: number }>(
+  const rows = await query<{ game_id: string; attempts: number; enqueue_generation: string | number }>(
     `update cohort_assessment_jobs job
         set locked_at = now(),
             not_before = now() + make_interval(mins => $1),
@@ -267,33 +277,53 @@ export async function claimNextCohortAssessmentJob(
          for update skip locked
          limit 1
       )
-      returning job.game_id, job.attempts`,
+      returning job.game_id, job.attempts, job.enqueue_generation`,
     [leaseMinutes],
     db,
   );
   const row = rows[0];
-  return row ? { gameId: row.game_id, attempts: row.attempts } : null;
+  return row
+    ? {
+        gameId: row.game_id,
+        attempts: row.attempts,
+        enqueueGeneration: Number(row.enqueue_generation),
+      }
+    : null;
 }
 
 /**
- * Delete a completed cohort-assessment job (a later change re-enqueues it). The
- * `attempts` guard makes this a no-op when the lease has already expired and
- * another pass re-claimed the game, so a slow worker cannot delete the newer
- * claim's row out from under it.
+ * Delete a completed cohort-assessment job. The attempt and enqueue-generation
+ * guards make this a no-op when a lease was re-claimed or a newer mutation
+ * arrived while it was running. In the latter case, release the newer job
+ * immediately so that fresh work is replayed instead of being discarded.
  */
 export async function completeCohortAssessmentJob(
-  job: Pick<ClaimedCohortAssessmentJob, "gameId" | "attempts">,
+  job: Pick<ClaimedCohortAssessmentJob, "gameId" | "attempts" | "enqueueGeneration">,
   db: Queryable = getPool(),
 ): Promise<boolean> {
   const result = await db.query(
     `delete from cohort_assessment_jobs
       where game_id = $1
         and attempts = $2
+        and enqueue_generation = $3
         and locked_at is not null
         and failed_at is null`,
-    [job.gameId, job.attempts],
+    [job.gameId, job.attempts, job.enqueueGeneration],
   );
-  return (result.rowCount ?? 0) > 0;
+  if ((result.rowCount ?? 0) > 0) return true;
+
+  await db.query(
+    `update cohort_assessment_jobs
+        set locked_at = null,
+            not_before = now()
+      where game_id = $1
+        and attempts = $2
+        and enqueue_generation > $3
+        and locked_at is not null
+        and failed_at is null`,
+    [job.gameId, job.attempts, job.enqueueGeneration],
+  );
+  return false;
 }
 
 /**
@@ -304,7 +334,7 @@ export async function completeCohortAssessmentJob(
  * consume a slot on every pass.
  */
 export async function failCohortAssessmentJob(
-  job: Pick<ClaimedCohortAssessmentJob, "gameId" | "attempts">,
+  job: Pick<ClaimedCohortAssessmentJob, "gameId" | "attempts" | "enqueueGeneration">,
   error: string,
   terminal: boolean,
   db: Queryable = getPool(),
@@ -321,11 +351,34 @@ export async function failCohortAssessmentJob(
             end
       where game_id = $1
         and attempts = $2
+        and enqueue_generation = $6
         and locked_at is not null
         and failed_at is null`,
-    [job.gameId, job.attempts, error.slice(0, 2_000), terminal, COHORT_ASSESSMENT_VERSION],
+    [
+      job.gameId,
+      job.attempts,
+      error.slice(0, 2_000),
+      terminal,
+      COHORT_ASSESSMENT_VERSION,
+      job.enqueueGeneration,
+    ],
   );
-  return (result.rowCount ?? 0) > 0;
+  if ((result.rowCount ?? 0) > 0) return true;
+
+  // A failure from the old snapshot must not tombstone a mutation that landed
+  // while it was running. Release that newer generation for a clean replay.
+  const released = await db.query(
+    `update cohort_assessment_jobs
+        set locked_at = null,
+            not_before = now()
+      where game_id = $1
+        and attempts = $2
+        and enqueue_generation > $3
+        and locked_at is not null
+        and failed_at is null`,
+    [job.gameId, job.attempts, job.enqueueGeneration],
+  );
+  return (released.rowCount ?? 0) > 0;
 }
 
 /** The stored cohort assessment for a run, or null when never assessed. */

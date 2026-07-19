@@ -112,18 +112,35 @@ function cohortKey(cohort: CohortDistribution | undefined): string | null {
     comparability.gpuId,
     comparability.gpu,
     comparability.resolution,
+    comparability.scene,
     comparability.sceneType,
     comparability.settingsPreset,
     comparability.upscaler,
     comparability.rayTracing,
     comparability.graphicsApi,
     comparability.frameGeneration,
+    comparability.frameCapFps,
+    comparability.vsync,
+    comparability.vrr,
   ].map((part) => part ?? "").join("\u001f");
 }
 
 /** Keep the selected native-control value legible while the full GPU name remains in the card. */
 function compactGpuLabel(gpu: string | null): string {
   return (gpu ?? "Unknown GPU").replace(/^(NVIDIA GeForce|AMD Radeon)\s+/i, "");
+}
+
+/** A complete but compact label for frame-pacing dimensions in the cohort key. */
+function pacingLabel({
+  frameCapFps,
+  vsync,
+  vrr,
+}: Pick<CohortDistribution["comparability"], "frameCapFps" | "vsync" | "vrr">): string {
+  return [
+    frameCapFps === null ? "uncapped" : `${frameCapFps} FPS cap`,
+    vsync ? "VSync" : "no VSync",
+    vrr ? "VRR" : "no VRR",
+  ].join(" · ");
 }
 
 function cohortOptions(data: GameDistributionResponse): { value: string; label: string }[] {
@@ -137,6 +154,8 @@ function cohortOptions(data: GameDistributionResponse): { value: string; label: 
       comparability.sceneType ?? "unknown workload",
       comparability.settingsPreset ?? "unknown preset",
       comparability.graphicsApi?.toUpperCase() ?? "unknown API",
+      comparability.scene ?? "unknown scene",
+      pacingLabel(comparability),
     ];
     return [{ value: key, label: profile.join(" · ") }];
   });
@@ -433,12 +452,14 @@ function CohortMeta({
   const { comparability } = cohort;
   const chips = [
     comparability.resolution,
+    comparability.scene,
     comparability.graphicsApi,
     comparability.upscaler && comparability.upscaler !== "none"
       ? `${comparability.upscaler.toUpperCase()} upscaling`
       : null,
     comparability.rayTracing === "on" ? "ray tracing" : null,
     comparability.settingsPreset,
+    pacingLabel(comparability),
   ].filter((chip): chip is string => Boolean(chip));
 
   return (

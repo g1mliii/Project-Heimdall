@@ -1,13 +1,9 @@
 "use client";
 
 /**
- * Phase 7.0 port of design/ui_kits/web/GamePage.jsx.
- *
- * Deliberate reference deviations: pooled-run counts, percentile/rank, the
- * BellCurve branch, GPU/resolution/API/verified cohort filters, and the kit's
- * duplicate cold-start rows are absent. Workload controls scope only the
- * individual submissions table, while the distribution region remains a
- * structurally curve-free placeholder.
+ * Client-side interactions for the game-page design-kit port. The submissions
+ * controls and the Phase 7.5 exact-cohort distribution controls stay separate:
+ * each owns its own query/load state and neither silently scopes the other.
  */
 
 import * as React from "react";
