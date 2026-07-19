@@ -207,6 +207,28 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     expect(run?.summary.avgFps).toBe(honestSummary.avgFps);
   });
 
+  it("treats whole-machine utilisation as explanatory rather than a fraud signal (§18.2)", async () => {
+    const id = "run_wk_physics";
+    // CpuUsage is total machine load. A CPU-bound game can saturate one core
+    // while reporting a low aggregate percentage, so this evidence cannot ever
+    // hard-flag an otherwise canonically recomputed run.
+    const frames: FrameSample[] = Array.from({ length: 120 }, (_, i) => ({
+      timeMs: i * 4,
+      frameTimeMs: 4,
+      gpuLoadPct: 10,
+      cpuLoadPct: 10,
+    }));
+    const run = runFixture(id, {
+      captureSource: "presentmon",
+      summary: computeRunSummary(frames),
+    });
+    await setupFinalizedRun(id, run);
+
+    const result = await drainJobs({}, realDeps(async () => makeParquet(frames)));
+    expect(result).toMatchObject({ claimed: 1, validated: 1, flagged: 0 });
+    expect((await readRun(id, db.pool))?.status).toBe(RUN_STATUS.validated);
+  });
+
   it("preserves a flagged verdict when a stale verification job is reclaimed", async () => {
     const id = "run_wk_tampered_reclaimed";
     await setupFinalizedRun(

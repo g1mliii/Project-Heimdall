@@ -1,7 +1,7 @@
 /**
  * Sensor-availability matrix (§7.3 spike). Which secondary sensors a
  * source×vendor combination reliably reports, so Phase 6 diagnostics and
- * Phase 7 physics checks can degrade gracefully instead of misfiring:
+ * Phase 7 diagnostics can degrade gracefully instead of misfiring:
  *
  * - `detectAvailableSensors(frames)` is the per-run truth used to gate rules;
  * - `expectedSensors(source, vendor)` phrases degradation messages ("CapFrameX

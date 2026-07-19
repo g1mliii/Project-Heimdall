@@ -117,6 +117,10 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0026_reprocess_jobs.sql",
       "0027_catalog_search_and_game_recency_indexes.sql",
       "0028_game_scene_recency_index.sql",
+      "0029_cohort_assessment.sql",
+      "0030_diagnostics_watermark.sql",
+      "0031_cohort_assessment_queue.sql",
+      "0032_cohort_assessment_enqueue.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
@@ -125,6 +129,8 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     expect(rows.map((r) => r.table_name).sort()).toEqual(
       [
         "benchmark_sets",
+        "cohort_assessment_jobs",
+        "cohort_assessment_scan_state",
         "comparisons",
         "diagnostics",
         "driver_catalog",
@@ -136,6 +142,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
         "rate_limits",
         "reprocess_jobs",
         "reprocess_watermarks",
+        "run_cohort_assessments",
         "run_summaries",
         "runs",
         "schema_migrations",

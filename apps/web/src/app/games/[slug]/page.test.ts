@@ -1,14 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { notFound, readGamePage } = vi.hoisted(() => ({
+const { notFound, readGamePage, readGameDistribution } = vi.hoisted(() => ({
   notFound: vi.fn(() => {
     throw new Error("NEXT_NOT_FOUND");
   }),
   readGamePage: vi.fn(),
+  readGameDistribution: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({ notFound }));
 vi.mock("@/lib/repo/games", () => ({ readGamePage }));
+vi.mock("@/lib/repo/distribution", () => ({ readGameDistribution }));
 
 import GamePage, { generateMetadata } from "./page";
 
@@ -17,9 +19,13 @@ const result = {
   submissions: { rows: [], nextCursor: null },
 };
 
+const distribution = { game: result.game, metric: "avg-fps", cohorts: [] };
+
 describe("game page route", () => {
   beforeEach(() => {
     readGamePage.mockReset();
+    readGameDistribution.mockReset();
+    readGameDistribution.mockResolvedValue(distribution);
     notFound.mockClear();
   });
 
@@ -40,9 +46,11 @@ describe("game page route", () => {
     const page = await GamePage({ params: Promise.resolve({ slug: "page-cyberpunk" }) });
 
     expect(readGamePage).toHaveBeenCalledWith("page-cyberpunk", { limit: 25 });
+    expect(readGameDistribution).toHaveBeenCalledWith("page-cyberpunk", { metric: "avg-fps" });
     expect(page.props).toEqual({
       game: result.game,
       initialSubmissions: result.submissions,
+      initialDistribution: distribution,
       initialSceneFilter: "all",
       initialSortDirection: "desc",
     });

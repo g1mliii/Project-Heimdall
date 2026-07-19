@@ -5,6 +5,7 @@ import {
   computeBenchmarkSetStats,
   computeRunSummary,
   computeRunSummaryFromFrameTimes,
+  computeSetRepresentative,
 } from "./metrics";
 import { makeLcg } from "./testing/rng";
 
@@ -209,5 +210,24 @@ describe("computeBenchmarkSetStats (§16c.2)", () => {
       expect({ ...withWarmups, warmupRunCount: 0 }).toEqual(computeBenchmarkSetStats(measured));
       expect(withWarmups.warmupRunCount).toBe(warmups.length);
     }
+  });
+
+  describe("computeSetRepresentative (§17.0.2)", () => {
+    it("returns the nearest-rank median member and ignores warm-ups", () => {
+      // Three passes → the middle avg FPS represents the set (one observation).
+      expect(computeSetRepresentative([member(200, true), member(100), member(102), member(101)])).toBe(
+        101,
+      );
+    });
+
+    it("weighs 30 duplicate uploads as a single observation", () => {
+      const duplicates = Array.from({ length: 30 }, () => member(144));
+      expect(computeSetRepresentative(duplicates)).toBe(144);
+    });
+
+    it("has no representative for an all-warm-up set", () => {
+      expect(computeSetRepresentative([member(100, true), member(101, true)])).toBeNull();
+      expect(computeSetRepresentative([])).toBeNull();
+    });
   });
 });

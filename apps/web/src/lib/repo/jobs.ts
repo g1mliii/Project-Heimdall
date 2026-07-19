@@ -9,6 +9,7 @@
  */
 
 import {
+  DIAGNOSTICS_RULE_GENERATION,
   RUN_STATUS,
   type CapabilityManifest,
   type DiagnosticFinding,
@@ -209,7 +210,12 @@ export async function applyVerificationResult(
               capability_manifest = $18::jsonb,
               capability_manifest_version = ($18::jsonb ->> 'version')::integer,
               settings_json = $19::jsonb,
-              methodology_manifest_version = ($19::jsonb ->> 'version')::integer
+              methodology_manifest_version = ($19::jsonb ->> 'version')::integer,
+              -- These findings were evaluated at the current diagnostics rule
+              -- generation, so stamp the §17.8.0 watermark; a freshly verified
+              -- run is never re-enqueued by the generation lane.
+              diagnostics_rule_generation = ${DIAGNOSTICS_RULE_GENERATION},
+              diagnostics_evaluated_at = now()
         where id = $1
           and status <> 'hidden'
           and exists (select 1 from job_claim)

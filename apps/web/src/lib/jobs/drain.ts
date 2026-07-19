@@ -31,12 +31,20 @@ import {
   readStalePendingRuns,
   retryStagingCleanupJob,
 } from "../repo/runs";
+import {
+  claimNextCohortAssessmentJob,
+  completeCohortAssessmentJob,
+  enqueueStaleCohortAssessments,
+  failCohortAssessmentJob,
+  recomputeGameCohortAssessments,
+} from "../integrity/cohort-assessment";
 import { verifyRunJob, type VerifyDeps } from "./verify-run";
 import { refreshDriverFindingsJob } from "./reprocess-run";
 
 /** A job claimed this many times without finishing is dead — stop retrying. */
 export const MAX_VERIFICATION_ATTEMPTS = 5;
 export const MAX_REPROCESS_ATTEMPTS = 5;
+export const MAX_COHORT_ASSESSMENT_ATTEMPTS = 5;
 
 export interface DrainResult {
   claimed: number;
@@ -322,7 +330,85 @@ export async function cleanupFinalizedStaging(
   return cleaned;
 }
 
-export interface MaintenancePassResult extends DrainResult, ReprocessDrainResult {
+export interface CohortAssessmentDrainResult {
+  /** Games enqueued for reassessment this pass (stale/new observations). */
+  cohortAssessmentsEnqueued: number;
+  /** Games whose cohort assessment was recomputed. */
+  cohortAssessmentsRecomputed: number;
+  /** Games whose recompute failed terminally and is now tombstoned. */
+  cohortAssessmentsFailed: number;
+  /** Games whose recompute threw but will retry after a backoff. */
+  cohortAssessmentsRetried: number;
+}
+
+function emptyCohortAssessmentDrainResult(): CohortAssessmentDrainResult {
+  return {
+    cohortAssessmentsEnqueued: 0,
+    cohortAssessmentsRecomputed: 0,
+    cohortAssessmentsFailed: 0,
+    cohortAssessmentsRetried: 0,
+  };
+}
+
+/**
+ * §18.5 bounded recalculation lane: enqueue games whose cohort assessment is
+ * stale, then recompute a bounded number of them. Purely a background audit
+ * refresh — the distribution read excludes outliers live regardless — so it
+ * runs last and yields the moment the pass budget is spent.
+ */
+export async function drainCohortAssessments(
+  { maxGames = 5, deadlineAt }: { maxGames?: number; deadlineAt?: number } = {},
+  deps: DrainDeps = realDeps(),
+): Promise<CohortAssessmentDrainResult> {
+  const result = emptyCohortAssessmentDrainResult();
+  if (!hasTimeRemaining(deadlineAt) || maxGames === 0) return result;
+
+  try {
+    result.cohortAssessmentsEnqueued = await enqueueStaleCohortAssessments(
+      { limit: maxGames * 20 },
+      deps.db,
+    );
+  } catch (error) {
+    // A failed enqueue must not stop the pass from draining work already queued.
+    console.error("cohort assessment enqueue failed", error);
+  }
+
+  let attempted = 0;
+  while (attempted < maxGames && hasTimeRemaining(deadlineAt)) {
+    const job = await claimNextCohortAssessmentJob({}, deps.db);
+    if (!job) break;
+    attempted += 1;
+
+    if (job.attempts > MAX_COHORT_ASSESSMENT_ATTEMPTS) {
+      await failCohortAssessmentJob(job, "attempts cap exceeded", true, deps.db);
+      result.cohortAssessmentsFailed += 1;
+      continue;
+    }
+
+    try {
+      await recomputeGameCohortAssessments(job.gameId, deps.db);
+      await completeCohortAssessmentJob(job, deps.db);
+      result.cohortAssessmentsRecomputed += 1;
+    } catch (error) {
+      // This lane is a background audit refresh; the distribution read excludes
+      // outliers live regardless. One game's failed recompute must never reject
+      // the maintenance pass and stall verification site-wide — so record the
+      // failure and move on. Past the attempts cap it becomes a tombstone, which
+      // keeps a permanently broken game from consuming a slot on every pass.
+      const terminal = job.attempts >= MAX_COHORT_ASSESSMENT_ATTEMPTS;
+      console.error(`cohort assessment recompute failed for game ${job.gameId}`, error);
+      await failCohortAssessmentJob(job, String(error), terminal, deps.db);
+      if (terminal) result.cohortAssessmentsFailed += 1;
+      else result.cohortAssessmentsRetried += 1;
+    }
+  }
+  return result;
+}
+
+export interface MaintenancePassResult
+  extends DrainResult,
+    ReprocessDrainResult,
+    CohortAssessmentDrainResult {
   cleanedStalePending: number;
   cleanedFinalizedStaging: number;
   prunedRateLimitWindows: number;
@@ -331,6 +417,7 @@ export interface MaintenancePassResult extends DrainResult, ReprocessDrainResult
 /** Keep cleanup queues moving even when verification work is continuously backlogged. */
 const MAINTENANCE_RESERVE_MS = 5_000;
 const REPROCESS_MAX_JOBS_PER_PASS = 2;
+const COHORT_ASSESSMENT_MAX_GAMES_PER_PASS = 5;
 
 /**
  * The full §11.5/§11.11 housekeeping pass — drain jobs, reap stale and
@@ -356,28 +443,44 @@ export async function runMaintenancePass(
   let cleanedFinalizedStaging: number;
   let prunedRateLimitWindows: number;
   let reprocessed: ReprocessDrainResult;
+  let cohortAssessed: CohortAssessmentDrainResult;
   if (hasTimeRemaining(deadlineAt)) {
-    [drained, cleanedStalePending, cleanedFinalizedStaging, prunedRateLimitWindows, reprocessed] =
-      await Promise.all([
-        drainJobs({ maxJobs, deadlineAt: deadlineAt - maintenanceReserveMs }, deps),
-        cleanupStalePending(deps, { deadlineAt }),
-        cleanupFinalizedStaging(deps, { deadlineAt }),
-        pruneRateLimits(deps.db),
-        drainReprocessJobs(
-          { maxJobs: REPROCESS_MAX_JOBS_PER_PASS, deadlineAt: deadlineAt - maintenanceReserveMs },
-          deps,
-        ),
-      ]);
+    [
+      drained,
+      cleanedStalePending,
+      cleanedFinalizedStaging,
+      prunedRateLimitWindows,
+      reprocessed,
+      cohortAssessed,
+    ] = await Promise.all([
+      drainJobs({ maxJobs, deadlineAt: deadlineAt - maintenanceReserveMs }, deps),
+      cleanupStalePending(deps, { deadlineAt }),
+      cleanupFinalizedStaging(deps, { deadlineAt }),
+      pruneRateLimits(deps.db),
+      drainReprocessJobs(
+        { maxJobs: REPROCESS_MAX_JOBS_PER_PASS, deadlineAt: deadlineAt - maintenanceReserveMs },
+        deps,
+      ),
+      drainCohortAssessments(
+        {
+          maxGames: COHORT_ASSESSMENT_MAX_GAMES_PER_PASS,
+          deadlineAt: deadlineAt - maintenanceReserveMs,
+        },
+        deps,
+      ),
+    ]);
   } else {
     drained = emptyDrainResult();
     cleanedStalePending = 0;
     cleanedFinalizedStaging = 0;
     prunedRateLimitWindows = 0;
     reprocessed = emptyReprocessDrainResult();
+    cohortAssessed = emptyCohortAssessmentDrainResult();
   }
   return {
     ...drained,
     ...reprocessed,
+    ...cohortAssessed,
     cleanedStalePending,
     cleanedFinalizedStaging,
     prunedRateLimitWindows,

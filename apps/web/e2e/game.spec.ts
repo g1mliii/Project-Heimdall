@@ -1,6 +1,11 @@
 /**
- * Phase 7.0 discovery proof: real Postgres search → top-bar typeahead → SSR
- * game page → individual submissions. No run API is mocked in this spec.
+ * Discovery proof: real Postgres search → top-bar typeahead → SSR game page →
+ * individual submissions. No run API is mocked in this spec.
+ *
+ * Phase 7.5 replaced the 7.0 branch-free placeholder with the real cohort
+ * section, so the distribution region now resolves against live data: this
+ * fixture's single comparability bucket sits below the cold-start threshold and
+ * must say so, rather than draw a curve over a handful of runs (§17.4).
  */
 
 import { expect, test } from "@playwright/test";
@@ -32,13 +37,28 @@ test("search opens the game page with honest individual-run states (§17a.1)", a
   await expect(page.getByText("Warm-up")).toBeVisible();
   await expect(page.getByText("Set member").first()).toBeVisible();
   await expect(page.getByText("Driver below game minimum").first()).toBeVisible();
-  await expect(page.getByText("Insufficient comparable data")).toBeVisible();
+  // The cohort read reaches real data, finds one bucket below the 30-run
+  // minimum, and withholds the curve — never a drawn-but-fake distribution.
+  const distribution = page.getByRole("region", { name: "Performance distribution" });
+  await expect(distribution.getByText("Insufficient data for a distribution")).toBeVisible();
+  await expect(distribution.getByText(/below the 30-run minimum/)).toBeVisible();
+  // Honest counts: the repeat set pools as one observation across its 3 runs.
+  await expect(
+    distribution.getByText(/1 independent observation across 3 runs/),
+  ).toBeVisible();
   await expect(page.locator("svg[data-chart], canvas")).toHaveCount(0);
+  await expect(page.locator("[data-chart-state]")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Submitted" }).click();
   await expect(page).toHaveURL(/sortDirection=asc/);
 
-  await page.getByRole("button", { name: "Gameplay" }).click();
+  // The submissions table has its own workload control; the distribution
+  // section now has one too, so this must name the right group. `exact` matters
+  // — the default substring match also hits "Distribution workload".
+  await page
+    .getByRole("group", { name: "Workload", exact: true })
+    .getByRole("button", { name: "Gameplay" })
+    .click();
   await expect(page).toHaveURL(/sceneType=gameplay/);
   await expect(page.getByText("0 shown")).toBeVisible();
   await expect(page.getByText("No public, validated submissions match this view yet.")).toBeVisible();
@@ -73,7 +93,7 @@ test("mobile search results stay within the viewport (§17.6)", async ({ page })
   await expect(page).toHaveURL(E2E_GAME_URL);
 });
 
-test("@visual game page matches the Phase 7.0 design boundary", async ({ page }) => {
+test("@visual game page matches the Phase 7.5 design boundary", async ({ page }) => {
   await page.goto(E2E_GAME_URL);
   await expect(page.getByRole("heading", { level: 1, name: E2E_GAME_NAME })).toBeVisible();
   await page.evaluate(() => document.fonts.ready);

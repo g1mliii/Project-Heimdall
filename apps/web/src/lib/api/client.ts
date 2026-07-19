@@ -13,11 +13,14 @@
 import {
   INGEST_LIMITS,
   framesUrlResponseSchema,
+  gameDistributionResponseSchema,
   gameSubmissionsPageSchema,
   searchResponseSchema,
 } from "@heimdall/shared";
 import type {
   FramesUrlResponse,
+  GameDistributionQuery,
+  GameDistributionResponse,
   GameSubmissionsPage,
   GameSubmissionsQuery,
   SearchResponse,
@@ -145,6 +148,30 @@ export function loadGameRuns(
     `/api/games/${encodeURIComponent(slug)}/runs?${query}`,
     (body) => gameSubmissionsPageSchema.parse(body),
     "game submissions fetch failed",
+    transport,
+    signal,
+  );
+}
+
+/** Aggregate cohort distribution for a game + metric (§17). */
+export function loadGameDistribution(
+  slug: string,
+  options: GameDistributionQuery,
+  transport: ApiTransport = defaultTransport(),
+  signal?: AbortSignal,
+): Promise<ApiResult<GameDistributionResponse>> {
+  const query = new URLSearchParams({ metric: options.metric });
+  if (options.gpuId) query.set("gpuId", options.gpuId);
+  if (options.sceneType) query.set("sceneType", options.sceneType);
+  if (options.resolution) query.set("resolution", options.resolution);
+  if (options.settingsPreset) query.set("settingsPreset", options.settingsPreset);
+  if (options.upscaler) query.set("upscaler", options.upscaler);
+  if (options.rayTracing) query.set("rayTracing", options.rayTracing);
+  if (options.viewerRunId) query.set("viewerRunId", options.viewerRunId);
+  return getJson(
+    `/api/games/${encodeURIComponent(slug)}/distribution?${query}`,
+    (body) => gameDistributionResponseSchema.parse(body),
+    "distribution fetch failed",
     transport,
     signal,
   );

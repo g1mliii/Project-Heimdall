@@ -3,8 +3,8 @@
  * Parquet — the recompute is CANONICAL; the client's numbers were provisional.
  *
  * Pure-ish on purpose: all I/O comes through `VerifyDeps`, so tests inject a
- * pool and a byte-array `getObject` and never touch live R2. Phase 7 extends
- * this same job with §18 physics checks/outlier handling.
+ * pool and a byte-array `getObject` and never touch live R2. Aggregate outlier
+ * assessment stays in its own cohort-scoped background lane.
  */
 
 import { createPublicKey, verify as cryptoVerify } from "node:crypto";
@@ -200,6 +200,7 @@ export async function verifyRunJob(
         frames: parquet.diagnosticsColumns,
         capabilityManifest,
       });
+
     } catch (error) {
       return { kind: "failed", error: `unreadable parquet: ${String(error)}` };
     }
@@ -214,6 +215,10 @@ export async function verifyRunJob(
   // verdict remain.
 
   const mismatch = summaryMismatch(run.summary, recomputed);
+  // Total CPU/GPU utilisation is explanatory telemetry, not a sound hard
+  // integrity signal: a CPU-bound title can keep one core saturated while the
+  // whole-machine percentage stays low. Only the server's canonical frame
+  // recompute is currently precise enough to flag a run (§18.2).
   const status = mismatch === null && run.status !== RUN_STATUS.flagged ? "validated" : "flagged";
   const generatedFrameTech = reconcileGeneratedFrameTech(
     run.generatedFrameTech,
@@ -274,8 +279,8 @@ export async function verifyRunJob(
     : {
         kind: "flagged",
         reason:
-          mismatch === null
-            ? "run was already flagged by a prior verification attempt"
-            : `client summary mismatch on ${mismatch}`,
+          mismatch !== null
+            ? `client summary mismatch on ${mismatch}`
+            : "run was already flagged by a prior verification attempt",
       };
 }

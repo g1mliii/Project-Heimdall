@@ -3,7 +3,7 @@
  *
  * These feed parser, UI, and statistics tests downstream. The valid fixtures are
  * schema-clean; the `tampered` one is schema-valid but physically inconsistent
- * (so Phase 7's recompute/physics checks have something to catch); the `malformed`
+ * (so Phase 7's canonical recompute has something to catch); the `malformed`
  * group is deliberately schema-invalid for reject tests.
  */
 
@@ -109,7 +109,7 @@ export const localeVariantRawCreateRequest = {
 /**
  * Schema-VALID but internally inconsistent: the reported avg FPS (240) is
  * impossible given the ~8.3 ms frame times, and GPU load is implausibly low for
- * that FPS. The §11.5 recompute / §18 physics checks must flag this.
+ * that FPS. The §11.5 server recompute must flag this.
  */
 export const tamperedCreateRequest: CreateRunRequest = {
   ...validCreateRunRequest,

@@ -12,18 +12,17 @@
  */
 
 import {
+  coefficientOfVariation,
+  mean,
+  median,
+  percentileOfSorted as nearestRank,
+  populationStdDev,
   POINT_ONE_PERCENT_LOW_CONFIDENCE_FRAMES,
   STUTTER,
   type ConfidenceLevel,
   type FrameSample,
   type RunSummary,
 } from "@heimdall/shared";
-
-/** Nearest-rank percentile over an ascending-sorted numeric buffer. */
-function nearestRank(sortedAsc: ArrayLike<number>, p: number): number {
-  const rank = Math.ceil((p / 100) * sortedAsc.length);
-  return sortedAsc[Math.min(Math.max(rank, 1), sortedAsc.length) - 1]!;
-}
 
 /** Mean of the slowest `count` frames (the tail of the ascending sort). */
 function slowestMeanMs(sortedAsc: ArrayLike<number>, count: number): number {
@@ -168,19 +167,35 @@ export function computeBenchmarkSetStats(members: readonly BenchmarkSetMember[])
     };
   }
 
-  const mean = measured.reduce((sum, fps) => sum + fps, 0) / n;
-  const variance = measured.reduce((sum, fps) => sum + (fps - mean) ** 2, 0) / n;
-  const stdDev = Math.sqrt(variance);
-  const cv = mean > 0 ? stdDev / mean : 0;
+  const cv = coefficientOfVariation(measured);
 
   return {
     sampleCount: n,
     warmupRunCount,
-    meanAvgFps: mean,
-    stdDevAvgFps: stdDev,
+    meanAvgFps: mean(measured),
+    stdDevAvgFps: populationStdDev(measured),
     coefficientOfVariation: cv,
     confidence: benchmarkSetConfidence(n, cv),
   };
+}
+
+/**
+ * The single cohort observation a repeated benchmark set contributes (§17.0.2):
+ * the nearest-rank median of its non-warm-up passes' avg FPS. A set weighs once
+ * in a pooled distribution — never its raw member count — so 30 duplicate
+ * uploads still count as one. Returns `null` when the set has no non-warm-up
+ * runs (nothing to represent).
+ *
+ * This mirrors exactly the member `cohortObservationsSql` selects in SQL — the
+ * median member by avg FPS (`rn = (cnt + 1) / 2`) — so the TS and SQL
+ * observation sets agree run-for-run.
+ */
+export function computeSetRepresentative(members: readonly BenchmarkSetMember[]): number | null {
+  const measured = members
+    .filter((member) => !member.isWarmup)
+    .map((member) => member.summary.avgFps);
+  if (measured.length === 0) return null;
+  return median(measured);
 }
 
 /** ≥3 tight runs is high confidence; a loose spread or a lone run is low. */

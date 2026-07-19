@@ -1,0 +1,145 @@
+.section {
+  margin-top: var(--space-6);
+}
+
+.overline {
+  font: var(--type-overline);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.lede {
+  margin-top: var(--space-1);
+  color: var(--fg-2);
+  font: var(--type-body);
+}
+
+.filterBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-6);
+  padding: var(--space-3);
+  background: var(--bg-raised);
+  border: var(--border-thin) solid var(--line-1);
+  border-radius: var(--radius-md);
+}
+
+/* The full profile remains available in the native option and in the recipe
+   below. Constraining its resting width keeps the desktop control bar on one
+   row while still surfacing the meaningful GPU/resolution prefix. */
+.cohortSelect {
+  width: 20rem;
+  max-width: 100%;
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.spacer {
+  flex: 1 1 var(--space-4);
+}
+
+.caveat {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-3);
+  color: var(--fg-3);
+  font: var(--type-caption);
+}
+
+.stateCard {
+  margin-top: var(--space-4);
+}
+
+.chartInset {
+  padding: var(--space-4) var(--space-3) var(--space-2);
+}
+
+.badgeRow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.chip {
+  padding: var(--space-1) var(--space-2);
+  background: var(--bg-inset);
+  border: var(--border-thin) solid var(--line-1);
+  border-radius: var(--radius-sm);
+  font: var(--type-overline);
+  letter-spacing: var(--tracking-wide);
+  color: var(--fg-3);
+}
+
+.metaNote {
+  color: var(--fg-4);
+  font: var(--type-caption);
+}
+
+.muted {
+  color: var(--fg-3);
+  font: var(--type-body);
+}
+
+.rates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.rate {
+  display: flex;
+  flex: 1 1 12rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-inset);
+  border: var(--border-thin) solid var(--line-1);
+  border-radius: var(--radius-sm);
+}
+
+.rateLabel {
+  color: var(--fg-2);
+  font: var(--type-body-sm);
+}
+
+.rateValue {
+  color: var(--fg-1);
+  font: var(--type-data);
+  font-weight: var(--weight-semibold);
+}
+
+.rateDenominator {
+  color: var(--fg-4);
+  font-weight: var(--weight-regular);
+}
+
+.rateUnavailable {
+  color: var(--fg-4);
+  font: var(--type-caption);
+}
+
+.footnote {
+  margin-top: var(--space-3);
+  color: var(--fg-4);
+  font: var(--type-caption);
+}

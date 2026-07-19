@@ -58,7 +58,7 @@ describe("schema accept/reject (§3.1)", () => {
   });
 
   it("accepts the tampered request at the schema layer (it is schema-valid by design)", () => {
-    // Tampering is caught by the server recompute/physics checks (Phase 7),
+    // Tampering is caught by the server recompute (Phase 7),
     // not by static validation — the schema must not reject it.
     expect(createRunRequestSchema.safeParse(fixtures.tamperedCreateRequest).success).toBe(true);
   });

@@ -19,9 +19,10 @@ create table if not exists verifications (
   granted_at      timestamptz not null default now()
 );
 
--- Durable server-side recompute/physics-check queue (§11.5). DB-backed — no
+-- Durable server-side canonical-recompute queue (§11.5). DB-backed — no
 -- fire-and-forget serverless promise. Workers claim rows via status + locked_at;
--- Phase 7 extends the same job with §18 physics checks.
+-- Phase 7 extends the worker with cohort-facing diagnostics while recomputation
+-- remains the reproducible integrity decision.
 -- Status values mirror VerificationJobStatus in packages/shared/src/types.ts.
 create table if not exists verification_jobs (
   id         bigint generated always as identity primary key,

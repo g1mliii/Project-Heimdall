@@ -17,8 +17,4 @@ describe("integrity thresholds", () => {
     expect(OUTLIER.sigmaThreshold).toBeGreaterThan(0);
   });
 
-  it("bounds physics percentages sanely", () => {
-    expect(PHYSICS.implausiblyLowGpuLoadPct).toBeGreaterThan(0);
-    expect(PHYSICS.implausiblyLowGpuLoadPct).toBeLessThan(100);
-  });
 });

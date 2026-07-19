@@ -9,6 +9,7 @@ import { DIAGNOSTIC_RULES, DRIVER_RULES } from "@heimdall/parsers";
 import {
   CAPABILITY_MANIFEST_VERSION,
   DIAGNOSTICS,
+  DIAGNOSTICS_RULE_GENERATION,
   type CapabilityManifest,
   type DiagnosticFinding,
   type GeneratedFrameTech,
@@ -94,16 +95,40 @@ export const FULL_REPROCESS_ENQUEUE_SQL = `with current_rules as materialized (
           )
         order by r.capability_manifest_version nulls first, r.created_at, r.id
         limit $1
-     -- KNOWN GAP (IMPLEMENTATION_PLAN 17.8.0): the lane below joins diagnostics,
-     -- so it only reaches runs that ALREADY store a finding for a bumped code. A
-     -- rule version that makes a rule NEWLY fire never reaches a clean run, and
-     -- "no finding stored" stays indistinguishable from "never evaluated at this
-     -- version" -- which 17.8's rate denominators must tell apart. The driver
-     -- lane avoids this by watermarking at run level (runs.driver_evaluated_at);
-     -- the fix here is the same, and is deferred to 17.8.0 where the denominator
-     -- defines what the watermark must record. Until then, bump
-     -- CAPABILITY_MANIFEST_VERSION alongside any firing-broadening rule bump so
-     -- capability_candidates sweeps every run.
+     ), diagnostics_generation_candidates as materialized (
+       -- §17.8.0 fix: the run-level diagnostics watermark. A run below the
+       -- current generation is re-evaluated even when it stores NO finding, so a
+       -- rule that newly fires reaches clean runs too — closing the gap the
+       -- diagnostics-join lane below could never cover.
+       --
+       -- The null branch is required, not defensive: a run that reaches
+       -- 'flagged' through failVerificationJob never passes through
+       -- applyVerificationResult, so it is reprocessable with an UNSTAMPED
+       -- watermark. A "null < $5" comparison is null in Postgres, so without
+       -- this branch the run is
+       -- permanently invisible to diagnostics reprocessing — exactly the
+       -- population §17.8.0 exists to reach. The status predicate already bounds
+       -- this, and the ordering keeps it index-backed
+       -- (runs_diagnostics_generation_idx, nulls first).
+       select r.id, r.created_at
+         from runs r
+        where r.frames_object_key is not null
+          and ${REPROCESSABLE_STATUS_SQL("r")}
+          and (
+            r.diagnostics_rule_generation is null
+            or r.diagnostics_rule_generation < $5
+          )
+          and not exists (
+            select 1 from reprocess_jobs existing
+             where existing.run_id = r.id
+               and existing.kind = '${REPROCESS_KIND.full}'
+          )
+        order by r.diagnostics_rule_generation nulls first, r.created_at, r.id
+        limit $1
+     -- The diagnostics-join lane below is now redundant with the generation
+     -- watermark above (which covers clean AND finding-bearing runs), but is kept
+     -- as a defensive second path: it still enqueues a run whose STORED finding
+     -- version is stale even if its generation somehow was not advanced.
       ), diagnostic_candidates as materialized (
         -- Keep the three index-seekable stale-version ranges, but bound their
         -- UNION ALL only once at the top. The old per-range limits could
@@ -156,6 +181,8 @@ export const FULL_REPROCESS_ENQUEUE_SQL = `with current_rules as materialized (
       ), candidates as materialized (
        select id, created_at from capability_candidates
        union
+       select id, created_at from diagnostics_generation_candidates
+       union
        select id, created_at from diagnostic_candidates
      )
      insert into reprocess_jobs (run_id, kind)
@@ -173,7 +200,13 @@ export async function enqueueFullReprocessJobs(
   const boundedLimit = Math.max(1, Math.min(limit, 50_000));
   const rows = await query<{ run_id: string }>(
     FULL_REPROCESS_ENQUEUE_SQL,
-    [boundedLimit, CURRENT_RULE_CODES, CURRENT_RULE_VERSIONS, CAPABILITY_MANIFEST_VERSION],
+    [
+      boundedLimit,
+      CURRENT_RULE_CODES,
+      CURRENT_RULE_VERSIONS,
+      CAPABILITY_MANIFEST_VERSION,
+      DIAGNOSTICS_RULE_GENERATION,
+    ],
     db,
   );
   return rows.length;
@@ -476,6 +509,11 @@ export async function applyReprocessResult(
               -- re-evaluated them against the current catalog. Record it, or the
               -- driver sweep cannot see the work is done and queues it again.
               driver_evaluated_at = now(),
+              -- This replay re-evaluated every diagnostic at the current rule
+              -- generation, so advance the watermark or the diagnostics lane
+              -- would re-enqueue the run forever (§17.8.0).
+              diagnostics_rule_generation = ${DIAGNOSTICS_RULE_GENERATION},
+              diagnostics_evaluated_at = now(),
               settings_json = coalesce($17::jsonb, runs.settings_json),
               methodology_manifest_version = coalesce(
                 ($17::jsonb ->> 'version')::integer,

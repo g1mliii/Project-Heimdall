@@ -13,13 +13,14 @@
 import * as React from "react";
 import {
   GAME_SUBMISSIONS_PAGE_SIZE,
+  type GameDistributionResponse,
   type GameSubmissionsPage,
   type GameSubmissionsQuery,
   type SearchGameResult,
 } from "@heimdall/shared";
 
 import { loadGameRuns, type ApiResult } from "@/lib/api/client";
-import { DistributionEmptyState } from "./DistributionEmptyState";
+import { DistributionSection, type GameDistributionLoader } from "./DistributionSection";
 import { GameHeader } from "./GameHeader";
 import { SubmissionsTable, type SceneFilter } from "./SubmissionsTable";
 import styles from "./GamePageClient.module.css";
@@ -47,15 +48,28 @@ interface FailedLoad extends PageRequest {
 export function GamePageClient({
   game,
   initialSubmissions,
+  initialDistribution,
+  viewerRunId,
   initialSceneFilter = "all",
   initialSortDirection = "desc",
   loadRuns = defaultGameRunsLoader,
+  loadDistribution,
 }: {
   game: SearchGameResult;
   initialSubmissions: GameSubmissionsPage;
+  /**
+   * Server-rendered distribution; null when the read failed. The section is
+   * still rendered — it re-fetches client-side and shows a retryable error —
+   * so a transient read failure never silently deletes a page region.
+   */
+  initialDistribution: GameDistributionResponse | null;
+  /** The viewer's own run id, for a "You: Nth percentile" marker (from `?run=`). */
+  viewerRunId?: string;
   initialSceneFilter?: SceneFilter;
   initialSortDirection?: NonNullable<GameSubmissionsQuery["sortDirection"]>;
   loadRuns?: GameRunsLoader;
+  /** Testing seam, mirroring `loadRuns`; the section supplies its own default. */
+  loadDistribution?: GameDistributionLoader;
 }) {
   const [rows, setRows] = React.useState(initialSubmissions.rows);
   const [nextCursor, setNextCursor] = React.useState(initialSubmissions.nextCursor);
@@ -149,7 +163,13 @@ export function GamePageClient({
   return (
     <main id="main-content" tabIndex={-1} className={styles.page}>
       <GameHeader game={game} />
-      <DistributionEmptyState />
+      <DistributionSection
+        game={game}
+        initial={initialDistribution}
+        {...(viewerRunId ? { viewerRunId } : {})}
+        {...(loadDistribution ? { loadDistribution } : {})}
+      />
+
       <SubmissionsTable
         rows={rows}
         sceneFilter={sceneFilter}

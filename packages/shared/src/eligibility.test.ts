@@ -6,6 +6,7 @@ import {
   COHORT_EXCLUSION,
   cohortEligibilitySql,
   cohortExclusionReasons,
+  cohortObservationsSql,
   type CohortEligibilityInput,
 } from "./eligibility";
 import type { MethodologyManifest } from "./types";
@@ -72,7 +73,7 @@ describe("cohortExclusionReasons (§16e.4)", () => {
 
 describe("cohortEligibilitySql", () => {
   it("composes every aggregate-read gate under one versioned definition", () => {
-    expect(COHORT_DEFINITION_VERSION).toBe(1);
+    expect(COHORT_DEFINITION_VERSION).toBe(2);
     const sql = cohortEligibilitySql("r");
     for (const predicate of [
       "r.visibility = 'public'",
@@ -96,5 +97,30 @@ describe("cohortEligibilitySql", () => {
     expect(sql).not.toContain("r.is_warmup = false");
     expect(sql).not.toContain("r.benchmark_set_id is null");
     expect(sql).toContain("r.capability_manifest_version >=");
+  });
+});
+
+describe("cohortObservationsSql (§17.0.2)", () => {
+  const sql = cohortObservationsSql();
+
+  it("streams non-set runs individually and gates them like the cohort predicate", () => {
+    // The individual branch keeps the default set-member exclusion so raw
+    // members never double-count alongside their representative.
+    expect(sql).toContain("from runs r");
+    expect(sql).toContain("r.benchmark_set_id is null");
+    expect(sql).toContain("union all");
+  });
+
+  it("collapses each set to one median-member representative", () => {
+    // One representative per set: median position over avg_fps, warm-ups out.
+    expect(sql).toContain("partition by r.benchmark_set_id order by s.avg_fps, r.id");
+    expect(sql).toContain("ranked.rn = (ranked.member_count + 1) / 2");
+    expect(sql).toContain("r.benchmark_set_id is not null");
+    expect(sql).toContain("r.is_warmup = false");
+  });
+
+  it("propagates read options to both observation branches", () => {
+    const ownerScoped = cohortObservationsSql({ requireCurrentCapabilityManifest: false });
+    expect(ownerScoped).not.toContain("r.capability_manifest_version >=");
   });
 });
