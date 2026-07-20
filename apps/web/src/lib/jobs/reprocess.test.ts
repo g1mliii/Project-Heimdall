@@ -7,6 +7,7 @@ import { DIAGNOSTIC_RULES, computeRunSummary, deriveCapabilityManifest } from "@
 import {
   CAPABILITY_MANIFEST_VERSION,
   COHORT_EXCLUSION,
+  DIAGNOSTICS_RULE_GENERATION,
   METHODOLOGY_MANIFEST_VERSION,
   RUN_STATUS,
   RUN_VISIBILITY,
@@ -449,6 +450,33 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
     expect(await enqueueFullReprocessJobs({}, db.pool)).toBe(1);
   });
 
+  it("enqueues a clean run below the diagnostics generation, not one at it (§17.8.0)", async () => {
+    // Both runs are CLEAN (no stored finding) and carry the current capability
+    // manifest, so the capability and diagnostics-join lanes never touch them.
+    // Only the run-level generation watermark separates them — the whole point of
+    // 17.8.0: a rule that newly fires must reach a clean run, and "evaluated at
+    // the current generation" must be distinguishable from "never evaluated".
+    const stale = "run_diag_generation_stale";
+    const current = "run_diag_generation_current";
+    await insertRun(runFixture(stale), db.pool);
+    await insertRun(runFixture(current), db.pool);
+    await db.pool.query("update runs set diagnostics_rule_generation = $2 where id = $1", [
+      stale,
+      DIAGNOSTICS_RULE_GENERATION - 1,
+    ]);
+    await db.pool.query("update runs set diagnostics_rule_generation = $2 where id = $1", [
+      current,
+      DIAGNOSTICS_RULE_GENERATION,
+    ]);
+    await settleDriverWatermark();
+
+    expect(await enqueueFullReprocessJobs({}, db.pool)).toBe(1);
+    const queued = await db.pool.query<{ run_id: string }>(
+      "select run_id from reprocess_jobs where kind = 'full'",
+    );
+    expect(queued.rows.map((row) => row.run_id)).toEqual([stale]);
+  });
+
   it("keeps findings in registry order after a driver refresh replaces them", async () => {
     const id = "run_driver_finding_order";
     await insertRun(runFixture(id), db.pool);
@@ -753,6 +781,7 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
           DIAGNOSTIC_RULES.map((rule) => rule.code),
           DIAGNOSTIC_RULES.map((rule) => rule.version),
           CAPABILITY_MANIFEST_VERSION,
+          DIAGNOSTICS_RULE_GENERATION,
         ],
       );
       const driver = await client.query(

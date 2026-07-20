@@ -147,15 +147,30 @@ export type CapabilitySensorField = (typeof CAPABILITY_SENSOR_FIELDS)[number];
  * shape changes incompatibly, exactly as {@link CURRENT_SCHEMA_VERSION} governs
  * the ingest DTO — a stored manifest records the version it was derived under.
  *
- * ALSO bump this whenever you bump a diagnostic rule's `version` in a way that
- * can make the rule newly fire, until IMPLEMENTATION_PLAN §17.8.0 lands. The
- * reprocess full lane finds stale-rule runs by joining `diagnostics`, so it only
- * reaches runs that ALREADY store a finding for that code — a clean run that the
- * new version would flag is never re-evaluated. Bumping here sweeps every run
- * instead (`capability_candidates` matches `capability_manifest_version < N`),
- * which is bounded and resumable because each job advances the version.
+ * The old interim workaround — "also bump this on any firing-broadening
+ * diagnostic-rule change so `capability_candidates` sweeps every run" — is
+ * RETIRED as of §17.8.0. Diagnostics now have their own run-level watermark
+ * ({@link DIAGNOSTICS_RULE_GENERATION} / `runs.diagnostics_rule_generation`), so
+ * a rule change no longer has to masquerade as a capability change. Bump this
+ * only for a real capability-manifest schema change.
  */
 export const CAPABILITY_MANIFEST_VERSION = 1;
+
+/**
+ * Diagnostics rule-set generation (§17.8.0). A run stores the generation its
+ * findings were evaluated under (`runs.diagnostics_rule_generation`), so the
+ * reprocess full lane can reach a CLEAN run a newly-firing rule would flag — not
+ * just runs that already store a stale finding — and §17.8's aggregate rates can
+ * tell "evaluated at the current rules, did not fire" from "never evaluated at
+ * this generation." This is the run-level watermark that replaces the retired
+ * capability-version workaround above.
+ *
+ * Bump whenever a diagnostic rule's `version` changes in a way that can make it
+ * newly fire (or stop firing). The bump is bounded and resumable: each replay
+ * advances a run to the current generation, and the lane enqueues only runs
+ * below it.
+ */
+export const DIAGNOSTICS_RULE_GENERATION = 1;
 
 /**
  * Methodology-manifest schema version (Phase 6.5 §16c.1). The methodology

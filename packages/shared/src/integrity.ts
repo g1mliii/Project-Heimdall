@@ -1,12 +1,14 @@
 /**
- * Statistical-integrity & telemetry-physics thresholds, as named constants
+ * Statistical-integrity and canonical-summary thresholds, as named constants
  * (IMPLEMENTATION_PLAN §1.3). Phase 7 (§18) consumes these; Phase 1 (§2.3) may
- * extend this file. Centralized so the anti-cheat math has a single source of truth.
+ * extend this file. Centralized so the integrity math has a single source of truth.
  * See docs/integrity-and-privacy.md §2.
  */
 
 /** Statistical outlier rejection — Phase 7 §18.2. */
 export const OUTLIER = {
+  /** Scales median absolute deviation to its normal-distribution equivalent. */
+  madScale: 0.6745,
   /** Modified z-score (MAD-based) magnitude above which a run is an outlier. */
   madZScoreThreshold: 3.5,
   /** Fallback sigma multiplier when MAD is degenerate (zero spread). */
@@ -21,15 +23,11 @@ export const OUTLIER = {
 } as const;
 
 /**
- * Telemetry-physics checks (§18.1): flag runs whose reported FPS is physically
- * inconsistent with secondary sensors. A check is SKIPPED (never flags) when its
- * required sensor is absent (§7.3) — never flag on missing data.
+ * Server recompute threshold (§11.5). Per-frame telemetry remains explanatory:
+ * the available CPU/GPU utilisation fields are whole-machine aggregates and
+ * cannot safely establish that a run is fabricated.
  */
 export const PHYSICS = {
-  /** GPU load (%) below which sustained high FPS is implausible in GPU-bound titles. */
-  implausiblyLowGpuLoadPct: 35,
-  /** FPS above which low GPU load is treated as suspicious rather than a frame cap. */
-  highFpsSuspicionThreshold: 240,
   /** Allowed fractional gap between the client-submitted and server-recomputed summary. */
   recomputeTolerance: 0.01,
 } as const;

@@ -22,9 +22,9 @@ export type RunVisibility = (typeof RUN_VISIBILITY)[keyof typeof RUN_VISIBILITY]
 export const RUN_STATUS = {
   /** Uploaded; the client's numbers are provisional until the server recompute. */
   pending: "pending",
-  /** Server recompute + physics checks passed. Canonical for public stats. */
+  /** Server recompute passed. Canonical for public stats. */
   validated: "validated",
-  /** Failed a physics/outlier check; visible to its owner, excluded from aggregates. */
+  /** Failed a reproducible server-integrity check; visible to its owner, excluded from aggregates. */
   flagged: "flagged",
   /** Removed from public view by moderation/takedown. */
   hidden: "hidden",

@@ -29,8 +29,14 @@ export const COHORT_EXCLUSION = {
 export type CohortExclusionReason =
   (typeof COHORT_EXCLUSION)[keyof typeof COHORT_EXCLUSION];
 
-/** Bump when the inclusion contract changes so downstream aggregates can pin it. */
-export const COHORT_DEFINITION_VERSION = 1;
+/**
+ * Bump when the inclusion contract changes so downstream aggregates can pin it.
+ *
+ * v2 (§17.0.2): a benchmark set no longer contributes zero observations — it
+ * contributes exactly one representative (its median non-warm-up member), so a
+ * repeated set weighs once instead of not at all. See {@link cohortObservationsSql}.
+ */
+export const COHORT_DEFINITION_VERSION = 2;
 
 export interface CohortEligibilityInput {
   visibility: RunVisibility;
@@ -76,8 +82,10 @@ export function cohortExclusionReasons(
   if (input.isWarmup) {
     reasons.push(COHORT_EXCLUSION.warmup);
   }
-  // Phase 7 adds a versioned representative predicate to both the typed and
-  // SQL contracts; until then no raw set member may enter a pooled cohort.
+  // A raw set member is not an INDEPENDENT observation: its whole set collapses
+  // to one representative (§17.0.2, {@link cohortObservationsSql}), so it never
+  // enters the ungrouped observation stream on its own. This gate describes that
+  // per-run stream; the set-level representative is chosen in SQL, not here.
   if (input.benchmarkSetId !== null) {
     reasons.push(COHORT_EXCLUSION.setMember);
   }
@@ -133,8 +141,69 @@ export function cohortEligibilitySql(
     predicates.push(`${alias}.is_warmup = false`);
   }
   if (!options.allowBenchmarkSetMembers) {
-    // Phase 7 replaces this with one versioned representative per set.
+    // Single-run observations exclude set members; the set contributes one
+    // representative through {@link cohortObservationsSql} instead.
     predicates.push(`${alias}.benchmark_set_id is null`);
   }
   return predicates.join(" and ");
+}
+
+/**
+ * The cohort OBSERVATION set (§17.0.2), one row per independent observation with
+ * a single `run_id`, ready to be joined to `runs`/`run_summaries` for whatever
+ * comparability grouping and metric a distribution needs:
+ *
+ * - every eligible non-set run contributes itself, and
+ * - every eligible benchmark set contributes exactly ONE representative — its
+ *   median non-warm-up member by avg FPS — so a repeated set (or 30 duplicate
+ *   uploads under one set) weighs once, never once per file.
+ *
+ * The representative is a real member row (selected by `row_number`, not an
+ * interpolated value) so a caller can read any metric column from it and still
+ * get a coherent single run. The nearest-rank median position
+ * `rn = (cnt + 1) / 2` matches {@link computeSetRepresentative}'s TS median, so
+ * the two observation sets agree run-for-run (the §19.2 parity test).
+ *
+ * Returns a parenthesized derived table; callers alias it and join on `run_id`.
+ * `options` are developer-authored, never request input.
+ *
+ * `scopeSql` is a predicate over the `r` alias pushed INSIDE both union branches.
+ * It exists for correctness of plan, not of result: the set branch ranks with a
+ * window function, which blocks qual pushdown, so an outer `where r.game_id = $1`
+ * would still make the branch scan and sort every eligible set member in the
+ * whole catalog. Single-title callers must pass their game predicate here.
+ */
+export function cohortObservationsSql(
+  options: CohortEligibilitySqlOptions & { scopeSql?: string } = {},
+): string {
+  const { scopeSql, ...eligibility } = options;
+  const scope = scopeSql ? `${scopeSql} and ` : "";
+  const individualPredicate = cohortEligibilitySql("r", {
+    ...eligibility,
+    allowBenchmarkSetMembers: false,
+  });
+  const memberPredicate = cohortEligibilitySql("r", {
+    ...eligibility,
+    allowWarmups: false,
+    allowBenchmarkSetMembers: true,
+  });
+  return `(
+    select r.id as run_id
+      from runs r
+     where ${scope}${individualPredicate}
+    union all
+    select ranked.run_id
+      from (
+        select r.id as run_id,
+               row_number() over (
+                 partition by r.benchmark_set_id order by s.avg_fps, r.id
+               ) as rn,
+               count(*) over (partition by r.benchmark_set_id) as member_count
+          from runs r
+          join run_summaries s on s.run_id = r.id
+         where ${scope}r.benchmark_set_id is not null
+           and ${memberPredicate}
+      ) ranked
+     where ranked.rn = (ranked.member_count + 1) / 2
+  )`;
 }

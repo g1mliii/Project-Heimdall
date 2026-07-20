@@ -330,6 +330,182 @@ export const gameSubmissionsPageSchema = z.object({
   nextCursor: gameSubmissionsCursorSchema.nullable(),
 });
 
+/* ── Aggregate cohort distribution (§17) ───────────────────────────────────── */
+
+/**
+ * The pooled metrics a distribution can be built over (§17.0.3). Every one is
+ * frame-derived (frame times or generated-frame flags), so none depends on the
+ * optional sensor telemetry — a cohort's capability gate lives in
+ * `cohortEligibilitySql`, not per-metric. Sensor-derived RATES (VRAM pressure,
+ * CPU/GPU-bound) are aggregate diagnostics (§17.8), not distributions.
+ */
+export const distributionMetricSchema = z.enum([
+  "avg-fps",
+  "one-percent-low-fps",
+  "point-one-percent-low-fps",
+  "frametime-p50-ms",
+  "frametime-p95-ms",
+  "frametime-p99-ms",
+  "stutter-rate",
+  "generated-frame-share",
+]);
+export type DistributionMetric = z.infer<typeof distributionMetricSchema>;
+
+/**
+ * Cohort selection for a game's distribution. Every field narrows the exact
+ * comparability bucket the distribution pools over; omitted fields leave that
+ * dimension unpinned so the read returns each matching bucket separately (a
+ * `benchmark-scene` bucket never merges with `gameplay`, §17.5). `verifiedOnly`
+ * is accepted but inert until Phase 8's verified tier (§17.3).
+ */
+export const gameDistributionQuerySchema = z
+  .object({
+    metric: distributionMetricSchema.default("avg-fps"),
+    /** Canonical GPU hardware id (numeric string), the primary cohort split. */
+    gpuId: z
+      .string()
+      .regex(/^\d+$/, "must be a canonical hardware id")
+      .optional(),
+    sceneType: sceneTypeSchema.optional(),
+    resolution: z.string().min(1).max(MAX_INDEXED_METADATA_TEXT_LENGTH).optional(),
+    settingsPreset: z.string().min(1).max(MAX_INDEXED_METADATA_TEXT_LENGTH).optional(),
+    upscaler: upscalerModeSchema.optional(),
+    rayTracing: rayTracingModeSchema.optional(),
+    /** The viewer's own run, for a "You: Nth percentile" marker within its bucket. */
+    viewerRunId: z.string().min(1).max(64).optional(),
+    verifiedOnly: z
+      .enum(["true", "false"])
+      .transform((value) => value === "true")
+      .optional(),
+  })
+  .strict();
+export type GameDistributionQuery = z.infer<typeof gameDistributionQuerySchema>;
+
+export const distributionBinSchema = z.object({
+  lower: z.number(),
+  upper: z.number(),
+  count: z.number().int().nonnegative(),
+});
+
+export const distributionMarkerSchema = z.object({
+  p: z.number().min(0).max(100),
+  value: z.number(),
+});
+
+/** The comparability descriptors that identify (and label) one cohort bucket. */
+export const cohortComparabilitySchema = z.object({
+  gpu: z.string().nullable(),
+  gpuId: z.string().nullable(),
+  resolution: z.string().nullable(),
+  scene: z.string().nullable(),
+  sceneType: sceneTypeSchema.nullable(),
+  settingsPreset: z.string().nullable(),
+  upscaler: upscalerModeSchema.nullable(),
+  rayTracing: rayTracingModeSchema.nullable(),
+  graphicsApi: z.string().nullable(),
+  frameGeneration: generatedFrameTechSchema,
+  frameCapFps: z.number().int().nullable(),
+  vsync: z.boolean(),
+  vrr: z.boolean(),
+});
+
+export const cohortDistributionSchema = z.object({
+  comparability: cohortComparabilitySchema,
+  /** Independent observations (a benchmark set counts once, §17.0.2). */
+  observationCount: z.number().int().nonnegative(),
+  /** Raw runs behind those observations (sets expand here) — for honest counts. */
+  rawRunCount: z.number().int().nonnegative(),
+  /**
+   * The distribution — present only at/above the cold-start threshold (§17.4).
+   * Below it this is null and the UI shows the raw submissions, never a curve.
+   */
+  distribution: z
+    .object({
+      bins: z.array(distributionBinSchema),
+      min: z.number(),
+      max: z.number(),
+      mean: z.number(),
+      markers: z.array(distributionMarkerSchema),
+      sampleCount: z.number().int().nonnegative(),
+    })
+    .nullable(),
+  /**
+   * The viewer run's STANDING in this bucket (0–100): the share of comparable
+   * observations it is at least as good as. Direction-aware — on a lower-is-
+   * better metric a small value scores a HIGH standing — so "Nth percentile"
+   * means the same thing to a reader on every metric (see `betterDirection`).
+   */
+  viewerPercentile: z.number().min(0).max(100).nullable(),
+  /** The viewer run's metric value, for placing its marker on the value axis. */
+  viewerValue: z.number().nullable(),
+  /**
+   * Why the viewer's own run is not itself pooled into this curve, or null when
+   * it is (or when there is no viewer run). Their value is still ranked against
+   * the curve — this states that the run behind it was not one of the points, so
+   * the UI can say so instead of silently parking the marker on an axis edge.
+   */
+  viewerExclusion: z.enum(["statistical-outlier", "benchmark-set-member"]).nullable(),
+  /**
+   * Observations dropped from the curve as statistical outliers (§18.2). They
+   * stay counted in `observationCount` and their runs stay individually visible
+   * — this is a scoped aggregate exclusion, never a hide. Zero below the
+   * cold-start threshold (outlier rejection is inert there).
+   */
+  excludedOutlierCount: z.number().int().nonnegative(),
+});
+
+/** How the game's runs split between the pool and the reasons they were excluded. */
+export const cohortExclusionSummarySchema = z.object({
+  /** Public + validated runs for the game (the aggregate-eligible population). */
+  aggregateEligibleRuns: z.number().int().nonnegative(),
+  /** Independent observations that entered a cohort (sets counted once). */
+  pooledObservations: z.number().int().nonnegative(),
+  /** Aggregate-eligible runs missing a complete methodology profile (§16c.3). */
+  unprofiledRuns: z.number().int().nonnegative(),
+  /** Aggregate-eligible runs below the current capability manifest version. */
+  capabilityUnestablishedRuns: z.number().int().nonnegative(),
+});
+
+/**
+ * An aggregate diagnostic rate over a game's cohort (§17.8) — an OBSERVATIONAL
+ * support pattern, never a causal ranking. The denominator is only runs
+ * evaluated at the current diagnostics generation (§17.8.0) that carry the
+ * telemetry the rule requires; when that is zero the rate is `null`
+ * ("unavailable"), never a misleading clean 0%.
+ */
+export const diagnosticRateSchema = z.object({
+  key: z.enum(["driver-currency", "vram-pressure", "cpu-bound"]),
+  label: z.string(),
+  /** Observations flagged by the rule (of those with the required telemetry). */
+  numerator: z.number().int().nonnegative(),
+  /** Observations that could have produced the finding (evaluated + telemetry). */
+  denominator: z.number().int().nonnegative(),
+  /** numerator/denominator as a percent, or null when the denominator is zero. */
+  ratePct: z.number().min(0).max(100).nullable(),
+});
+export type DiagnosticRate = z.infer<typeof diagnosticRateSchema>;
+
+export const gameDistributionResponseSchema = z.object({
+  game: searchGameResultSchema,
+  metric: distributionMetricSchema,
+  /** Whether higher metric values are better — governs the marker's phrasing. */
+  betterDirection: z.enum(["higher", "lower", "neutral"]),
+  /** The cohort contract this pooling obeyed, so a client can pin it (§17.0). */
+  cohortDefinitionVersion: z.number().int().positive(),
+  /** The minimum independent observations before a curve is drawn (§17.4). */
+  minSampleSize: z.number().int().positive(),
+  /** Buckets ordered by observation count desc; may be capped (see `truncated`). */
+  cohorts: z.array(cohortDistributionSchema),
+  /** True when more buckets existed than the response returned (§ no silent caps). */
+  truncated: z.boolean(),
+  exclusionSummary: cohortExclusionSummarySchema,
+  /** Observational aggregate diagnostic rates over the game cohort (§17.8). */
+  diagnosticRates: z.array(diagnosticRateSchema),
+});
+export type GameDistributionResponse = z.infer<typeof gameDistributionResponseSchema>;
+export type CohortDistribution = z.infer<typeof cohortDistributionSchema>;
+export type CohortComparability = z.infer<typeof cohortComparabilitySchema>;
+
 /** Provenance fields shared by every ingest payload (§2.2). */
 const provenance = {
   schemaVersion: z.number().int().positive().default(CURRENT_SCHEMA_VERSION),

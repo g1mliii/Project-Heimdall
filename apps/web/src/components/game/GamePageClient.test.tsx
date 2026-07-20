@@ -2,15 +2,28 @@
 
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom/vitest";
 import type { GameSubmissionRow, SearchGameResult } from "@heimdall/shared";
 
 import { DistributionEmptyState } from "./DistributionEmptyState";
+import type { GameDistributionLoader } from "./DistributionSection";
 import { GamePageClient, type GameRunsLoader } from "./GamePageClient";
 
 const game: SearchGameResult = { id: "17", slug: "cyberpunk-2077", name: "Cyberpunk 2077" };
+
+/**
+ * The distribution section now always renders (a failed server read must not
+ * delete the region), so it always fetches. These tests are about the
+ * submissions half — park its request so nothing touches the network.
+ */
+const idleDistributionLoader: GameDistributionLoader = () => new Promise(() => undefined);
+
+/** The submissions table's own workload control — the distribution has one too. */
+function submissionsWorkload() {
+  return within(screen.getByRole("group", { name: "Workload" }));
+}
 
 function submission(
   id: string,
@@ -71,7 +84,12 @@ describe("GamePageClient (§17.7)", () => {
       }),
     ];
     const { container } = render(
-      <GamePageClient game={game} initialSubmissions={{ rows, nextCursor: null }} />,
+      <GamePageClient
+        game={game}
+        initialDistribution={null}
+        loadDistribution={idleDistributionLoader}
+        initialSubmissions={{ rows, nextCursor: null }}
+      />,
     );
 
     expect(screen.getByRole("heading", { level: 1, name: game.name })).toBeInTheDocument();
@@ -79,7 +97,9 @@ describe("GamePageClient (§17.7)", () => {
     expect(screen.getByText("Profile incomplete")).toBeInTheDocument();
     expect(screen.getByText("Warm-up")).toBeInTheDocument();
     expect(screen.getByText("Set member")).toBeInTheDocument();
-    expect(screen.getAllByText("Freeform")).toHaveLength(2);
+    // Two in the table (filter control + the set-member row), plus the
+    // distribution section's own workload control.
+    expect(screen.getAllByText("Freeform")).toHaveLength(3);
     expect(screen.getAllByText("Anonymous")).toHaveLength(4);
     expect(screen.getAllByText("Driver below game minimum")).not.toHaveLength(0);
     expect(screen.getAllByText("Driver outdated")).not.toHaveLength(0);
@@ -105,12 +125,14 @@ describe("GamePageClient (§17.7)", () => {
     render(
       <GamePageClient
         game={game}
+        initialDistribution={null}
+        loadDistribution={idleDistributionLoader}
         initialSubmissions={{ rows: [submission("initial")], nextCursor: null }}
         loadRuns={loadRuns}
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Gameplay" }));
+    await user.click(submissionsWorkload().getByRole("button", { name: "Gameplay" }));
     expect(await screen.findByRole("link", { name: "AMD Radeon RX 7800 XT" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "NVIDIA GeForce RTX 4070" })).not.toBeInTheDocument();
     expect(loadRuns).toHaveBeenCalledWith(
@@ -130,6 +152,8 @@ describe("GamePageClient (§17.7)", () => {
     render(
       <GamePageClient
         game={game}
+        initialDistribution={null}
+        loadDistribution={idleDistributionLoader}
         initialSubmissions={{ rows: [submission("newest")], nextCursor: "cursor_one" }}
         loadRuns={loadRuns}
       />,
@@ -157,6 +181,8 @@ describe("GamePageClient (§17.7)", () => {
     render(
       <GamePageClient
         game={game}
+        initialDistribution={null}
+        loadDistribution={idleDistributionLoader}
         initialSubmissions={{ rows: [submission("first")], nextCursor: "cursor_one" }}
         loadRuns={loadRuns}
       />,
@@ -184,12 +210,14 @@ describe("GamePageClient (§17.7)", () => {
     render(
       <GamePageClient
         game={game}
+        initialDistribution={null}
+        loadDistribution={idleDistributionLoader}
         initialSubmissions={{ rows: [submission("initial")], nextCursor: null }}
         loadRuns={loadRuns}
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Freeform" }));
+    await user.click(submissionsWorkload().getByRole("button", { name: "Freeform" }));
     expect(await screen.findByText("Could not load submissions")).toBeInTheDocument();
     expect(screen.getByText("Connection lost")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Retry" }));
@@ -210,12 +238,14 @@ describe("GamePageClient (§17.7)", () => {
     const { unmount } = render(
       <GamePageClient
         game={game}
+        initialDistribution={null}
+        loadDistribution={idleDistributionLoader}
         initialSubmissions={{ rows: [submission("initial")], nextCursor: null }}
         loadRuns={loadRuns}
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Gameplay" }));
+    await user.click(submissionsWorkload().getByRole("button", { name: "Gameplay" }));
     expect(signal?.aborted).toBe(false);
     unmount();
     expect(signal?.aborted).toBe(true);
