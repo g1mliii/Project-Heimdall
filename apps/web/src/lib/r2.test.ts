@@ -123,6 +123,11 @@ describe.skipIf(!hasR2Creds)("r2 live round-trip (§6.2)", () => {
   const key = `runs/test_${process.pid}_${Date.now()}.parquet`;
   const presignedKey = `${key}.presigned`;
   const bytes = new TextEncoder().encode("heimdall phase-2 round-trip fixture");
+  // Real network round-trips to R2 from CI runners: put→head→get is three
+  // sequential S3 calls that can exceed vitest's 5s default under load. These
+  // tests only run when live creds are present (trusted CI / local .env), so a
+  // generous ceiling trades a rare slow run for a flaky timeout.
+  const LIVE_TIMEOUT_MS = 30_000;
 
   afterAll(async () => {
     await Promise.all(
@@ -135,7 +140,7 @@ describe.skipIf(!hasR2Creds)("r2 live round-trip (§6.2)", () => {
     const head = await headObject(key);
     expect(head?.sizeBytes).toBe(bytes.byteLength);
     expect(await getObject(key)).toEqual(bytes);
-  });
+  }, LIVE_TIMEOUT_MS);
 
   it("presigned PUT then presigned GET round-trips through plain fetch (§5.1)", async () => {
     const putUrl = await presignPut(presignedKey, { contentLengthBytes: bytes.byteLength });
@@ -150,9 +155,9 @@ describe.skipIf(!hasR2Creds)("r2 live round-trip (§6.2)", () => {
     const getResponse = await fetch(getUrl);
     expect(getResponse.ok).toBe(true);
     expect(new Uint8Array(await getResponse.arrayBuffer())).toEqual(bytes);
-  });
+  }, LIVE_TIMEOUT_MS);
 
   it("headObject returns null for a missing key (§11.10)", async () => {
     expect(await headObject("runs/definitely-missing.parquet")).toBeNull();
-  });
+  }, LIVE_TIMEOUT_MS);
 });
