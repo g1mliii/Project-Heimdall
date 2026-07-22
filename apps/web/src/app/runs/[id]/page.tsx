@@ -8,14 +8,16 @@
 import { cache } from "react";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
-import { RUN_VISIBILITY } from "@heimdall/shared";
+import { RUN_VISIBILITY, runResponseSchema } from "@heimdall/shared";
 import { readVisibleBenchmarkSet, readVisibleRun } from "@/lib/repo/runs";
+import { getViewerIdentity } from "@/lib/api/auth";
 import { RunPageClient } from "@/components/run/RunPageClient";
 
 export const runtime = "nodejs";
 
-/** Request-scoped dedupe so metadata + page share one DB read. */
-const getVisibleRun = cache((id: string) => readVisibleRun(id));
+/** Request-scoped dedupe so metadata + page share one viewer lookup + DB read. */
+const getCurrentViewer = cache(() => getViewerIdentity());
+const getVisibleRun = cache(async (id: string) => readVisibleRun(id, await getCurrentViewer()));
 
 interface RunPageProps {
   params: Promise<{ id: string }>;
@@ -39,6 +41,10 @@ export default async function RunPage({ params }: RunPageProps) {
   const { id } = await params;
   const run = await getVisibleRun(id);
   if (!run) notFound();
-  const benchmarkSet = await readVisibleBenchmarkSet(run);
-  return <RunPageClient run={run} benchmarkSet={benchmarkSet} />;
+  const benchmarkSet = await readVisibleBenchmarkSet(run, await getCurrentViewer());
+  // §20.3: ownerId (a raw Clerk user id) never reaches the client component.
+  // Same mechanism as GET /api/runs/:id — the wire schema is the one place
+  // that decides which fields cross the boundary, so the two can't drift.
+  const publicRun = runResponseSchema.parse(run);
+  return <RunPageClient run={publicRun} benchmarkSet={benchmarkSet} />;
 }

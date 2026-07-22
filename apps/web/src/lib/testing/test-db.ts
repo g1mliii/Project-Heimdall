@@ -12,11 +12,21 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import pg from "pg";
 import { migrate } from "../../../../../infra/db/migrate.mjs";
 
 const testDbUrl = process.env.TEST_DATABASE_URL;
+
+/**
+ * Disposable TEST_DATABASE_URL suites each migrate a different schema. Give
+ * each schema its own advisory-lock namespace so Vitest's parallel workers do
+ * not serialize (or time out behind) unrelated test migrations. Production
+ * callers keep migrate()'s fixed, database-wide lock.
+ */
+function schemaMigrationLockKey(schema: string): number {
+  return createHash("sha256").update(schema).digest().readInt32BE(0);
+}
 
 function dockerAvailable(): boolean {
   try {
@@ -74,7 +84,9 @@ export async function createTestDb(): Promise<TestDb> {
         options: `-csearch_path=${schema},public`,
       });
       pool = testPool;
-      const appliedMigrations = await migrate(testPool);
+      const appliedMigrations = await migrate(testPool, {
+        lockKey: schemaMigrationLockKey(schema),
+      });
       const separator = testDbUrl.includes("?") ? "&" : "?";
       const connectionString = `${testDbUrl}${separator}options=${encodeURIComponent(`-csearch_path=${schema},public`)}`;
       return {

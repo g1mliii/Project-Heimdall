@@ -1,14 +1,18 @@
 "use client";
 
 /**
- * Minimal app chrome (Phase 5 slice of design/ui_kits/web/AppShell.jsx):
- * logo + wordmark, nav tabs, global catalog search, and primary upload CTA.
- * The account menu remains deferred until authentication lands.
+ * App chrome (Phase 5 slice of design/ui_kits/web/AppShell.jsx, account menu
+ * added §20.1): logo + wordmark, nav tabs, global catalog search, primary
+ * upload CTA, and — only when Clerk is configured — the sign-in/account
+ * menu. `authEnabled` is computed server-side (`isClerkConfigured()` in
+ * `app/layout.tsx`) so an unconfigured deployment renders identically to the
+ * pre-auth app instead of mounting Clerk components with no provider.
  */
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ButtonLink, NavTabs } from "@heimdall/ui";
+import { Show, SignInButton, UserButton } from "@clerk/nextjs";
+import { Button, ButtonLink, NavTabs } from "@heimdall/ui";
 import { icon } from "@/components/icons";
 import { GlobalSearch } from "./GlobalSearch";
 import styles from "./TopBar.module.css";
@@ -26,7 +30,7 @@ const NAV = [
   { href: "/upload", label: "Upload" },
 ];
 
-export function TopBar() {
+export function TopBar({ authEnabled = false }: { authEnabled?: boolean }) {
   const pathname = usePathname();
 
   function focusMainAfterSkip() {
@@ -56,6 +60,23 @@ export function TopBar() {
       />
       <GlobalSearch />
       <div className={styles.spacer} />
+      {authEnabled && (
+        <div className={styles.account}>
+          <Show when="signed-out">
+            <SignInButton mode="modal">
+              <Button variant="ghost" size="sm">
+                Sign in
+              </Button>
+            </SignInButton>
+          </Show>
+          <Show when="signed-in">
+            <Link href="/account" className={styles.accountLink}>
+              My runs
+            </Link>
+            <UserButton />
+          </Show>
+        </div>
+      )}
       <ButtonLink as={Link} href="/upload" variant="primary" iconLeft={<UploadIcon size={16} />}>
         Upload log
       </ButtonLink>

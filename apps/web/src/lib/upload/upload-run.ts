@@ -82,7 +82,8 @@ export interface UploadTransport {
 
 export interface UploadOptions {
   game: string;
-  visibility: "unlisted" | "public";
+  /** `private` requires a signed-in owner — the server rejects it otherwise (§20.2d). */
+  visibility: "private" | "unlisted" | "public";
   /** Overrides/completes hardware when the log carries none (PresentMon CSV). */
   hardware?: Partial<HardwareSnapshot>;
   /** Optional declared setup details for reproducibility/comparability (§16c). */

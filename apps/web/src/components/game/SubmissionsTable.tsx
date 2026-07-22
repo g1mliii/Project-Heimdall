@@ -11,8 +11,18 @@ import {
   Tooltip,
   type TableColumn,
 } from "@heimdall/ui";
+import { icon } from "@/components/icons";
+import { MEDIUM_DATE_FORMATTER } from "@/lib/format";
 
 import styles from "./GamePageClient.module.css";
+
+/** §20.3 verified-reviewer marker — matches the shield-check glyph in the design kit. */
+const ShieldCheckIcon = icon(
+  <g>
+    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" />
+    <path d="m9 12 2 2 4-4" />
+  </g>,
+);
 
 const FRAME_GENERATION_LABELS: Record<GameSubmissionRow["methodology"]["frameGeneration"], string | null> = {
   none: null,
@@ -27,13 +37,6 @@ const SCENE_LABELS: Record<NonNullable<GameSubmissionRow["sceneType"]>, string> 
   gameplay: "Play",
   freeform: "Freeform",
 };
-
-const SUBMISSION_DATE_FORMATTER = new Intl.DateTimeFormat("en", {
-  dateStyle: "medium",
-  // Client Components render on the server before hydration. Fixing the
-  // timezone makes this date deterministic across the server and browser.
-  timeZone: "UTC",
-});
 
 /** Upscaler values that carry no methodology signal, so they are not shown. */
 const HIDDEN_UPSCALERS = new Set(["none", "unknown"]);
@@ -136,9 +139,16 @@ const columns: readonly TableColumn<GameSubmissionRow>[] = [
     sortable: true,
     cell: (row) => (
       <span className={styles.cellStack}>
-        <span>{row.submittedBy ?? "Anonymous"}</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-1)" }}>
+          {row.submittedBy ?? "Anonymous"}
+          {row.submittedByVerified && (
+            <Tooltip content="Verified reviewer — hardware vetted by Heimdall">
+              <ShieldCheckIcon data-icon="shield-check" size={14} style={{ color: "var(--brand-teal)" }} />
+            </Tooltip>
+          )}
+        </span>
         <time className={styles.submittedAt} dateTime={row.createdAt}>
-          {SUBMISSION_DATE_FORMATTER.format(new Date(row.createdAt))}
+          {MEDIUM_DATE_FORMATTER.format(new Date(row.createdAt))}
         </time>
       </span>
     ),

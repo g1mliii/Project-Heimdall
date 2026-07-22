@@ -25,6 +25,10 @@ export { PHYSICS } from "./integrity";
 export {
   RUN_VISIBILITY,
   RUN_STATUS,
+  RUN_TERMINAL_STATUSES,
   isAggregateEligible,
   aggregateEligibilitySql,
+  writableRunStatusSql,
+  isVerifiedReviewer,
+  verifiedReviewerSql,
 } from "./visibility";

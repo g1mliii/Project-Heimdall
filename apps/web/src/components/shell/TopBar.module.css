@@ -48,6 +48,22 @@
   flex: 1;
 }
 
+.account {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.accountLink {
+  font: var(--type-label);
+  color: var(--fg-2);
+  text-decoration: none;
+}
+
+.accountLink:hover {
+  color: var(--fg-1);
+}
+
 @media (max-width: 42rem) {
   .topbar {
     gap: var(--space-3);

@@ -37,6 +37,18 @@
   --control-md: 38px;
   --control-lg: 46px;
 
+  /* ── Inline field widths ─────────────────────────────────────────
+     For controls laid out in a wrapping row (account/admin management
+     rows, the inline report form): a `width` on the control and a
+     `min-width` on the flex child that should push its neighbours to the
+     next line. App code must reach for these instead of bare px — the
+     ui_kits recreations carry raw numbers, the shipped app does not. */
+  --field-xs: 7.5rem;   /* 120 — numeric id, tight select           */
+  --field-sm: 8.25rem;  /* 132 — visibility select                  */
+  --field-md: 11.25rem; /* 180 — reason select, dense row min-width */
+  --field-lg: 12.5rem;  /* 200 — free-text input, row min-width     */
+  --field-xl: 16.25rem; /* 260 — full identifier input (Clerk ids)  */
+
   /* ── Layout ──────────────────────────────────────────────────── */
   --sidebar-w: 256px;
   --topbar-h: 60px;

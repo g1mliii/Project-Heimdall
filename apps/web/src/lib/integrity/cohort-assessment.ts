@@ -138,9 +138,20 @@ export async function recomputeGameCohortAssessments(
          left join classified on classified.run_id = base.run_id
      ), stale_assessments as (
        delete from run_cohort_assessments assessment
-        using runs run
-        where run.id = assessment.run_id
-          and run.game_id = $1
+        where (
+            assessment.game_id = $1
+            -- The Phase 8 schema migration deliberately leaves legacy rows nullable and
+            -- lets the bounded game scanner converge them. This fallback
+            -- keeps their cleanup correct during that transition.
+            or (
+              assessment.game_id is null
+              and exists (
+                select 1 from runs run
+                 where run.id = assessment.run_id
+                   and run.game_id = $1
+              )
+            )
+          )
           and not exists (
             select 1 from observations observation where observation.run_id = assessment.run_id
           )
@@ -149,15 +160,17 @@ export async function recomputeGameCohortAssessments(
               count(*) filter (where exclusion_reason = '${AGGREGATE_EXCLUSION.statisticalOutlier}') as excluded
          from assessment_candidates
      ), upserted as (
-       insert into run_cohort_assessments (run_id, assessment_version, exclusion_reason, evaluated_at)
-       select run_id, $2, exclusion_reason, now()
+       insert into run_cohort_assessments (run_id, game_id, assessment_version, exclusion_reason, evaluated_at)
+       select run_id, $1::bigint, $2, exclusion_reason, now()
          from assessment_candidates
        on conflict (run_id) do update
-          set assessment_version = excluded.assessment_version,
+          set game_id = excluded.game_id,
+              assessment_version = excluded.assessment_version,
               exclusion_reason = excluded.exclusion_reason
         -- Recomputes are queued on every cohort-changing write. Avoid a full
         -- table rewrite when the resulting durable verdict is unchanged.
         where run_cohort_assessments.assessment_version is distinct from excluded.assessment_version
+           or run_cohort_assessments.game_id is distinct from excluded.game_id
            or run_cohort_assessments.exclusion_reason is distinct from excluded.exclusion_reason
      )
      select assessed, excluded

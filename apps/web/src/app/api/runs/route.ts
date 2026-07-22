@@ -8,20 +8,28 @@ import { NextResponse } from "next/server";
 import {
   GENERATED_FRAME_TECH,
   RUN_STATUS,
+  RUN_VISIBILITY,
   createRunRequestSchema,
   hashManagementToken,
 } from "@heimdall/shared";
 import type { CreateRunResponse, Run } from "@heimdall/shared";
-import { BenchmarkSetSecretMismatchError, insertRun } from "@/lib/db";
+import { BenchmarkSetSecretMismatchError, RunOwnerUnavailableError, insertRun } from "@/lib/db";
 import { newRunId } from "@/lib/ids";
 import { framesUploadObjectKey, presignPut } from "@/lib/r2";
+import { getViewer } from "@/lib/api/auth";
 import { jsonError, parseJsonBody, rateLimits, requireRateLimit } from "@/lib/api/http";
 
 export const runtime = "nodejs";
 
 export async function POST(request: Request): Promise<NextResponse> {
   try {
-    const limited = await requireRateLimit("create-runs", request, rateLimits().createRuns);
+    const viewer = await getViewer();
+    const limited = await requireRateLimit(
+      "create-runs",
+      request,
+      rateLimits().createRuns,
+      viewer,
+    );
     if (limited) {
       return limited;
     }
@@ -29,6 +37,10 @@ export async function POST(request: Request): Promise<NextResponse> {
     const body = await parseJsonBody(request, createRunRequestSchema);
     if (body instanceof NextResponse) {
       return body;
+    }
+
+    if (body.visibility === RUN_VISIBILITY.private && !viewer) {
+      return jsonError(400, "auth-required-for-private", "sign in to create a private run");
     }
 
     const id = newRunId();
@@ -39,6 +51,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       captureSource: body.captureSource,
       visibility: body.visibility,
       status: RUN_STATUS.pending,
+      ownerId: viewer?.userId,
       // Canonical ids are SERVER-resolved on finalize (§11.9) — a client-
       // asserted id would let an uploader plant their run in any hardware
       // bucket, so strip them regardless of what the payload carried.
@@ -78,6 +91,9 @@ export async function POST(request: Request): Promise<NextResponse> {
     const response: CreateRunResponse = { id, uploadUrl, uploadObjectKey };
     return NextResponse.json(response, { status: 201 });
   } catch (error) {
+    if (error instanceof RunOwnerUnavailableError) {
+      return jsonError(409, "account-erasure-pending", "account deletion is in progress");
+    }
     if (error instanceof BenchmarkSetSecretMismatchError) {
       return jsonError(
         409,

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { UploadClient } from "@/components/upload/UploadClient";
+import { isClerkConfigured } from "@/lib/env";
 
 export const metadata: Metadata = {
   title: "Upload a benchmark log — Heimdall",
@@ -26,7 +27,7 @@ export default function UploadPage() {
         Drag a CapFrameX, PresentMon, or MangoHud export. We parse it in your browser — no
         account needed.
       </p>
-      <UploadClient />
+      <UploadClient authEnabled={isClerkConfigured()} />
     </main>
   );
 }

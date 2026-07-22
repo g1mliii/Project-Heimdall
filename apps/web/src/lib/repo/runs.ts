@@ -13,56 +13,84 @@ import {
   isAggregateEligible,
   RUN_STATUS,
   RUN_VISIBILITY,
+  writableRunStatusSql,
 } from "@heimdall/shared";
-import type { Run } from "@heimdall/shared";
+import type { OwnedRunListItem, Run } from "@heimdall/shared";
 import { query, getPool, readDiagnostics, readRun, type Queryable } from "../db";
+import type { ViewerIdentity } from "../viewer";
 
-function isPreAuthVisible(run: Pick<Run, "visibility" | "status">): boolean {
-  return (
-    run.visibility !== RUN_VISIBILITY.private &&
-    run.status !== RUN_STATUS.flagged &&
-    run.status !== RUN_STATUS.hidden
-  );
+/**
+ * The single visibility gate (§20.2c/§20.5), read by every "can this viewer
+ * see this run" call site. `hidden` is the deletion tombstone — invisible to
+ * everyone, including the owner. `private` is owner-only. `flagged`
+ * (integrity) and `moderated` (moderation, §20.5) are both owner-visible —
+ * the run's own owner should see why it's hidden — but 404 for everyone
+ * else. Everything else (unlisted/public, none of the above) is link-scoped
+ * or discoverable, unchanged from the pre-auth model. Keep this the ONLY
+ * place that answers this question — the probe-resistance property
+ * (missing/private/flagged/moderated/hidden must all read as the same 404)
+ * depends on every caller going through here.
+ *
+ * Takes a `ViewerIdentity` — ownership is a `userId` comparison and nothing
+ * here reads `role`, so callers need not pay for a `users` read.
+ */
+export function isVisibleTo(
+  run: Pick<Run, "visibility" | "status" | "ownerId">,
+  viewer: ViewerIdentity | null,
+): boolean {
+  if (run.status === RUN_STATUS.hidden) {
+    return false;
+  }
+  const isOwner = viewer !== null && viewer.userId === run.ownerId;
+  if (run.visibility === RUN_VISIBILITY.private) {
+    return isOwner;
+  }
+  if (run.status === RUN_STATUS.flagged || run.status === RUN_STATUS.moderated) {
+    return isOwner;
+  }
+  return true;
 }
 
 /**
- * Pre-auth read gate shared by GET /api/runs/:id and GET /api/runs/:id/frames:
- * missing, private, flagged, and hidden are indistinguishable (all null → 404) so a
- * probe can't confirm a private run exists. Ownership arrives in Phase 8 —
- * keep the gate HERE so both routes change together.
+ * Read gate shared by GET /api/runs/:id and the /runs/:id page: missing,
+ * private-to-a-stranger, flagged-to-a-stranger, and hidden are
+ * indistinguishable (all null → 404) so a probe can't confirm a run exists.
  */
 export async function readVisibleRun(
   id: string,
+  viewer: ViewerIdentity | null,
   db: Queryable = getPool(),
   { withDiagnostics = true }: { withDiagnostics?: boolean } = {},
 ): Promise<Run | null> {
-  // Gate before reading findings: private/flagged/hidden probes must not pay
-  // for a diagnostics query they can never observe.
+  // Gate before reading findings: a stranger's private/flagged/hidden probe
+  // must not pay for a diagnostics query they can never observe.
   const run = await readRun(id, db, { withDiagnostics: false });
-  if (!run || !isPreAuthVisible(run)) {
+  if (!run || !isVisibleTo(run, viewer)) {
     return null;
   }
   return withDiagnostics ? { ...run, diagnostics: await readDiagnostics(id, db) } : run;
 }
 
-/** Minimal pre-auth frame-read gate: the chart needs no summary or diagnostics. */
+/** Minimal frame-read gate: the chart needs no summary or diagnostics. */
 export async function readVisibleFramesState(
   id: string,
+  viewer: ViewerIdentity | null,
   db: Queryable = getPool(),
 ): Promise<{ framesObjectKey: string | null } | null> {
   const rows = await query<{
     visibility: Run["visibility"];
     status: Run["status"];
+    user_id: string | null;
     frames_object_key: string | null;
   }>(
-    `select visibility, status, frames_object_key
+    `select visibility, status, user_id, frames_object_key
        from runs
       where id = $1`,
     [id],
     db,
   );
   const row = rows[0];
-  if (!row || !isPreAuthVisible(row)) {
+  if (!row || !isVisibleTo({ visibility: row.visibility, status: row.status, ownerId: row.user_id ?? undefined }, viewer)) {
     return null;
   }
   return { framesObjectKey: row.frames_object_key };
@@ -82,11 +110,20 @@ interface BenchmarkSetAggregateRow {
  * membership can reveal another run's performance, so only public + validated
  * members in the exact same declared methodology/comparability bucket
  * participate. The database returns aggregate counts/statistics only — never a
- * member id or individual FPS value. Owner-aware private-set views arrive with
- * Phase 8 authorization.
+ * member id or individual FPS value.
+ *
+ * `viewer` is accepted (matching `readVisibleRun`/`readVisibleFramesState`'s
+ * shape) but NOT yet used to relax `isAggregateEligible` for an owner viewing
+ * their own private/unlisted run's repeatability panel — doing that safely
+ * means loosening `cohortEligibilitySql`'s `base` requirement, which is
+ * exactly the "never re-derive the aggregate guard" invariant (AGENTS.md).
+ * That's a product decision (does an owner's own-set view bypass the
+ * public+validated math?), not an implementation detail — deferred until
+ * it's made explicitly, rather than guessed at here.
  */
 export async function readVisibleBenchmarkSet(
   run: Run,
+  _viewer: ViewerIdentity | null,
   db: Queryable = getPool(),
 ): Promise<BenchmarkSetStats | null> {
   if (!run.benchmarkSetId || !isAggregateEligible(run)) {
@@ -229,24 +266,33 @@ export async function readRunFinalizeState(
 }
 
 /**
- * Token-verification read for DELETE /api/runs/:id. Deliberately the ONLY
- * place the stored hash is selected.
+ * Token-verification + ownership read for DELETE /api/runs/:id. Deliberately
+ * the ONLY place the stored hash is selected.
  */
 export async function readRunManagementTokenHash(
   id: string,
   db: Queryable = getPool(),
-): Promise<{ tokenHash: string | null; framesObjectKey: string | null } | null> {
+): Promise<{
+  tokenHash: string | null;
+  framesObjectKey: string | null;
+  ownerId: string | null;
+} | null> {
   const rows = await query<{
     anonymous_management_token_hash: string | null;
     frames_object_key: string | null;
+    user_id: string | null;
   }>(
-    "select anonymous_management_token_hash, frames_object_key from runs where id = $1",
+    "select anonymous_management_token_hash, frames_object_key, user_id from runs where id = $1",
     [id],
     db,
   );
   const row = rows[0];
   return row
-    ? { tokenHash: row.anonymous_management_token_hash, framesObjectKey: row.frames_object_key }
+    ? {
+        tokenHash: row.anonymous_management_token_hash,
+        framesObjectKey: row.frames_object_key,
+        ownerId: row.user_id,
+      }
     : null;
 }
 
@@ -281,6 +327,54 @@ export async function hideRunForDeletion(id: string, db: Queryable = getPool()):
     [id, RUN_STATUS.hidden],
   );
   return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * Authorization-aware delete tombstone. The authorization predicate is part
+ * of the UPDATE rather than a preceding read, so a claim that clears a token
+ * cannot race an already-authorized token delete into removing the new
+ * owner's run. A pre-existing `hidden` row is deliberately retryable after an
+ * R2 deletion failure.
+ */
+export async function hideAuthorizedRunForDeletion(
+  id: string,
+  authorization: { ownerId: string | null; tokenHash: string | null; isAdmin: boolean },
+  db: Queryable = getPool(),
+): Promise<{ framesObjectKey: string | null } | null> {
+  const rows = await query<{ frames_object_key: string | null }>(
+    `update runs
+        set status = $2
+      where id = $1
+        and (
+          $3::boolean
+          or ($4::text is not null and user_id = $4::text)
+          or ($5::text is not null and anonymous_management_token_hash = $5::text)
+        )
+      returning frames_object_key`,
+    [id, RUN_STATUS.hidden, authorization.isAdmin, authorization.ownerId, authorization.tokenHash],
+    db,
+  );
+  const row = rows[0];
+  return row ? { framesObjectKey: row.frames_object_key } : null;
+}
+
+/**
+ * Set-wise {@link hideRunForDeletion} / {@link deleteRun} for the account
+ * erasure cascade (§20.4), which would otherwise pay a round trip per run.
+ * The tombstone-before-R2, rows-after-R2 ordering the cascade depends on holds
+ * exactly as it does per run — it just applies to the whole set at once.
+ */
+export async function hideRunsForDeletion(ids: string[], db: Queryable = getPool()): Promise<void> {
+  if (ids.length === 0) return;
+  await db.query("update runs set status = $2 where id = any($1::text[]) and status <> $2", [
+    ids,
+    RUN_STATUS.hidden,
+  ]);
+}
+
+export async function deleteRuns(ids: string[], db: Queryable = getPool()): Promise<void> {
+  if (ids.length === 0) return;
+  await db.query("delete from runs where id = any($1::text[])", [ids]);
 }
 
 /**
@@ -388,4 +482,152 @@ export async function readStalePendingRuns(
     db,
   );
   return rows.map((row) => row.id);
+}
+
+/**
+ * Attach an anonymous run to a signed-in account (§20.2e — POST
+ * /api/runs/:id/claim). One atomic conditional UPDATE, not a read-then-write:
+ * it only succeeds if the run is still ownerless AND its management-token
+ * hash still matches what the caller already proved knowledge of (the
+ * constant-time comparison happens at the call site, against the hash read
+ * moments earlier — this WHERE clause is an optimistic-concurrency guard
+ * against a second claim racing in between, not the security check itself).
+ * The token is single-purpose: a successful claim clears the hash, so it can
+ * never be claimed — or anonymously deleted — again.
+ */
+export async function claimRun(
+  id: string,
+  userId: string,
+  tokenHash: string,
+  db: Queryable = getPool(),
+): Promise<boolean> {
+  const result = await db.query(
+    `update runs
+        set user_id = $2,
+            anonymous_management_token_hash = null
+      where id = $1
+        and user_id is null
+        and anonymous_management_token_hash = $3
+        and ${writableRunStatusSql()}`,
+    [id, userId, tokenHash],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * Owner-only visibility switch (§20.2 — PATCH /api/runs/:id). `status` is
+ * untouched: flipping to `public` does not itself grant aggregate
+ * eligibility — that still requires `validated`, unchanged and enforced
+ * solely by `isAggregateEligible`/`aggregateEligibilitySql`.
+ */
+export async function updateRunVisibility(
+  id: string,
+  visibility: Run["visibility"],
+  db: Queryable = getPool(),
+): Promise<boolean> {
+  const result = await db.query(
+    `update runs set visibility = $2
+      where id = $1 and ${writableRunStatusSql()}`,
+    [id, visibility],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * "My runs" for the account page / `GET /api/account/runs` (§20.2). Rides
+ * the covering index `runs_user_id_idx (user_id, created_at desc, id desc)`
+ * (migration 0006). `hidden` (the deletion tombstone) is excluded — from the
+ * owner's own perspective that run is gone, not just invisible to others.
+ *
+ * Uses a stable created-at/id seek cursor. An owner can always reach an older
+ * run to delete it; a high-volume account never turns this management read
+ * into an unbounded response or OFFSET scan.
+ */
+const OWNED_RUNS_PAGE_SIZE = 50;
+
+export interface OwnedRunsPage {
+  runs: OwnedRunListItem[];
+  nextCursor: string | null;
+}
+
+export class InvalidOwnedRunsCursorError extends Error {
+  constructor() {
+    super("invalid account runs cursor");
+    this.name = "InvalidOwnedRunsCursorError";
+  }
+}
+
+interface OwnedRunsCursor {
+  createdAt: string;
+  id: string;
+}
+
+function encodeOwnedRunsCursor(row: { created_at: string; id: string }): string {
+  return Buffer.from(JSON.stringify([new Date(row.created_at).toISOString(), row.id]), "utf8").toString(
+    "base64url",
+  );
+}
+
+function decodeOwnedRunsCursor(cursor: string | null | undefined): OwnedRunsCursor | null {
+  if (cursor === null || cursor === undefined) return null;
+  try {
+    const value: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+    if (
+      !Array.isArray(value) ||
+      value.length !== 2 ||
+      typeof value[0] !== "string" ||
+      Number.isNaN(Date.parse(value[0])) ||
+      typeof value[1] !== "string" ||
+      value[1].length === 0
+    ) {
+      throw new Error("invalid cursor shape");
+    }
+    return { createdAt: value[0], id: value[1] };
+  } catch {
+    throw new InvalidOwnedRunsCursorError();
+  }
+}
+
+export async function listRunsForUser(
+  userId: string,
+  db: Queryable = getPool(),
+  { cursor, limit = OWNED_RUNS_PAGE_SIZE }: { cursor?: string | null; limit?: number } = {},
+): Promise<OwnedRunsPage> {
+  const decoded = decodeOwnedRunsCursor(cursor);
+  const pageSize = Math.max(1, Math.min(limit, OWNED_RUNS_PAGE_SIZE));
+  const rows = await query<{
+    id: string;
+    game_raw: string;
+    visibility: Run["visibility"];
+    status: Run["status"];
+    created_at: string;
+    avg_fps: number | string;
+  }>(
+    `select r.id, r.game_raw, r.visibility, r.status, r.created_at, s.avg_fps
+       from runs r
+       join run_summaries s on s.run_id = r.id
+      where r.user_id = $1
+        and r.status <> '${RUN_STATUS.hidden}'
+        and (
+          $2::timestamptz is null
+          or (r.created_at, r.id) < ($2::timestamptz, $3::text)
+        )
+      order by r.created_at desc, r.id desc
+      limit $4`,
+    [userId, decoded?.createdAt ?? null, decoded?.id ?? null, pageSize + 1],
+    db,
+  );
+  const page = rows.slice(0, pageSize);
+  const last = page.at(-1);
+  return {
+    runs: page.map((row) => ({
+    id: row.id,
+    game: row.game_raw,
+    visibility: row.visibility,
+    status: row.status,
+    createdAt: new Date(row.created_at).toISOString(),
+    avgFps: Number(row.avg_fps),
+    })),
+    nextCursor: rows.length > pageSize && last ? encodeOwnedRunsCursor(last) : null,
+  };
 }

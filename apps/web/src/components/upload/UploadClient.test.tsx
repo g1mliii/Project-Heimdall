@@ -6,9 +6,15 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom/vitest";
 
-const { uploadCapture } = vi.hoisted(() => ({ uploadCapture: vi.fn() }));
+const { uploadCapture, useUser } = vi.hoisted(() => ({
+  uploadCapture: vi.fn(),
+  useUser: vi.fn(() => ({ isSignedIn: false })),
+}));
 
 vi.mock("@/lib/upload/upload-run", () => ({ uploadCapture }));
+// §20.2: the private-visibility option is Clerk-gated behind `authEnabled`.
+// Stub the hook rather than requiring a real <ClerkProvider> in tests.
+vi.mock("@clerk/nextjs", () => ({ useUser }));
 
 import { UploadClient } from "./UploadClient";
 
@@ -17,6 +23,39 @@ afterEach(cleanup);
 beforeEach(() => {
   uploadCapture.mockReset();
   uploadCapture.mockResolvedValue({ ok: false, code: "parse-failed", message: "Invalid capture" });
+  useUser.mockReset();
+  useUser.mockReturnValue({ isSignedIn: false });
+});
+
+describe("UploadClient visibility (§20.2d)", () => {
+  it("offers only unlisted/public when auth is disabled", () => {
+    render(<UploadClient />);
+    expect(screen.getByRole("button", { name: "Unlisted" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Public" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Private" })).toBeNull();
+  });
+
+  it("offers only unlisted/public when auth is enabled but signed out", () => {
+    useUser.mockReturnValue({ isSignedIn: false });
+    render(<UploadClient authEnabled />);
+    expect(screen.queryByRole("button", { name: "Private" })).toBeNull();
+  });
+
+  it("offers private when auth is enabled and signed in, and sends it on upload", async () => {
+    useUser.mockReturnValue({ isSignedIn: true });
+    const user = userEvent.setup();
+    const { container } = render(<UploadClient authEnabled />);
+
+    await user.click(screen.getByRole("button", { name: "Private" }));
+    await user.type(screen.getByLabelText("Game"), "Test Game");
+    const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(fileInput).not.toBeNull();
+    await user.upload(fileInput!, new File(["capture"], "capture.csv", { type: "text/csv" }));
+
+    await waitFor(() => expect(uploadCapture).toHaveBeenCalledTimes(1));
+    const [, options] = uploadCapture.mock.calls[0]!;
+    expect(options).toMatchObject({ visibility: "private" });
+  });
 });
 
 describe("UploadClient reproducibility details", () => {

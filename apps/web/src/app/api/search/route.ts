@@ -9,6 +9,7 @@ import { searchQuerySchema, type SearchResponse } from "@heimdall/shared";
 
 import { jsonError, parseQuery, rateLimits, requireRateLimit } from "@/lib/api/http";
 import { normalizeSearchQuery, searchCatalog } from "@/lib/repo/search";
+import { getViewerIdentity } from "@/lib/api/auth";
 
 export const runtime = "nodejs";
 
@@ -37,7 +38,12 @@ export async function GET(request: Request): Promise<NextResponse> {
       return catalogResponse(EMPTY_SEARCH);
     }
 
-    const limited = await requireRateLimit("search", request, rateLimits().search);
+    const limited = await requireRateLimit(
+      "search",
+      request,
+      rateLimits().search,
+      await getViewerIdentity(),
+    );
     if (limited) {
       return limited;
     }

@@ -1,11 +1,13 @@
 import { expect, test } from "@playwright/test";
 
-test("@visual throwaway page renders @heimdall/ui primitives on the dark canvas", async ({ page }) => {
+test("@visual home page renders the upload CTA on the dark canvas", async ({ page }) => {
   await page.goto("/");
 
-  // Primitives mount and are interactive.
-  await expect(page.getByRole("heading", { name: "Heimdall design system is wired" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Primary" })).toBeVisible();
+  // Hero + primary CTA render.
+  await expect(
+    page.getByRole("heading", { name: "Is your PC running this game well?" }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "Upload a benchmark log" })).toBeVisible();
 
   // Dark-first canvas: <body> paints with --bg-base (#0b0e14).
   const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);

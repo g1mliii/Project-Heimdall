@@ -46,6 +46,7 @@ export const runStatusSchema = z.enum([
   RUN_STATUS.validated,
   RUN_STATUS.flagged,
   RUN_STATUS.hidden,
+  RUN_STATUS.moderated,
 ]);
 
 /* ── Shared object schemas ──────────────────────────────────────────────── */
@@ -318,6 +319,8 @@ export const gameSubmissionRowSchema = z.object({
   onePercentLowFps: z.number().positive(),
   pointOnePercentLowFps: z.number().positive(),
   submittedBy: z.string().nullable(),
+  /** Verified-reviewer tier (§20.3) — marker only, never touches the aggregate math. */
+  submittedByVerified: z.boolean(),
   methodology: gameSubmissionMethodologySchema,
   isWarmup: z.boolean(),
   benchmarkSetId: z.string().nullable(),
@@ -516,14 +519,17 @@ const provenance = {
 
 /**
  * `POST /api/runs` — create a pending run. Visibility defaults to `unlisted`
- * (link-scoped, never aggregated) per the pre-auth visibility model (§11 note).
- * The game title is trimmed so normalization is idempotent.
+ * (link-scoped, never aggregated). Accepts the full `runVisibilitySchema`
+ * (including `private`) since §20.2 — the route rejects `private` from an
+ * anonymous caller (400 `auth-required-for-private`), not this schema, so the
+ * validation error distinguishes "malformed" from "not signed in." The game
+ * title is trimmed so normalization is idempotent.
  */
 export const createRunRequestSchema = z
   .object({
     game: z.string().trim().min(1),
     captureSource: captureSourceSchema,
-    visibility: preAuthRunVisibilitySchema.default(RUN_VISIBILITY.unlisted),
+    visibility: runVisibilitySchema.default(RUN_VISIBILITY.unlisted),
     hardware: hardwareSnapshotSchema,
     summary: runSummarySchema,
     generatedFrameTech: generatedFrameTechSchema.default("none"),
@@ -584,11 +590,14 @@ export type CreateRunResponse = z.infer<typeof createRunResponseSchema>;
 
 /**
  * `POST /api/runs/:id/finalize` — record summary metadata, the explicit
- * visibility choice, and (for anonymous runs) a hashed management/delete token.
+ * visibility choice, and a hashed management/delete token (issued for both
+ * anonymous AND signed-in uploads — the protocol is unchanged by accounts,
+ * §20.2). Accepts the full `runVisibilitySchema`; the route rejects `private`
+ * from an anonymous caller.
  */
 export const finalizeRunRequestSchema = z.object({
   uploadObjectKey: z.string().min(1),
-  visibility: preAuthRunVisibilitySchema,
+  visibility: runVisibilitySchema,
   managementTokenHash: z
     .string()
     .regex(/^[0-9a-f]{64}$/, "must be a lowercase sha-256 hex digest"),
@@ -619,6 +628,63 @@ export const framesUrlResponseSchema = z.object({
 });
 export type FramesUrlResponse = z.infer<typeof framesUrlResponseSchema>;
 
+/** `PATCH /api/runs/:id` — owner-only visibility switcher (§20.2). */
+export const updateRunVisibilityRequestSchema = z.object({
+  visibility: runVisibilitySchema,
+});
+export type UpdateRunVisibilityRequest = z.infer<typeof updateRunVisibilityRequestSchema>;
+
+const userRoleSchema = z.enum(["public", "verified", "admin"]);
+
+/** `GET /api/account/runs` response item — one row of "My runs" (§20.2). */
+export const ownedRunListItemSchema = z.object({
+  id: z.string().min(1),
+  game: z.string().min(1),
+  visibility: runVisibilitySchema,
+  status: runStatusSchema,
+  createdAt: z.string(),
+  avgFps: z.number(),
+});
+/** Cursor-paginated account run management list. */
+export const accountRunsResponseSchema = z.object({
+  runs: z.array(ownedRunListItemSchema),
+  nextCursor: z.string().min(1).nullable(),
+});
+export type OwnedRunListItem = z.infer<typeof ownedRunListItemSchema>;
+export type AccountRunsResponse = z.infer<typeof accountRunsResponseSchema>;
+
+/**
+ * `PATCH /api/account` — handle edit only; email stays Clerk-managed. Loose
+ * shape check here — `isValidHandle()` in `lib/repo/users.ts` is the
+ * authoritative regex + reserved-word check, run at the route so it can
+ * return one specific 400 message.
+ */
+export const updateAccountRequestSchema = z.object({
+  handle: z.string().min(1).max(32),
+});
+export type UpdateAccountRequest = z.infer<typeof updateAccountRequestSchema>;
+
+export const accountResponseSchema = z.object({
+  id: z.string().min(1),
+  handle: z.string().nullable(),
+  email: z.string().nullable(),
+  role: userRoleSchema,
+});
+export type AccountResponse = z.infer<typeof accountResponseSchema>;
+
+/** `POST /api/admin/verifications` — grant the verified-reviewer tier (§20.3). */
+export const grantVerificationRequestSchema = z.object({
+  userId: z.string().min(1),
+  hardwareVetted: z.boolean().default(false),
+});
+export type GrantVerificationRequest = z.infer<typeof grantVerificationRequestSchema>;
+
+/** `DELETE /api/admin/verifications` — revoke. */
+export const revokeVerificationRequestSchema = z.object({
+  userId: z.string().min(1),
+});
+export type RevokeVerificationRequest = z.infer<typeof revokeVerificationRequestSchema>;
+
 /** Uniform API error envelope every route returns on failure. */
 export const apiErrorSchema = z.object({
   error: z.object({
@@ -644,7 +710,13 @@ export const runResponseSchema = z.object({
   parserVersion: z.string().min(1),
   createdAt: z.string().min(1),
   framesObjectKey: z.string().optional(),
-  ownerId: z.string().optional(),
+  // `ownerId` is deliberately NOT in this wire schema (§20.3 finding): it's a
+  // raw Clerk user id, useful internally for ownership checks (`isVisibleTo`)
+  // but never something a run's public/unlisted viewers need — the
+  // submissions table already exposes attribution via `submittedBy` (a
+  // handle, not a raw id). `.parse()`ing a `Run` through this schema at the
+  // API/page boundary strips it; do not re-add without a reason a viewer
+  // needs it.
   signatureValid: z.boolean().optional(),
   capabilityManifest: capabilityManifestSchema.optional(),
   methodologyManifest: methodologyManifestSchema.optional(),
@@ -656,3 +728,75 @@ export type RunResponse = z.infer<typeof runResponseSchema>;
 /** `GET /api/runs/:id/summary` response — just the canonical summary. */
 export const runSummaryResponseSchema = runSummarySchema;
 export type RunSummaryResponse = z.infer<typeof runSummaryResponseSchema>;
+
+/* ── Moderation reports (§20.5) ─────────────────────────────────────────── */
+
+export const reportReasonSchema = z.enum(["abusive-name", "bad-faith-upload", "other"]);
+export const reportStatusSchema = z.enum(["open", "resolved", "dismissed"]);
+
+/**
+ * `POST /api/reports` — anonymous-allowed, matching every other report/ingest
+ * path's zero-auth-friction invariant. Exactly one subject id, discriminated
+ * by `subjectType`.
+ */
+export const createReportRequestSchema = z
+  .object({
+    subjectType: z.enum(["run", "game"]),
+    subjectRunId: z.string().min(1).max(64).optional(),
+    subjectGameId: z
+      .string()
+      .regex(/^\d+$/, "must be a canonical game id")
+      .max(19)
+      .refine(
+        (value) => {
+          try {
+            return BigInt(value) <= 9_223_372_036_854_775_807n;
+          } catch {
+            return false;
+          }
+        },
+        "must fit a canonical game id",
+      )
+      .optional(),
+    reason: reportReasonSchema,
+    detail: z.string().trim().max(MAX_METADATA_TEXT_LENGTH).optional(),
+  })
+  .refine(
+    (req) =>
+      req.subjectType === "run"
+        ? req.subjectRunId !== undefined && req.subjectGameId === undefined
+        : req.subjectGameId !== undefined && req.subjectRunId === undefined,
+    { path: ["subjectType"], message: "subject id must match subjectType, and only one may be set" },
+  );
+export type CreateReportRequest = z.infer<typeof createReportRequestSchema>;
+
+/** Admin queue row — `GET /api/admin/reports`. */
+export const reportRowSchema = z.object({
+  id: z.string().min(1),
+  subjectType: z.enum(["run", "game"]),
+  subjectRunId: z.string().nullable(),
+  subjectGameId: z.string().nullable(),
+  reason: reportReasonSchema,
+  detail: z.string().nullable(),
+  status: reportStatusSchema,
+  createdAt: z.string().min(1),
+});
+export type ReportRow = z.infer<typeof reportRowSchema>;
+/** Cursor-paginated moderation queue; never serialize an unbounded report set. */
+export const adminReportsResponseSchema = z.object({
+  reports: z.array(reportRowSchema),
+  nextCursor: z.string().min(1).nullable(),
+});
+export type AdminReportsResponse = z.infer<typeof adminReportsResponseSchema>;
+
+/** `PATCH /api/admin/reports/:id` — resolve or dismiss. */
+export const updateReportRequestSchema = z.object({
+  status: z.enum(["resolved", "dismissed"]),
+});
+export type UpdateReportRequest = z.infer<typeof updateReportRequestSchema>;
+
+/** `PATCH /api/admin/games/:id` — single-field display-name fix (§20.5). */
+export const updateGameRequestSchema = z.object({
+  name: z.string().trim().min(1).max(MAX_METADATA_TEXT_LENGTH),
+});
+export type UpdateGameRequest = z.infer<typeof updateGameRequestSchema>;

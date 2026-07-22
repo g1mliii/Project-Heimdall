@@ -210,6 +210,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       expect(tokenState).toEqual({
         tokenHash: tokenHashFor("run_fin_0003"),
         framesObjectKey: "runs/run_fin_0003.parquet",
+        ownerId: null,
       });
       // The general read path never carries the hash.
       const run = await readRun("run_fin_0003", db.pool);
@@ -508,6 +509,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
         db.pool,
       );
       if (!gameId || !gpuId) throw new Error("expected canonical benchmark fixture ids");
+      await db.pool.query(`insert into users (id, role) values ('user_set_private', 'public')`);
       const makeSetRun = (
         id: string,
         avgFps: number,
@@ -520,6 +522,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
           scene = "Dogtown route",
           settingsPreset = "Ultra",
           setId = benchmarkSetId,
+          ownerId,
         }: {
           isWarmup?: boolean;
           visibility?: Run["visibility"];
@@ -529,6 +532,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
           scene?: string;
           settingsPreset?: string;
           setId?: string;
+          ownerId?: string;
         } = {},
       ): Run => ({
         ...validRun,
@@ -538,6 +542,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
         summary: { ...validRun.summary, avgFps },
         framesObjectKey: `runs/${id}.parquet`,
         benchmarkSetId: setId,
+        ...(ownerId ? { ownerId } : {}),
         hardware: { ...validRun.hardware, canonicalGpuId: gpuId },
         capabilityManifest: establishedCapability,
         ...(isWarmup ? { isWarmup: true } : {}),
@@ -574,9 +579,14 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
         insertRun(makeSetRun("run_set_other_preset", 40, { settingsPreset: "Low" }), db.pool, {
           benchmarkSetSecretHash,
         }),
-        insertRun(makeSetRun("run_set_private", 40, { visibility: RUN_VISIBILITY.private }), db.pool, {
-          benchmarkSetSecretHash,
-        }),
+        insertRun(
+          makeSetRun("run_set_private", 40, {
+            visibility: RUN_VISIBILITY.private,
+            ownerId: "user_set_private",
+          }),
+          db.pool,
+          { benchmarkSetSecretHash },
+        ),
         insertRun(makeSetRun("run_set_unlisted", 40, { visibility: RUN_VISIBILITY.unlisted }), db.pool, {
           benchmarkSetSecretHash,
         }),
@@ -599,7 +609,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
         benchmarkSetId,
       ]);
 
-      const summary = await readVisibleBenchmarkSet(primary, db.pool);
+      const summary = await readVisibleBenchmarkSet(primary, null, db.pool);
       expect(summary).toMatchObject({
         sampleCount: 2,
         warmupRunCount: 1,
@@ -618,7 +628,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
         "update runs set capability_manifest_version = null where benchmark_set_id = $1",
         [benchmarkSetId],
       );
-      expect(await readVisibleBenchmarkSet(primary, db.pool)).toMatchObject({
+      expect(await readVisibleBenchmarkSet(primary, null, db.pool)).toMatchObject({
         sampleCount: 2,
         warmupRunCount: 1,
       });
@@ -630,19 +640,22 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
       await db.pool.query("update runs set game_id = null, gpu_hardware_id = null where id = $1", [
         primary.id,
       ]);
-      expect(await readVisibleBenchmarkSet(primary, db.pool)).toBeNull();
+      expect(await readVisibleBenchmarkSet(primary, null, db.pool)).toBeNull();
       await db.pool.query("update runs set game_id = $1, gpu_hardware_id = $2 where id = $3", [
         gameId,
         gpuId,
         primary.id,
       ]);
 
-      // Direct-link visibility alone is insufficient for cross-run data. Until
-      // Phase 8 adds owner authorization, an unlisted source run gets no set
-      // summary even if its label happens to match public runs.
+      // Direct-link visibility alone is insufficient for cross-run data: an
+      // unlisted source run gets no set summary even if its label happens to
+      // match public runs — and this stays true even when the viewer is the
+      // run's own owner (§20.2 deliberately does not relax this; see the
+      // readVisibleBenchmarkSet docstring in lib/repo/runs.ts for why).
       expect(
         await readVisibleBenchmarkSet(
-          { ...primary, visibility: RUN_VISIBILITY.unlisted },
+          { ...primary, visibility: RUN_VISIBILITY.unlisted, ownerId: "user_owns_primary" },
+          { userId: "user_owns_primary" },
           db.pool,
         ),
       ).toBeNull();
@@ -652,7 +665,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
         methodologyManifest: undefined,
       };
       await insertRun(profileless, db.pool, { benchmarkSetSecretHash });
-      expect(await readVisibleBenchmarkSet(profileless, db.pool)).toBeNull();
+      expect(await readVisibleBenchmarkSet(profileless, null, db.pool)).toBeNull();
 
       const routeUndeclared = makeSetRun("run_set_route_undeclared", 100);
       routeUndeclared.methodologyManifest = {
@@ -660,7 +673,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
         scene: undefined,
       };
       await insertRun(routeUndeclared, db.pool, { benchmarkSetSecretHash });
-      expect(await readVisibleBenchmarkSet(routeUndeclared, db.pool)).toBeNull();
+      expect(await readVisibleBenchmarkSet(routeUndeclared, null, db.pool)).toBeNull();
 
       const apiUndeclared = makeSetRun("run_set_api_undeclared", 100);
       apiUndeclared.methodologyManifest = {
@@ -668,7 +681,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
         graphicsApi: undefined,
       };
       await insertRun(apiUndeclared, db.pool, { benchmarkSetSecretHash });
-      expect(await readVisibleBenchmarkSet(apiUndeclared, db.pool)).toBeNull();
+      expect(await readVisibleBenchmarkSet(apiUndeclared, null, db.pool)).toBeNull();
     });
   });
 

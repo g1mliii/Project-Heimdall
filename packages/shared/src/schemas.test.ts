@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   createRunRequestSchema,
+  createReportRequestSchema,
   diagnosticSchema,
   finalizeRunRequestSchema,
+  preAuthRunVisibilitySchema,
   runResponseSchema,
   runSummarySchema,
   hardwareSnapshotSchema,
@@ -141,20 +143,26 @@ describe("DTO round-trip stability (§3.2)", () => {
     ).toBe(false);
   });
 
-  it("rejects owner-only private visibility on the pre-auth ingest DTOs", () => {
+  it("preAuthRunVisibilitySchema (desktop-client / anonymous ingest) still excludes private", () => {
+    expect(preAuthRunVisibilitySchema.safeParse(RUN_VISIBILITY.private).success).toBe(false);
+    expect(preAuthRunVisibilitySchema.safeParse(RUN_VISIBILITY.unlisted).success).toBe(true);
+    expect(preAuthRunVisibilitySchema.safeParse(RUN_VISIBILITY.public).success).toBe(true);
+  });
+
+  it("create/finalize DTOs accept private at the schema level — the route (not the schema) rejects it for an anonymous caller (§20.2d)", () => {
     expect(
       createRunRequestSchema.safeParse({
         ...validCreateRunRequest,
         visibility: RUN_VISIBILITY.private,
       }).success,
-    ).toBe(false);
+    ).toBe(true);
     expect(
       finalizeRunRequestSchema.safeParse({
         uploadObjectKey: "staging/runs/run_valid_0001.parquet",
         visibility: RUN_VISIBILITY.private,
         managementTokenHash: "a".repeat(64),
       }).success,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("requires an opaque benchmark-set id and browser-held key for intentional warm-ups", () => {
@@ -293,5 +301,28 @@ describe("schema/type drift guards (compile-time)", () => {
   it("CreateRunRequest infers to the exported type", () => {
     const req: CreateRunRequest = createRunRequestSchema.parse(validCreateRunRequest);
     expect(req.parserVersion).toBeTruthy();
+  });
+});
+
+describe("report subject validation", () => {
+  it("rejects non-numeric and out-of-range PostgreSQL bigint game ids without throwing", () => {
+    expect(() =>
+      createReportRequestSchema.safeParse({ subjectType: "game", subjectGameId: "not-a-number", reason: "other" }),
+    ).not.toThrow();
+    expect(
+      createReportRequestSchema.safeParse({ subjectType: "game", subjectGameId: "not-a-number", reason: "other" })
+        .success,
+    ).toBe(false);
+    expect(
+      createReportRequestSchema.safeParse({ subjectType: "game", subjectGameId: "9999999999999999999", reason: "other" })
+        .success,
+    ).toBe(false);
+    expect(
+      createReportRequestSchema.safeParse({
+        subjectType: "game",
+        subjectGameId: "9223372036854775807",
+        reason: "other",
+      }).success,
+    ).toBe(true);
   });
 });

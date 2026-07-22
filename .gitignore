@@ -1,0 +1,21 @@
+node_modules
+.pnpm-store
+
+# Local secrets — never commit real keys. .env.example stays tracked.
+.env
+.env.local
+.env.*.local
+
+# Build outputs
+dist
+.next
+*.tsbuildinfo
+
+# Wrangler-generated types (apps/driver-curation)
+worker-configuration.d.ts
+.wrangler
+
+# Test/tooling artifacts
+coverage
+playwright-report
+test-results

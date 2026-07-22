@@ -32,10 +32,13 @@ import { Button, Card, Stat, Diagnostic, Meter, Badge, Tabs } from '@heimdall/ui
 
 ## Status / porting
 
-Components are vendored as authored: `.jsx` (impl) + `.d.ts` (prop contract) + `.prompt.md`
-(usage). **Phase 1 §3a** finalizes the TS conversion, fonts, and build wiring when `apps/web`
-first imports the package. Until then this package has no build/test scripts (so it no-ops in
-`pnpm -r`). The contracts in the `.d.ts` files are stable — code against those.
+Components are authored directly in TypeScript: `.tsx` (impl, typed props inline) + `.prompt.md`
+(usage). `tsup` builds `dist/` (`pnpm --filter @heimdall/ui build`); `apps/web` imports the built
+entrypoint, so run that build first on a clean checkout if web tests fail to resolve
+`@heimdall/ui`. Fonts are self-hosted by the web app via `next/font/google` in
+`apps/web/src/app/layout.tsx`, exposed as CSS variables that `src/tokens/typography.css` resolves
+(see `src/tokens/fonts.css`). The adherence ruleset is wired into `apps/web`'s ESLint config as an
+error-level rule set, so `pnpm lint` fails on drift.
 
 ## Updating the kit
 

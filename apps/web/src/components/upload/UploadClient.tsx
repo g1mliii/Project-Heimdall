@@ -10,6 +10,7 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { useUser } from "@clerk/nextjs";
 import {
   Badge,
   Button,
@@ -43,7 +44,43 @@ import {
   XIcon,
 } from "./icons";
 
-type Visibility = "unlisted" | "public";
+type Visibility = "private" | "unlisted" | "public";
+
+const VISIBILITY_OPTIONS: { value: Visibility; label: string }[] = [
+  { value: "unlisted", label: "Unlisted" },
+  { value: "public", label: "Public" },
+];
+const VISIBILITY_OPTIONS_SIGNED_IN: { value: Visibility; label: string }[] = [
+  { value: "private", label: "Private" },
+  ...VISIBILITY_OPTIONS,
+];
+
+/**
+ * `useUser()` throws without a `<ClerkProvider>` ancestor, so this must only
+ * ever be mounted when `authEnabled` is true (§20.1a) — matches the pattern
+ * in components/shell/TopBar.tsx. Two component TYPES chosen at the call
+ * site (not a hook called conditionally inside one component) keeps this
+ * legal under the rules of hooks.
+ */
+function VisibilityFieldSignedInAware({
+  visibility,
+  onChange,
+  disabled,
+}: {
+  visibility: Visibility;
+  onChange: (value: Visibility) => void;
+  disabled: boolean;
+}) {
+  const { isSignedIn } = useUser();
+  return (
+    <Segmented
+      value={visibility}
+      onChange={(value) => onChange(value as Visibility)}
+      options={isSignedIn ? VISIBILITY_OPTIONS_SIGNED_IN : VISIBILITY_OPTIONS}
+      disabled={disabled}
+    />
+  );
+}
 
 interface BatchItem {
   file: File;
@@ -129,7 +166,7 @@ function TokenCopyField({
   );
 }
 
-export function UploadClient() {
+export function UploadClient({ authEnabled = false }: { authEnabled?: boolean }) {
   const [mode, setMode] = React.useState<Mode>({ kind: "idle" });
   const [game, setGame] = React.useState("");
   const [gameError, setGameError] = React.useState<string | null>(null);
@@ -857,7 +894,10 @@ export function UploadClient() {
         </div>
       )}
 
-      {/* Visibility — pre-auth model: unlisted (default) or public. */}
+      {/* Visibility — unlisted (default) or public for everyone; private only
+          when signed in (§20.2d), since a logged-out owner could never see it
+          again. Anonymous path stays pixel-identical: authEnabled false never
+          mounts a Clerk hook. */}
       <div style={{ marginTop: "var(--space-6)" }}>
         <span
           className="heimdall-overline"
@@ -865,19 +905,26 @@ export function UploadClient() {
         >
           Visibility
         </span>
-        <Segmented
-          value={visibility}
-          onChange={(value) => setVisibility(value as Visibility)}
-          options={[
-            { value: "unlisted", label: "Unlisted" },
-            { value: "public", label: "Public" },
-          ]}
-          disabled={busy}
-        />
+        {authEnabled ? (
+          <VisibilityFieldSignedInAware
+            visibility={visibility}
+            onChange={setVisibility}
+            disabled={busy}
+          />
+        ) : (
+          <Segmented
+            value={visibility}
+            onChange={(value) => setVisibility(value as Visibility)}
+            options={VISIBILITY_OPTIONS}
+            disabled={busy}
+          />
+        )}
         <p style={{ font: "var(--type-caption)", color: "var(--fg-3)", marginTop: "var(--space-2)" }}>
-          {visibility === "unlisted"
-            ? "Link only — excluded from public averages."
-            : "Eligible for game distributions once validated."}
+          {visibility === "private"
+            ? "Owner-only — a stranger gets a 404. Sign in to manage it later."
+            : visibility === "unlisted"
+              ? "Link only — excluded from public averages."
+              : "Eligible for game distributions once validated."}
         </p>
       </div>
     </div>

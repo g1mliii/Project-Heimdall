@@ -27,6 +27,7 @@ import {
   cohortObservationsSql,
   comparabilityKeySql,
   comparabilityProfileSql,
+  verifiedReviewerSql,
 } from "@heimdall/shared";
 import type {
   CohortDistribution,
@@ -88,6 +89,20 @@ const FILTER_SQL = `and ($2::bigint is null or r.gpu_hardware_id = $2::bigint)
     and ($5::text is null or r.settings_preset = $5::text)
     and ($6::text is null or r.upscaler = $6::text)
     and ($7::text is null or r.ray_tracing = $7::text)`;
+
+/**
+ * §20.3 verified-reviewer filter — appended (not a new `$n` placeholder) so
+ * it never disturbs the existing positional params shared across this file's
+ * two queries. The role predicate comes from `verifiedReviewerSql` in
+ * packages/shared so this filter and the submissions table's shield-check
+ * marker (`repo/games.ts`) can never disagree about who counts as verified —
+ * they did, and an admin's badged run vanished when the toggle went on.
+ * Marker/filter only per §20.3 — never touches the math (mean/percentiles
+ * are computed the same way over whatever set of runs passes this filter).
+ */
+const VERIFIED_ONLY_SQL = `and exists (
+      select 1 from users u where u.id = r.user_id and ${verifiedReviewerSql("u")}
+    )`;
 
 interface GameRow {
   id: string;
@@ -322,6 +337,7 @@ export async function readGameDistribution(
   const metricSql = METRIC_SQL[q.metric];
   const filters = filterParams(q);
   const direction = METRIC_DIRECTION[q.metric];
+  const verifiedOnlySql = q.verifiedOnly ? VERIFIED_ONLY_SQL : "";
   // Scoped to this title INSIDE the union so the set branch's window function
   // ranks one game's members, not the whole catalog's (see cohortObservationsSql).
   const observationsSql = cohortObservationsSql({ scopeSql: "r.game_id = $1" });
@@ -358,6 +374,7 @@ export async function readGameDistribution(
           left join hardware gpu on gpu.id = r.gpu_hardware_id and gpu.kind = 'gpu'
          where r.game_id = $1
            ${FILTER_SQL}
+           ${verifiedOnlySql}
         group by ck
        ), selected_cohorts as materialized (
          select cohort_counts.*,
@@ -382,8 +399,9 @@ export async function readGameDistribution(
          join observations obs on true
          join runs r on r.id = obs.run_id
          join run_summaries s on s.run_id = r.id
-        where ${comparabilityKeySql("r")} = selected.ck
-       ),
+         where ${comparabilityKeySql("r")} = selected.ck
+           ${verifiedOnlySql}
+        ),
        ${cohortOutlierClassificationSql("metrics")},
        distribution_stats as materialized (
          select ck,
@@ -465,6 +483,7 @@ export async function readGameDistribution(
           where r.game_id = $1
             and ${cohortEligibilitySql("r", { allowBenchmarkSetMembers: true })}
             ${FILTER_SQL}
+            ${verifiedOnlySql}
           group by selected.ck
        ),
        bucket_summaries as materialized (

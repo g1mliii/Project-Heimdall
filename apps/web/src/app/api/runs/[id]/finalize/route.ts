@@ -11,6 +11,7 @@ import { NextResponse } from "next/server";
 import {
   INGEST_LIMITS,
   RUN_STATUS,
+  RUN_VISIBILITY,
   UNKNOWN_HARDWARE,
   finalizeRunRequestSchema,
 } from "@heimdall/shared";
@@ -28,6 +29,7 @@ import {
   headObject,
   stagingCleanupNotBefore,
 } from "@/lib/r2";
+import { getViewerIdentity } from "@/lib/api/auth";
 import { jsonError, parseJsonBody, rateLimits, requireRateLimit } from "@/lib/api/http";
 
 export const runtime = "nodejs";
@@ -54,7 +56,13 @@ async function cleanupFinalizedCopy(id: string, key: string, context: string): P
 
 export async function POST(request: Request, context: Context): Promise<NextResponse> {
   try {
-    const limited = await requireRateLimit("finalize-run", request, rateLimits().finalize);
+    const viewer = await getViewerIdentity();
+    const limited = await requireRateLimit(
+      "finalize-run",
+      request,
+      rateLimits().finalize,
+      viewer,
+    );
     if (limited) {
       return limited;
     }
@@ -81,6 +89,22 @@ export async function POST(request: Request, context: Context): Promise<NextResp
     }
     if (run.status !== RUN_STATUS.pending || run.framesObjectKey) {
       return jsonError(409, "already-finalized", "run was already finalized");
+    }
+
+    // Ownership is fixed at create (POST /api/runs) — finalize never assigns
+    // it. A mismatch means someone else's pending run (404s, same as any
+    // other not-found — this id isn't yours to confirm exists). An anonymous
+    // run can't finalize as private: attaching an owner after the fact is the
+    // claim flow's job (§20.2e), not finalize's.
+    if (run.ownerId && run.ownerId !== viewer?.userId) {
+      return jsonError(404, "not-found", "run not found");
+    }
+    if (body.visibility === RUN_VISIBILITY.private && !run.ownerId) {
+      return jsonError(
+        400,
+        "auth-required-for-private",
+        "an anonymous run cannot finalize as private",
+      );
     }
 
     // §11.10: the object must exist and fit before we commit to it. The

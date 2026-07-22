@@ -7,7 +7,6 @@
  */
 
 import { readdir, readFile } from "node:fs/promises";
-import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import pg from "pg";
 import type { VerificationJobStatus } from "@heimdall/shared";
@@ -21,7 +20,7 @@ import {
   gpuVendorSchema,
   validRun,
 } from "@heimdall/shared";
-import { migrate } from "../../../../infra/db/migrate.mjs";
+import { migrate, migrationDatabaseUrl } from "../../../../infra/db/migrate.mjs";
 import { createTestDb, testDbAvailable, type TestDb } from "./testing/test-db";
 import { insertRun, readRun } from "./db";
 
@@ -37,6 +36,17 @@ function fixtureRunWithId(id: string): typeof validRun {
 }
 
 const canRun = testDbAvailable("db.test");
+
+describe("migration CLI connection selection", () => {
+  it("falls back to DATABASE_URL when the optional migration URL is blank", () => {
+    expect(
+      migrationDatabaseUrl({
+        MIGRATION_DATABASE_URL: "",
+        DATABASE_URL: "postgres://app-user@localhost/heimdall",
+      }),
+    ).toBe("postgres://app-user@localhost/heimdall");
+  });
+});
 
 describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
   let db: TestDb;
@@ -87,6 +97,11 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0031_cohort_assessment_queue.sql",
       "0032_cohort_assessment_enqueue.sql",
       "0033_cohort_assessment_enqueue_generation.sql",
+      "0034_run_moderation_status.sql",
+      "0035_reports.sql",
+      "0036_phase_8_schema.sql",
+      "0037_phase_8_online_indexes.sql",
+      "0038_phase_8_validate_constraints.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
@@ -95,6 +110,9 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     expect(rows.map((r) => r.table_name).sort()).toEqual(
       [
         "benchmark_sets",
+        "account_erasure_jobs",
+        "account_erasure_tombstones",
+        "clerk_webhook_events",
         "cohort_assessment_jobs",
         "cohort_assessment_scan_state",
         "comparisons",
@@ -106,6 +124,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
         "hardware",
         "hardware_aliases",
         "rate_limits",
+        "reports",
         "reprocess_jobs",
         "reprocess_watermarks",
         "run_cohort_assessments",
@@ -153,7 +172,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     ]);
   });
 
-  it("applies 0026 cleanly to an already-populated 0025 database", async () => {
+  it("migrates an already-populated 0025 database to the current schema", async () => {
     const schema = "phase_6_7_populated_migration";
     await pool.query(`drop schema if exists "${schema}" cascade; create schema "${schema}"`);
     const populated = new pg.Pool({
@@ -170,15 +189,12 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
            applied_at timestamptz not null default now()
          )`,
       );
-      const migrationsDir = path.resolve(
-        import.meta.dirname,
-        "../../../../infra/db/migrations",
-      );
+      const migrationsDir = new URL("../../../../infra/db/migrations/", import.meta.url);
       const files = (await readdir(migrationsDir))
-        .filter((file) => file.endsWith(".sql") && file !== "0026_reprocess_jobs.sql")
+        .filter((file) => file.endsWith(".sql") && file <= "0025_runs_game_fk_index.sql")
         .sort();
       for (const file of files) {
-        await populated.query(await readFile(path.join(migrationsDir, file), "utf8"));
+        await populated.query(await readFile(new URL(file, migrationsDir), "utf8"));
         await populated.query("insert into schema_migrations (version) values ($1)", [file]);
       }
       await populated.query(
@@ -200,7 +216,9 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
          )`,
       );
 
-      expect(await migrate(populated)).toEqual(["0026_reprocess_jobs.sql"]);
+      const applied = await migrate(populated);
+      expect(applied[0]).toBe("0026_reprocess_jobs.sql");
+      expect(applied).toContain("0037_phase_8_online_indexes.sql");
       const run = await populated.query<{
         status: string;
         capability_manifest_version: number | null;
@@ -263,6 +281,12 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "hardware_aliases_normalized_name_trgm_idx",
       "runs_game_recent_idx",
       "runs_game_scene_recent_idx",
+      "account_erasure_jobs_due_idx",
+      "clerk_webhook_events_received_at_idx",
+      "reports_open_idx",
+      "reports_reporter_user_id_idx",
+      "reports_resolved_by_idx",
+      "run_cohort_assessments_game_id_idx",
     ]) {
       expect(names).toContain(expected);
     }

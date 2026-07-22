@@ -69,7 +69,23 @@ sensor telemetry). In combination this is a **quasi-identifying hardware fingerp
 - It is subject to the deletion / right-to-erasure path alongside the run.
 - Aggregate pages group on **canonical** hardware/game ids (§4.4), never raw display strings.
 
-## 6. Encryption posture (§1.5)
+## 6. Account erasure and delivery replay fence (§20.4)
+
+Account deletion is a durable, bounded job: it first prevents new owned writes,
+then removes R2 objects, run rows, and finally the account row. This ordering
+prevents the users-to-runs foreign key from cascading a run row before its
+quasi-identifying frame data has been removed.
+
+- To prevent a delayed browser session or an out-of-order Clerk profile webhook
+  from recreating an erased account, we retain one one-way, domain-separated
+  SHA-256 value derived from the Clerk id. We do **not** retain the raw Clerk id,
+  handle, email, role, runs, or hardware snapshot for this purpose.
+- Svix event identifiers are deduplicated, retained for 30 days, then pruned in
+  bounded maintenance batches. They are delivery state, not an audit log.
+- The irreversible fence is limited to suppressing replay of a deleted account;
+  it is never surfaced in the product or used for profiling/analytics.
+
+## 7. Encryption posture (§1.5)
 
 - **In transit:** HTTPS everywhere — uploads (direct-to-R2 presigned PUT), API, and dashboard.
 - **At rest:** encryption via **Neon** (Postgres) and **Cloudflare R2** platform defaults.

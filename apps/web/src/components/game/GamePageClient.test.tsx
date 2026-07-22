@@ -39,6 +39,7 @@ function submission(
     onePercentLowFps: 98.1,
     pointOnePercentLowFps: 71.4,
     submittedBy: null,
+    submittedByVerified: false,
     methodology: {
       profileComplete: true,
       resolution: "2560x1440",
@@ -110,6 +111,23 @@ describe("GamePageClient (§17.7)", () => {
     expect(container.querySelector("[data-chart], canvas")).toBeNull();
     expect(container.querySelector("[data-icon='shield-check']")).toBeNull();
     expect(screen.queryByText(/\d+\s+(?:public\s+)?runs/i)).not.toBeInTheDocument();
+  });
+
+  it("shows a verified-reviewer shield only on submissions with submittedByVerified (§20.3)", () => {
+    const rows = [
+      submission("verified-row", { submittedBy: "ada", submittedByVerified: true }),
+      submission("plain-row", { submittedBy: "grace", submittedByVerified: false }),
+    ];
+    const { container } = render(
+      <GamePageClient
+        game={game}
+        initialDistribution={null}
+        loadDistribution={idleDistributionLoader}
+        initialSubmissions={{ rows, nextCursor: null }}
+      />,
+    );
+
+    expect(container.querySelectorAll("[data-icon='shield-check']")).toHaveLength(1);
   });
 
   it("replaces the table with the selected workload page", async () => {

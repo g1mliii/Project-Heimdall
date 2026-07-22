@@ -121,6 +121,7 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
       `insert into benchmark_sets (id, secret_hash) values ($1, 'phase-6-7-test')`,
       [benchmarkSetId],
     );
+    await db.pool.query(`insert into users (id, role) values ('user_reprocess_property', 'public')`);
   }, 240_000);
 
   afterAll(async () => {
@@ -187,6 +188,9 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
           status: generated.status,
           methodologyManifest: generated.profileEstablished ? methodology : undefined,
           capabilityManifest: generated.capabilityEstablished ? capability : undefined,
+          ...(generated.visibility === RUN_VISIBILITY.private
+            ? { ownerId: "user_reprocess_property" }
+            : {}),
           ...(generated.warmup ? { isWarmup: true } : {}),
         });
         await insertRun(run, db.pool);

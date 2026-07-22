@@ -37,7 +37,8 @@ describe("GET /api/search (§17.6)", () => {
       hardware: [],
     });
     expect(searchMock).toHaveBeenCalledWith("cyber");
-    expect(rateLimitMock).toHaveBeenCalledWith("search", "local", 600, 3600);
+    // §20.2f: anonymous callers key by ip, prefixed to disambiguate from user:{id}.
+    expect(rateLimitMock).toHaveBeenCalledWith("search", "ip:unknown", 600, 3600);
   });
 
   it("treats a short query as an empty normal state without touching the limiter or repo", async () => {

@@ -28,6 +28,23 @@ const MIGRATION_LOCK_KEY = 0x4865696d; // "Heim"
 /** Give up rather than block a CI job forever behind a stuck lock. */
 const LOCK_TIMEOUT_MS = 30_000;
 const LOCK_POLL_MS = 250;
+/** Fail a deploy rather than waiting indefinitely behind application traffic. */
+const DDL_LOCK_TIMEOUT_MS = 5_000;
+const DDL_STATEMENT_TIMEOUT_MS = 120_000;
+const NON_TRANSACTIONAL_DIRECTIVE = /^\s*--\s*migrate:nontransactional\s*$/m;
+const NON_TRANSACTIONAL_STATEMENT_DIRECTIVE = /^\s*--\s*migrate:statement\s*$/m;
+
+/**
+ * Concurrent DDL may not share a PostgreSQL transaction block. `pg` sends a
+ * multi-statement query as one implicit transaction, so a non-transactional
+ * migration that needs more than one concurrent operation marks each one with
+ * `-- migrate:statement`. Keep the legacy one-statement form working.
+ */
+function nonTransactionalStatements(sql) {
+  const sections = sql.split(NON_TRANSACTIONAL_STATEMENT_DIRECTIVE);
+  if (sections.length === 1) return [sql];
+  return sections.slice(1).filter((section) => section.trim().length > 0);
+}
 
 /**
  * Rewrite a Neon pooled host to its direct equivalent (`-pooler` is PgBouncer;
@@ -44,6 +61,17 @@ export function directConnectionString(connectionString) {
   } catch {
     return connectionString;
   }
+}
+
+/**
+ * Prefer a separately provisioned migration-owner URL, but treat an empty
+ * optional value exactly like an unset one so local/dev DATABASE_URL remains
+ * a usable fallback.
+ *
+ * @param {{ MIGRATION_DATABASE_URL?: string, DATABASE_URL?: string }} env
+ */
+export function migrationDatabaseUrl(env = process.env) {
+  return env.MIGRATION_DATABASE_URL || env.DATABASE_URL;
 }
 
 /**
@@ -84,11 +112,11 @@ function assertDirectConnection(pool) {
  * silent hang. Poll the non-blocking variant to a deadline so a concurrent (or
  * abandoned) runner surfaces as an error instead.
  */
-async function acquireMigrationLock(client, timeoutMs) {
+async function acquireMigrationLock(client, lockKey, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const { rows } = await client.query("select pg_try_advisory_lock($1) as locked", [
-      MIGRATION_LOCK_KEY,
+      lockKey,
     ]);
     if (rows[0].locked) return;
     if (Date.now() >= deadline) {
@@ -108,17 +136,26 @@ async function acquireMigrationLock(client, timeoutMs) {
  * idempotence.
  *
  * @param {pg.Pool} pool
- * @param {{ log?: (message: string) => void, lockTimeoutMs?: number }} [options]
+ * @param {{ log?: (message: string) => void, lockKey?: number, lockTimeoutMs?: number, ddlLockTimeoutMs?: number, ddlStatementTimeoutMs?: number }} [options]
  * @returns {Promise<string[]>}
  */
-export async function migrate(pool, { log = () => {}, lockTimeoutMs = LOCK_TIMEOUT_MS } = {}) {
+export async function migrate(
+  pool,
+  {
+    log = () => {},
+    lockKey = MIGRATION_LOCK_KEY,
+    lockTimeoutMs = LOCK_TIMEOUT_MS,
+    ddlLockTimeoutMs = DDL_LOCK_TIMEOUT_MS,
+    ddlStatementTimeoutMs = DDL_STATEMENT_TIMEOUT_MS,
+  } = {},
+) {
   assertDirectConnection(pool);
   const client = await pool.connect();
   const applied = [];
   let broken = false;
   let locked = false;
   try {
-    await acquireMigrationLock(client, lockTimeoutMs);
+    await acquireMigrationLock(client, lockKey, lockTimeoutMs);
     locked = true;
     await client.query(`
       create table if not exists schema_migrations (
@@ -136,17 +173,42 @@ export async function migrate(pool, { log = () => {}, lockTimeoutMs = LOCK_TIMEO
         continue;
       }
       const sql = await readFile(join(migrationsDir, file), "utf8");
-      await client.query("begin");
+      const nonTransactional = NON_TRANSACTIONAL_DIRECTIVE.test(sql);
       try {
-        await client.query(sql);
-        await client.query("insert into schema_migrations (version) values ($1)", [file]);
-        await client.query("commit");
+        if (nonTransactional) {
+          // CREATE/DROP INDEX CONCURRENTLY cannot run in a transaction block.
+          // Reset the direct session afterwards so a caller-owned pool never
+          // inherits migration-only limits.
+          await client.query(
+            "select set_config('lock_timeout', $1, false), set_config('statement_timeout', $2, false)",
+            [`${ddlLockTimeoutMs}ms`, `${ddlStatementTimeoutMs}ms`],
+          );
+          try {
+            for (const statement of nonTransactionalStatements(sql)) {
+              await client.query(statement);
+            }
+            await client.query("insert into schema_migrations (version) values ($1)", [file]);
+          } finally {
+            await client.query("reset lock_timeout; reset statement_timeout");
+          }
+        } else {
+          await client.query("begin");
+          await client.query(
+            "select set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)",
+            [`${ddlLockTimeoutMs}ms`, `${ddlStatementTimeoutMs}ms`],
+          );
+          await client.query(sql);
+          await client.query("insert into schema_migrations (version) values ($1)", [file]);
+          await client.query("commit");
+        }
       } catch (error) {
-        // Guarded: if the connection died, an unguarded rollback would replace
-        // the informative "migration X failed" error with a bare network error.
-        await client.query("rollback").catch(() => {
-          broken = true;
-        });
+        if (!nonTransactional) {
+          // Guarded: if the connection died, an unguarded rollback would replace
+          // the informative "migration X failed" error with a bare network error.
+          await client.query("rollback").catch(() => {
+            broken = true;
+          });
+        }
         throw new Error(`migration ${file} failed: ${error.message}`, { cause: error });
       }
       applied.push(file);
@@ -157,7 +219,7 @@ export async function migrate(pool, { log = () => {}, lockTimeoutMs = LOCK_TIMEO
     // Only release what this session actually took — unlocking a lock we never
     // acquired would no-op noisily and, worse, read as if it had been held.
     if (locked) {
-      await client.query("select pg_advisory_unlock($1)", [MIGRATION_LOCK_KEY]).catch(() => {
+      await client.query("select pg_advisory_unlock($1)", [lockKey]).catch(() => {
         broken = true;
       });
     }
@@ -169,7 +231,10 @@ export async function migrate(pool, { log = () => {}, lockTimeoutMs = LOCK_TIMEO
 
 // CLI entry point.
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  const databaseUrl = process.env.DATABASE_URL;
+  // Production runtime credentials should be least-privilege. Operators can
+  // provide a separate migration-owner URL; DATABASE_URL remains a local-dev
+  // fallback so existing environments do not break.
+  const databaseUrl = migrationDatabaseUrl();
   if (!databaseUrl) {
     console.error("DATABASE_URL is not set — see .env.example.");
     process.exit(1);

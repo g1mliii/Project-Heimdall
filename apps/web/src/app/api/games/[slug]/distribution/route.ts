@@ -13,7 +13,9 @@ import { NextResponse } from "next/server";
 import { gameDistributionQuerySchema } from "@heimdall/shared";
 
 import { jsonError, parseQuery, rateLimits, requireRateLimit } from "@/lib/api/http";
+import { isQueryCanceled } from "@/lib/db";
 import { readGameDistribution } from "@/lib/repo/distribution";
+import { getViewerIdentity } from "@/lib/api/auth";
 
 export const runtime = "nodejs";
 
@@ -26,7 +28,12 @@ export async function GET(request: Request, context: Context): Promise<NextRespo
     const parsed = parseQuery(request, gameDistributionQuerySchema);
     if (parsed instanceof NextResponse) return parsed;
 
-    const limited = await requireRateLimit("distribution", request, rateLimits().search);
+    const limited = await requireRateLimit(
+      "distribution",
+      request,
+      rateLimits().search,
+      await getViewerIdentity(),
+    );
     if (limited) return limited;
 
     const { slug } = await context.params;
@@ -40,6 +47,20 @@ export async function GET(request: Request, context: Context): Promise<NextRespo
     const cacheControl = parsed.viewerRunId ? PRIVATE_CACHE : SHARED_CACHE;
     return NextResponse.json(distribution, { headers: { "Cache-Control": cacheControl } });
   } catch (error) {
+    // Exact percentiles/MAD are intentionally never approximated from a
+    // partial cohort. If the database budget expires, be candid and let the
+    // shared edge cache serve a recent response on the next retry instead of
+    // returning a misleading curve or a generic 500.
+    if (isQueryCanceled(error)) {
+      const unavailable = jsonError(
+        503,
+        "temporarily-unavailable",
+        "distribution is temporarily unavailable; retry shortly",
+      );
+      unavailable.headers.set("Cache-Control", PRIVATE_CACHE);
+      unavailable.headers.set("Retry-After", "5");
+      return unavailable;
+    }
     console.error("GET /api/games/:slug/distribution failed", error);
     return jsonError(500, "internal", "distribution read failed");
   }

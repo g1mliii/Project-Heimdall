@@ -34,7 +34,12 @@ import styles from "./DistributionSection.module.css";
 
 export type GameDistributionLoader = (
   slug: string,
-  query: { metric: DistributionMetric; sceneType?: SceneType; viewerRunId?: string },
+  query: {
+    metric: DistributionMetric;
+    sceneType?: SceneType;
+    viewerRunId?: string;
+    verifiedOnly?: boolean;
+  },
   signal?: AbortSignal,
 ) => Promise<ApiResult<GameDistributionResponse>>;
 
@@ -176,6 +181,7 @@ export function DistributionSection({
   const [data, setData] = React.useState(initial);
   const [metric, setMetric] = React.useState<DistributionMetric>(initial?.metric ?? "avg-fps");
   const [workload, setWorkload] = React.useState<Workload>("all");
+  const [verifiedOnly, setVerifiedOnly] = React.useState(false);
   const [selectedCohortKey, setSelectedCohortKey] = React.useState<string | null>(() =>
     cohortKey(initial?.cohorts[0]),
   );
@@ -217,6 +223,7 @@ export function DistributionSection({
         metric,
         ...(workload === "all" ? {} : { sceneType: workload }),
         ...(viewerRunId ? { viewerRunId } : {}),
+        ...(verifiedOnly ? { verifiedOnly: true } : {}),
       },
       nextController.signal,
     ).then((result) => {
@@ -238,7 +245,7 @@ export function DistributionSection({
       setError(loadError instanceof Error ? loadError.message : "The distribution could not be read.");
       setLoading(false);
     });
-  }, [metric, workload, viewerRunId, game.slug, loadDistribution, reloadToken]);
+  }, [metric, workload, verifiedOnly, viewerRunId, game.slug, loadDistribution, reloadToken]);
 
   const options = React.useMemo(() => (data ? cohortOptions(data) : []), [data]);
   // Cohorts arrive with the viewer's own bucket pinned first, then most-observed.
@@ -285,10 +292,11 @@ export function DistributionSection({
           options={WORKLOAD_OPTIONS}
         />
         <div className={styles.spacer} />
-        {/* Placeholder for the Phase 8 verified-tier filter: the read model does
-            not honour it yet, so it stays inert rather than carrying state that
-            never reaches a query. */}
-        <Switch checked={false} readOnly disabled label="Verified only" />
+        <Switch
+          checked={verifiedOnly}
+          onChange={(event) => setVerifiedOnly(event.target.checked)}
+          label="Verified only"
+        />
       </div>
 
       <p className={styles.caveat}>

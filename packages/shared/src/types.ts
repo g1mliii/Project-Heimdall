@@ -292,6 +292,8 @@ export interface GameSubmissionRow {
   onePercentLowFps: number;
   pointOnePercentLowFps: number;
   submittedBy: string | null;
+  /** Verified-reviewer tier (§20.3) — marker only, never touches the aggregate math. */
+  submittedByVerified: boolean;
   methodology: GameSubmissionMethodology;
   isWarmup: boolean;
   benchmarkSetId: string | null;

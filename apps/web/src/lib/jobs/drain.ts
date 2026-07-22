@@ -24,6 +24,8 @@ import {
   type ReprocessKind,
 } from "../repo/reprocess";
 import { pruneRateLimits } from "../repo/rate-limit";
+import { drainUserErasures } from "../repo/erasure";
+import { pruneClerkWebhookEvents } from "../repo/users";
 import {
   completeStagingCleanupJob,
   claimNextStagingCleanupJob,
@@ -412,6 +414,10 @@ export interface MaintenancePassResult
   cleanedStalePending: number;
   cleanedFinalizedStaging: number;
   prunedRateLimitWindows: number;
+  prunedClerkWebhookEvents: number;
+  erasedAccounts: number;
+  erasureRetries: number;
+  erasedRuns: number;
 }
 
 /** Keep cleanup queues moving even when verification work is continuously backlogged. */
@@ -442,21 +448,26 @@ export async function runMaintenancePass(
   let cleanedStalePending: number;
   let cleanedFinalizedStaging: number;
   let prunedRateLimitWindows: number;
+  let prunedClerkWebhookEvents: number;
   let reprocessed: ReprocessDrainResult;
   let cohortAssessed: CohortAssessmentDrainResult;
+  let erasures: Awaited<ReturnType<typeof drainUserErasures>>;
   if (hasTimeRemaining(deadlineAt)) {
     [
       drained,
       cleanedStalePending,
       cleanedFinalizedStaging,
       prunedRateLimitWindows,
+      prunedClerkWebhookEvents,
       reprocessed,
       cohortAssessed,
+      erasures,
     ] = await Promise.all([
       drainJobs({ maxJobs, deadlineAt: deadlineAt - maintenanceReserveMs }, deps),
       cleanupStalePending(deps, { deadlineAt }),
       cleanupFinalizedStaging(deps, { deadlineAt }),
       pruneRateLimits(deps.db),
+      pruneClerkWebhookEvents({}, deps.db),
       drainReprocessJobs(
         { maxJobs: REPROCESS_MAX_JOBS_PER_PASS, deadlineAt: deadlineAt - maintenanceReserveMs },
         deps,
@@ -468,14 +479,17 @@ export async function runMaintenancePass(
         },
         deps,
       ),
+      drainUserErasures({ deadlineAt }, deps),
     ]);
   } else {
     drained = emptyDrainResult();
     cleanedStalePending = 0;
     cleanedFinalizedStaging = 0;
     prunedRateLimitWindows = 0;
+    prunedClerkWebhookEvents = 0;
     reprocessed = emptyReprocessDrainResult();
     cohortAssessed = emptyCohortAssessmentDrainResult();
+    erasures = { claimed: 0, completed: 0, retried: 0, deletedRuns: 0 };
   }
   return {
     ...drained,
@@ -484,5 +498,9 @@ export async function runMaintenancePass(
     cleanedStalePending,
     cleanedFinalizedStaging,
     prunedRateLimitWindows,
+    prunedClerkWebhookEvents,
+    erasedAccounts: erasures.completed,
+    erasureRetries: erasures.retried,
+    erasedRuns: erasures.deletedRuns,
   };
 }

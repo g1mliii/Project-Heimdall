@@ -78,6 +78,11 @@ export function isUniqueViolation(error: unknown, constraint?: string): boolean 
   return pgError.code === "23505" && (constraint === undefined || pgError.constraint === constraint);
 }
 
+/** PostgreSQL statement_timeout / explicit cancel (SQLSTATE 57014). */
+export function isQueryCanceled(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: string }).code === "57014";
+}
+
 /** Typed query wrapper. */
 export async function query<Row extends pg.QueryResultRow>(
   text: string,
@@ -472,6 +477,14 @@ export class BenchmarkSetSecretMismatchError extends Error {
   }
 }
 
+/** The signed-in owner crossed the durable account-erasure fence. */
+export class RunOwnerUnavailableError extends Error {
+  constructor() {
+    super("run owner is unavailable");
+    this.name = "RunOwnerUnavailableError";
+  }
+}
+
 export interface InsertRunOptions {
   /** SHA-256 of the browser-held benchmark-set capability; never the plaintext. */
   benchmarkSetSecretHash?: string;
@@ -509,8 +522,15 @@ export async function insertRun(
     run.generatedFrameTech,
   );
   const resolution = methodologyManifest?.resolution ?? hw.resolution ?? null;
-  const rows = await query<{ run_id: string }>(
-    `with benchmark_set as (
+  const rows = await query<{ run_id: string | null; owner_writable: boolean }>(
+    `with owner_writable as materialized (
+       select $2::text is null or exists (
+         select 1
+           from users
+          where id = $2
+            and erasure_requested_at is null
+       ) as allowed
+     ), benchmark_set as (
        insert into benchmark_sets (id, secret_hash)
        select $46::text, $48::text
         where $46::text is not null
@@ -535,14 +555,19 @@ export async function insertRun(
          $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
          $36::jsonb, $37,
          $38::jsonb, $39, $40, $41, $42, $43, $44, $45, $46, $47, $49, $50, $51
-       where $46::text is null or exists (select 1 from benchmark_set)
+       where ($46::text is null or exists (select 1 from benchmark_set))
+         and (select allowed from owner_writable)
        returning id
-     )
-     insert into run_summaries (
+     ), inserted as (
+       insert into run_summaries (
        run_id, ${summaryInsertColumnsSql()}
-     ) select $1, ${summaryValuesSql(25)}
-         from run_row
-       returning run_id`,
+      ) select $1, ${summaryValuesSql(25)}
+          from run_row
+        returning run_id
+      )
+      select inserted.run_id, owner_writable.allowed as owner_writable
+        from owner_writable
+       left join inserted on true`,
     [
       run.id, run.ownerId ?? null, run.game,
       canonicalIdParam(hw.canonicalGpuId, "canonicalGpuId"),
@@ -573,7 +598,11 @@ export async function insertRun(
     ],
     db,
   );
-  if (rows.length !== 1) {
+  const result = rows[0];
+  if (!result?.owner_writable) {
+    throw new RunOwnerUnavailableError();
+  }
+  if (result.run_id === null) {
     if (run.benchmarkSetId !== undefined) {
       throw new BenchmarkSetSecretMismatchError();
     }

@@ -12,6 +12,17 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 
+// §20.1: TopBar's account menu is Clerk-gated behind `authEnabled`. Stub the
+// client components rather than requiring a real <ClerkProvider> in tests.
+// `<Show when="signed-out">` is asserted signed-out here since these tests
+// never mount a Clerk session.
+vi.mock("@clerk/nextjs", () => ({
+  Show: ({ when, children }: { when: string; children: React.ReactNode }) =>
+    when === "signed-out" ? <>{children}</> : null,
+  SignInButton: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  UserButton: () => <div data-testid="user-button" />,
+}));
+
 afterEach(cleanup);
 
 describe("TopBar", () => {
@@ -48,5 +59,15 @@ describe("TopBar", () => {
     } finally {
       main.remove();
     }
+  });
+
+  it("hides the account menu when auth is disabled (default)", () => {
+    render(<TopBar />);
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+  });
+
+  it("renders the sign-in control when auth is enabled", () => {
+    render(<TopBar authEnabled />);
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
   });
 });

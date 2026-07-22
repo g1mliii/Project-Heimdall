@@ -6,7 +6,7 @@
  * runs — the handlers use the default app pool.
  */
 
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GENERATED_FRAME_TECH,
   INGEST_LIMITS,
@@ -41,12 +41,44 @@ vi.mock("@/lib/jobs/drain", () => ({
   cleanupStalePending: vi.fn(async () => 0),
 }));
 
+// §20.2: mock our seam, never Clerk (matches the codebase convention). Every
+// test starts anonymous; tests exercising ownership opt in per-call via
+// setViewer(). requireViewer()'s signed-out shape must be a real NextResponse
+// (routes check `instanceof NextResponse`), so it's built with the real class.
+const { getViewer, getViewerIdentity, requireViewer } = vi.hoisted(() => ({
+  getViewer: { current: async (): Promise<unknown> => null },
+  getViewerIdentity: { current: async (): Promise<unknown> => null },
+  requireViewer: { current: async (): Promise<unknown> => null },
+}));
+vi.mock("@/lib/api/auth", () => ({
+  getViewer: vi.fn(() => getViewer.current()),
+  getViewerIdentity: vi.fn(() => getViewerIdentity.current()),
+  requireViewer: vi.fn(() => requireViewer.current()),
+}));
+
+import { NextResponse } from "next/server";
 import * as r2 from "@/lib/r2";
 import * as jobDrain from "@/lib/jobs/drain";
+import { listRunsForUser } from "@/lib/repo/runs";
 import { POST as createRun } from "./route";
-import { DELETE as deleteRunRoute, GET as getRun } from "./[id]/route";
+import { DELETE as deleteRunRoute, GET as getRun, PATCH as patchRun } from "./[id]/route";
 import { POST as finalizeRun } from "./[id]/finalize/route";
 import { GET as getFrames } from "./[id]/frames/route";
+import { POST as claimRun } from "./[id]/claim/route";
+
+const OWNER = { userId: "user_owner", role: "public" as const };
+const STRANGER = { userId: "user_stranger", role: "public" as const };
+const ADMIN = { userId: "user_admin", role: "admin" as const };
+
+const UNAUTHORIZED = () =>
+  NextResponse.json({ error: { code: "auth-required", message: "sign in required" } }, { status: 401 });
+
+/** Keep getViewer()/requireViewer() in sync — every route uses one or the other. */
+function setViewer(viewer: typeof OWNER | typeof STRANGER | typeof ADMIN | null) {
+  getViewer.current = async () => viewer;
+  getViewerIdentity.current = async () => (viewer ? { userId: viewer.userId } : null);
+  requireViewer.current = async () => viewer ?? UNAUTHORIZED();
+}
 
 const canRun = testDbAvailable("api.test");
 const BENCHMARK_SET_ID = "f1dca0e4-2bba-4b47-81dc-a928cec52058";
@@ -101,6 +133,14 @@ describe.skipIf(!canRun)("ingest API routes (§11)", () => {
     process.env.RATE_LIMIT_CREATE_RUNS_PER_HOUR = "10000";
     process.env.RATE_LIMIT_FINALIZE_PER_HOUR = "10000";
     process.env.RATE_LIMIT_DELETE_PER_HOUR = "10000";
+    // runs.user_id has an FK to users(id) — the real getViewer() JIT-provisions
+    // via ensureUser() before returning a Viewer, but the mock here bypasses
+    // that, so the ownership tests need these rows to already exist.
+    await db.pool.query(
+      `insert into users (id, role) values ($1, 'public'), ($2, 'public'), ($3, 'admin')
+       on conflict (id) do nothing`,
+      [OWNER.userId, STRANGER.userId, ADMIN.userId],
+    );
   }, 240_000);
 
   afterAll(async () => {
@@ -110,6 +150,14 @@ describe.skipIf(!canRun)("ingest API routes (§11)", () => {
       .__heimdallPgPool;
     await globalPool?.end();
     await db?.teardown();
+  });
+
+  // beforeEach, not afterEach: the hoisted mock's raw initial default
+  // (before any setViewer() call) returns bare `null`, not a proper
+  // NextResponse 401 — normalize up front regardless of test order (see
+  // ../account/api.test.ts for the failure this avoids).
+  beforeEach(() => {
+    setViewer(null);
   });
 
   it("POST /api/runs: creates a pending row and returns a presigned PUT (12.2)", async () => {
@@ -231,6 +279,64 @@ describe.skipIf(!canRun)("ingest API routes (§11)", () => {
       new Request("http://test/api/runs", { method: "POST", body: "not json{" }),
     );
     expect(notJson.status).toBe(400);
+  });
+
+  it("POST /api/runs: rejects private visibility from an anonymous caller (§20.2d)", async () => {
+    vi.mocked(r2.presignPut).mockClear();
+    const response = await createRun(
+      jsonRequest("http://test/api/runs", "POST", {
+        ...validCreateRunRequest,
+        visibility: RUN_VISIBILITY.private,
+      }),
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { code: "auth-required-for-private" },
+    });
+    expect(r2.presignPut).not.toHaveBeenCalled();
+  });
+
+  it("POST /api/runs: a signed-in caller owns a private run; a stranger and an anonymous reader both 404 (§20.2)", async () => {
+    setViewer(OWNER);
+    const response = await createRun(
+      jsonRequest("http://test/api/runs", "POST", {
+        ...validCreateRunRequest,
+        visibility: RUN_VISIBILITY.private,
+      }),
+    );
+    expect(response.status).toBe(201);
+    const { id } = (await response.json()) as { id: string };
+
+    const ownerRow = await db.pool.query("select user_id from runs where id = $1", [id]);
+    expect(ownerRow.rows[0]).toEqual({ user_id: OWNER.userId });
+
+    // Owner sees it.
+    expect((await getRun(new Request("http://test"), ctx(id))).status).toBe(200);
+
+    // A stranger and an anonymous reader both get an indistinguishable 404.
+    setViewer(STRANGER);
+    expect((await getRun(new Request("http://test"), ctx(id))).status).toBe(404);
+    setViewer(null);
+    expect((await getRun(new Request("http://test"), ctx(id))).status).toBe(404);
+  });
+
+  it("finalize: an anonymous run cannot finalize as private, even if the finalizer happens to be signed in (§20.2d)", async () => {
+    const { id } = await createValidRun(); // anonymous create — no owner
+    setViewer(OWNER);
+    const response = await finalize(id, { visibility: RUN_VISIBILITY.private });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { code: "auth-required-for-private" },
+    });
+  });
+
+  it("finalize: 404s when the finalizer isn't the run's owner (ownership is fixed at create)", async () => {
+    setViewer(OWNER);
+    const { id } = await createValidRun();
+
+    setViewer(STRANGER);
+    const response = await finalize(id);
+    expect(response.status).toBe(404);
   });
 
   it("finalize: HEAD-validates, resolves canonical ids, enqueues exactly one job (12.2/12.3)", async () => {
@@ -396,20 +502,50 @@ describe.skipIf(!canRun)("ingest API routes (§11)", () => {
     expect((await getRun(new Request("http://test"), ctx("nope"))).status).toBe(404);
   });
 
-  it("GET run: private, flagged, and hidden runs 404 pre-auth (§11 note)", async () => {
+  it("GET run: never includes ownerId — a raw Clerk user id has no reason to reach any viewer (§20.3)", async () => {
+    setViewer(OWNER);
     const { id } = await createValidRun();
-    await db.pool.query("update runs set visibility = 'private' where id = $1", [id]);
+    await finalize(id);
+
+    // Even the owner's own view must not leak it — nothing reads it from here.
+    const response = await getRun(new Request("http://test"), ctx(id));
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("ownerId");
+
+    const row = await db.pool.query("select user_id from runs where id = $1", [id]);
+    expect(row.rows[0]).toEqual({ user_id: OWNER.userId }); // sanity: it IS set server-side
+  });
+
+  it("GET run: private, flagged, and hidden runs 404 for a stranger; owner sees private/flagged but never hidden (§20.2c)", async () => {
+    setViewer(OWNER);
+    const { id } = await createValidRun();
+    await db.pool.query("update runs set visibility = 'private', user_id = $2 where id = $1", [
+      id,
+      OWNER.userId,
+    ]);
+    expect((await getRun(new Request("http://test"), ctx(id))).status).toBe(200);
+    setViewer(STRANGER);
     expect((await getRun(new Request("http://test"), ctx(id))).status).toBe(404);
+    setViewer(null);
+    expect((await getRun(new Request("http://test"), ctx(id))).status).toBe(404);
+
     await db.pool.query(
       "update runs set visibility = 'unlisted', status = 'flagged' where id = $1",
       [id],
     );
+    setViewer(OWNER);
+    expect((await getRun(new Request("http://test"), ctx(id))).status).toBe(200);
+    setViewer(STRANGER);
     expect((await getRun(new Request("http://test"), ctx(id))).status).toBe(404);
     expect((await getFrames(new Request("http://test"), ctx(id))).status).toBe(404);
+
+    // hidden (the deletion tombstone) is invisible to EVERYONE, even the owner.
     await db.pool.query(
       "update runs set visibility = 'unlisted', status = 'hidden' where id = $1",
       [id],
     );
+    setViewer(OWNER);
     expect((await getRun(new Request("http://test"), ctx(id))).status).toBe(404);
   });
 
@@ -454,6 +590,161 @@ describe.skipIf(!canRun)("ingest API routes (§11)", () => {
       ctx(id),
     );
     expect(repeat.status).toBe(404);
+  });
+
+  it("DELETE: the run's owner can delete without a token; a non-owner without a token 404s; an admin can too (§20.2)", async () => {
+    setViewer(OWNER);
+    const { id: ownedId } = await createValidRun();
+    await finalize(ownedId);
+
+    setViewer(STRANGER);
+    const strangerAttempt = await deleteRunRoute(
+      new Request("http://test", { method: "DELETE" }),
+      ctx(ownedId),
+    );
+    expect(strangerAttempt.status).toBe(404);
+    expect(
+      (await db.pool.query("select 1 from runs where id = $1", [ownedId])).rows,
+    ).toHaveLength(1);
+
+    setViewer(OWNER);
+    const ownerDelete = await deleteRunRoute(
+      new Request("http://test", { method: "DELETE" }),
+      ctx(ownedId),
+    );
+    expect(ownerDelete.status).toBe(204);
+    expect(
+      (await db.pool.query("select 1 from runs where id = $1", [ownedId])).rows,
+    ).toHaveLength(0);
+
+    // An admin can delete someone else's run too.
+    setViewer(OWNER);
+    const { id: secondId } = await createValidRun();
+    await finalize(secondId);
+    setViewer(ADMIN);
+    const adminDelete = await deleteRunRoute(
+      new Request("http://test", { method: "DELETE" }),
+      ctx(secondId),
+    );
+    expect(adminDelete.status).toBe(204);
+  });
+
+  it("PATCH: rejects an anonymous caller (401) and a non-owner (404); the owner can switch visibility (§20.2)", async () => {
+    setViewer(OWNER);
+    const { id } = await createValidRun();
+
+    setViewer(null);
+    const anon = await patchRun(
+      jsonRequest("http://test", "PATCH", { visibility: RUN_VISIBILITY.public }),
+      ctx(id),
+    );
+    expect(anon.status).toBe(401);
+
+    setViewer(STRANGER);
+    const stranger = await patchRun(
+      jsonRequest("http://test", "PATCH", { visibility: RUN_VISIBILITY.public }),
+      ctx(id),
+    );
+    expect(stranger.status).toBe(404);
+
+    setViewer(OWNER);
+    const ownerPatch = await patchRun(
+      jsonRequest("http://test", "PATCH", { visibility: RUN_VISIBILITY.private }),
+      ctx(id),
+    );
+    expect(ownerPatch.status).toBe(200);
+    expect(await ownerPatch.json()).toEqual({ id, visibility: RUN_VISIBILITY.private });
+    const row = await db.pool.query("select visibility from runs where id = $1", [id]);
+    expect(row.rows[0]).toEqual({ visibility: RUN_VISIBILITY.private });
+  });
+
+  it("claim: rejects anonymous (401), wrong token (404), and an already-owned run even with its valid token (404); the right token attaches ownership and is single-use (§20.2e)", async () => {
+    const token = generateManagementToken();
+    const { id: anonId } = await createValidRun();
+    await finalize(anonId, { managementTokenHash: await hashManagementToken(token) });
+
+    const anonAttempt = await claimRun(
+      new Request("http://test", { method: "POST" }),
+      ctx(anonId),
+    );
+    expect(anonAttempt.status).toBe(401);
+
+    setViewer(OWNER);
+    const noToken = await claimRun(new Request("http://test", { method: "POST" }), ctx(anonId));
+    expect(noToken.status).toBe(404);
+
+    const wrongToken = await claimRun(
+      new Request("http://test", {
+        method: "POST",
+        headers: { authorization: `Bearer ${generateManagementToken()}` },
+      }),
+      ctx(anonId),
+    );
+    expect(wrongToken.status).toBe(404);
+
+    const success = await claimRun(
+      new Request("http://test", {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+      }),
+      ctx(anonId),
+    );
+    expect(success.status).toBe(204);
+    const claimed = await db.pool.query(
+      "select user_id, anonymous_management_token_hash from runs where id = $1",
+      [anonId],
+    );
+    expect(claimed.rows[0]).toEqual({
+      user_id: OWNER.userId,
+      anonymous_management_token_hash: null,
+    });
+
+    // The claimed run now shows up in the new owner's "My runs".
+    const ownerRuns = await listRunsForUser(OWNER.userId, db.pool);
+    expect(ownerRuns.runs.some((r) => r.id === anonId)).toBe(true);
+
+    // The old anonymous management token can no longer delete the run — the
+    // DELETE route's token path requires a non-null stored hash, and claim
+    // cleared it. Anonymous (no viewer), so this isolates the token-only
+    // path from the now-also-true "owner can delete without a token" path.
+    setViewer(null);
+    const deleteWithOldToken = await deleteRunRoute(
+      new Request("http://test", {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${token}` },
+      }),
+      ctx(anonId),
+    );
+    expect(deleteWithOldToken.status).toBe(404);
+    expect((await db.pool.query("select 1 from runs where id = $1", [anonId])).rows).toHaveLength(1);
+
+    // Single-use: the same (now-cleared) token can't claim it again.
+    setViewer(STRANGER);
+    const replay = await claimRun(
+      new Request("http://test", {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+      }),
+      ctx(anonId),
+    );
+    expect(replay.status).toBe(404);
+
+    // An already-owned run 404s even against its own valid token — a
+    // signed-in upload still gets a management token, but claim is only for
+    // attaching an owner, not for re-claiming an already-owned run.
+    setViewer(OWNER);
+    const ownedToken = generateManagementToken();
+    const { id: ownedId } = await createValidRun();
+    await finalize(ownedId, { managementTokenHash: await hashManagementToken(ownedToken) });
+    setViewer(STRANGER);
+    const alreadyOwned = await claimRun(
+      new Request("http://test", {
+        method: "POST",
+        headers: { authorization: `Bearer ${ownedToken}` },
+      }),
+      ctx(ownedId),
+    );
+    expect(alreadyOwned.status).toBe(404);
   });
 
   it("DELETE: storage failure tombstones the run so the delete can be retried", async () => {

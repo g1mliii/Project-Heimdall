@@ -11,6 +11,7 @@
 import {
   DIAGNOSTICS_RULE_GENERATION,
   RUN_STATUS,
+  writableRunStatusSql,
   type CapabilityManifest,
   type DiagnosticFinding,
   type GeneratedFrameTech,
@@ -185,11 +186,12 @@ export async function applyVerificationResult(
   claim: Pick<ClaimedJob, "id" | "attempts">,
   db: Queryable = getPool(),
 ): Promise<void> {
-  // `status <> 'hidden'` — a moderation takedown outranks a late verification
-  // verdict; without the guard a queued job would flip a hidden run back to
-  // validated/flagged (and, if public, back into aggregate eligibility). Every
-  // write (summary, diagnostics) is gated on the same run_update via the CTE, so
-  // a hidden run or a stale job claim writes nothing.
+  // `writableRunStatusSql()` — a deletion tombstone or a §20.5
+  // moderation takedown outranks a late verification verdict; without this
+  // guard a queued job would flip either status back to validated/flagged
+  // (and, if public, back into aggregate eligibility). Every write (summary,
+  // diagnostics) is gated on the same run_update via the CTE, so a run in
+  // either state, or a stale job claim, writes nothing.
   //
   // Diagnostics are delete-then-insert per run_id in this one statement, so a
   // job retry replaces the prior run's findings rather than duplicating them
@@ -217,7 +219,7 @@ export async function applyVerificationResult(
               diagnostics_rule_generation = ${DIAGNOSTICS_RULE_GENERATION},
               diagnostics_evaluated_at = now()
         where id = $1
-          and status <> 'hidden'
+          and ${writableRunStatusSql()}
           and exists (select 1 from job_claim)
         returning id
      ), summary_update as (

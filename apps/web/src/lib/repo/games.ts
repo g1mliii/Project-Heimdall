@@ -13,6 +13,7 @@ import type { DiagnosticsDriverPlatform } from "@heimdall/parsers";
 import {
   aggregateEligibilitySql,
   GAME_SUBMISSIONS_MAX_PAGE_SIZE,
+  isVerifiedReviewer,
   methodologyManifestSchema,
   missingComparabilityProfileFields,
 } from "@heimdall/shared";
@@ -53,6 +54,7 @@ interface GameSubmissionDbRow {
   one_percent_low_fps: number | null;
   point_one_percent_low_fps: number | null;
   submitted_by: string | null;
+  submitted_by_role: string | null;
   settings_json: unknown;
   methodology_manifest_version: number | null;
   resolution: string | null;
@@ -169,6 +171,7 @@ function mapSubmission(row: GameSubmissionDbRow): GameSubmissionRow {
     onePercentLowFps: row.one_percent_low_fps!,
     pointOnePercentLowFps: row.point_one_percent_low_fps!,
     submittedBy: row.submitted_by,
+    submittedByVerified: isVerifiedReviewer(row.submitted_by_role),
     methodology: {
       profileComplete,
       resolution: row.resolution,
@@ -182,6 +185,26 @@ function mapSubmission(row: GameSubmissionDbRow): GameSubmissionRow {
     driverBelowMinimum: belowMinimum,
     driverBehindLatest: behindLatest,
   };
+}
+
+/**
+ * `PATCH /api/admin/games/:id` (§20.5) — admin display-name fix on an existing
+ * row; cross-id rename-MERGE is explicitly deferred.
+ *
+ * The id-shape guard belongs here, not at the route: `$1::bigint` on "abc"
+ * raises `invalid input syntax`, which the caller would surface as a 500
+ * rather than the 404 it is (same reasoning as `isReportId` in repo/reports.ts).
+ */
+export async function renameGame(
+  id: string,
+  name: string,
+  db: Queryable = getPool(),
+): Promise<boolean> {
+  if (!/^\d+$/.test(id)) {
+    return false;
+  }
+  const result = await db.query("update games set name = $2 where id = $1::bigint", [id, name]);
+  return (result.rowCount ?? 0) > 0;
 }
 
 /**
@@ -216,6 +239,7 @@ export async function readGamePage(
               s.p1_low_fps as one_percent_low_fps,
               s.p01_low_fps as point_one_percent_low_fps,
               u.handle as submitted_by,
+              u.role as submitted_by_role,
               r.settings_json,
               r.methodology_manifest_version,
               r.resolution,
@@ -266,6 +290,7 @@ export async function readGamePage(
             page.one_percent_low_fps,
             page.point_one_percent_low_fps,
             page.submitted_by,
+            page.submitted_by_role,
             page.settings_json,
             page.methodology_manifest_version,
             page.resolution,

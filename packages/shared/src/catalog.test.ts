@@ -62,6 +62,7 @@ describe("game submission contracts (§17.7)", () => {
     onePercentLowFps: 98,
     pointOnePercentLowFps: 71,
     submittedBy: null,
+    submittedByVerified: false,
     methodology: {
       profileComplete: true,
       resolution: "2560x1440",

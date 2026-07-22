@@ -5,10 +5,12 @@
  */
 
 import { NextResponse } from "next/server";
+import { isIP } from "node:net";
 import type { ZodError, ZodType } from "zod";
 import { INGEST_LIMITS, readAllBounded, type ApiError } from "@heimdall/shared";
-import { getIngestEnv } from "../env";
+import { getAuthEnv, getIngestEnv } from "../env";
 import { consumeRateLimit } from "../repo/rate-limit";
+import type { ViewerIdentity } from "../viewer";
 
 function validationDetails(error: ZodError) {
   return error.issues.map((issue) => ({
@@ -125,29 +127,50 @@ export function bearerToken(request: Request): string | null {
 }
 
 /**
- * Best-effort client ip for rate limiting. `x-forwarded-for` is spoofable
- * when the app is not behind a trusted proxy — acceptable for Phase 4 abuse
- * control (the deployment platform sets it in prod; a spoofer only ever
- * escapes the limit, never impersonates another bucket's quota into denial,
- * because buckets are per-ip strings, not identities).
+ * Client IP for rate limiting. Forwarded headers are attacker-controlled at a
+ * directly reachable origin, so an operator must opt into exactly one after
+ * locking the origin behind that trusted proxy. Until then every anonymous
+ * caller shares the conservative `unknown` bucket instead of receiving a
+ * forgeable bypass.
  */
 export function clientIp(request: Request): string {
-  const forwarded = request.headers.get("x-forwarded-for");
-  const first = forwarded?.split(",")[0]?.trim();
-  return first || "local";
+  const trust = getIngestEnv().RATE_LIMIT_TRUSTED_PROXY;
+  const raw =
+    trust === "cloudflare"
+      ? request.headers.get("cf-connecting-ip")
+      : trust === "x-forwarded-for"
+        ? request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null
+        : null;
+  return raw && isIP(raw) !== 0 ? raw : "unknown";
 }
 
 /**
- * Rate-limit gate: null when allowed, a ready 429 when not. Fails OPEN on DB
- * errors — a broken limiter must not take the ingest path down with it.
+ * Rate-limit gate: null when allowed, a ready 429 when not. It fails closed
+ * when the limiter is unavailable: serving an unbounded upload/report path
+ * during a database outage turns the outage into a storage or moderation DoS.
+ *
+ * Keys `user:{id}` when signed in, else `ip:{ip}` (§20.2f) — a stable
+ * identity outlasts IP churn, and it's a materially higher bar to farm many
+ * accounts than to rotate IPs. Signed-in requests get `limitPerHour` scaled
+ * by `RATE_LIMIT_AUTHED_MULTIPLIER` (default 3x) instead of a second env var
+ * per scope.
+ *
+ * Takes a `ViewerIdentity`, not a `Viewer`: only `userId` is read, so a
+ * caller that needs nothing else can use `getViewerIdentity()` and skip the
+ * `users` round trip entirely. A full `Viewer` still satisfies this.
  */
 export async function requireRateLimit(
   scope: string,
   request: Request,
   limitPerHour: number,
+  viewer?: ViewerIdentity | null,
 ): Promise<NextResponse<ApiError> | null> {
+  const clientKey = viewer ? `user:${viewer.userId}` : `ip:${clientIp(request)}`;
+  const limit = viewer
+    ? Math.round(limitPerHour * getAuthEnv().RATE_LIMIT_AUTHED_MULTIPLIER)
+    : limitPerHour;
   try {
-    const result = await consumeRateLimit(scope, clientIp(request), limitPerHour, 3600);
+    const result = await consumeRateLimit(scope, clientKey, limit, 3600);
     if (!result.allowed) {
       return jsonError(429, "rate-limited", "too many requests — slow down", {
         retryAfterSeconds: result.retryAfterSeconds,
@@ -155,8 +178,10 @@ export async function requireRateLimit(
     }
     return null;
   } catch (error) {
-    console.error(`rate limit check failed (scope=${scope}); failing open`, error);
-    return null;
+    console.error(`rate limit check failed (scope=${scope}); denying request`, error);
+    return jsonError(503, "rate-limit-unavailable", "rate limit is temporarily unavailable", {
+      retryAfterSeconds: 60,
+    });
   }
 }
 
@@ -168,5 +193,7 @@ export function rateLimits() {
     finalize: env.RATE_LIMIT_FINALIZE_PER_HOUR,
     delete: env.RATE_LIMIT_DELETE_PER_HOUR,
     search: env.RATE_LIMIT_SEARCH_PER_HOUR,
+    claim: env.RATE_LIMIT_CLAIM_PER_HOUR,
+    createReport: env.RATE_LIMIT_CREATE_REPORT_PER_HOUR,
   };
 }

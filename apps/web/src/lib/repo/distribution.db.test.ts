@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   COHORT_ASSESSMENT_VERSION,
+  slugifyGameName,
   validRun,
   validSummary,
 } from "@heimdall/shared";
@@ -161,6 +162,91 @@ describe.skipIf(!canRun)("cohort distribution + integrity (§17/§18/§19)", () 
     expect(cpu?.ratePct).toBeNull();
   });
 
+  it("verifiedOnly filters the distribution to runs owned by a verified reviewer (§20.3)", async () => {
+    // A dedicated game/bucket — never touches "cyberpunk-2077"'s exact-count
+    // assertions elsewhere in this file.
+    const gameName = "Verified Filter Test Game";
+    const slug = slugifyGameName(gameName);
+    const verifiedGameId = await resolveGameId("capframex", gameName, db.pool);
+    if (!verifiedGameId) throw new Error("expected a resolvable game id");
+    const [gpuId, cpuId] = await Promise.all([
+      resolveHardwareId("gpu", "capframex", "NVIDIA GeForce RTX 4070", "nvidia", db.pool),
+      resolveHardwareId("cpu", "capframex", "AMD Ryzen 7 7800X3D", "amd", db.pool),
+    ]);
+    if (!gpuId || !cpuId) throw new Error("expected canonical hardware fixtures");
+
+    const verifiedUserId = "user_dist_verified";
+    await db.pool.query(
+      `insert into users (id, role) values ($1, 'verified')
+       on conflict (id) do update set role = 'verified'`,
+      [verifiedUserId],
+    );
+    // An admin counts as a verified reviewer (`isVerifiedReviewer` in
+    // packages/shared) — the submissions table already badges their runs, so
+    // the filter that hides everything else must keep them too. It didn't:
+    // the SQL tested `role = 'verified'` alone, and a badged admin run
+    // vanished the moment the "Verified only" toggle went on.
+    const adminUserId = "user_dist_admin";
+    await db.pool.query(
+      `insert into users (id, role) values ($1, 'admin')
+       on conflict (id) do update set role = 'admin'`,
+      [adminUserId],
+    );
+
+    const makeOwnedRun = (id: string, avgFps: number, ownerId?: string): Run => ({
+      ...validRun,
+      id,
+      createdAt: "2026-07-15T12:00:00.000Z",
+      framesObjectKey: `runs/${id}.parquet`,
+      summary: { ...validSummary, avgFps },
+      methodologyManifest: methodology1440,
+      hardware: { ...validRun.hardware, canonicalGpuId: gpuId, canonicalCpuId: cpuId },
+      ...(ownerId ? { ownerId } : {}),
+    });
+
+    // Keep this cohort above the cold-start threshold so the regression also
+    // exercises the curve/percentile scan, not just the selected-bucket count.
+    const verifiedRuns = Array.from({ length: 30 }, (_, index) =>
+      makeOwnedRun(`dist_verified_owner_${index}`, 100 + index, verifiedUserId),
+    );
+    for (const run of [
+      ...verifiedRuns,
+      makeOwnedRun("dist_admin_owner", 130, adminUserId),
+      makeOwnedRun("dist_anon_owner", 131),
+    ]) {
+      await insertRun(run, db.pool);
+      await db.pool.query(
+        `update runs
+            set game_id = $2, capability_manifest_version = 1,
+                diagnostics_rule_generation = 1, diagnostics_evaluated_at = now()
+          where id = $1`,
+        [run.id, verifiedGameId],
+      );
+    }
+
+    const both = await readGameDistribution(slug, { metric: "avg-fps" }, db.pool);
+    const bucketBoth = both?.cohorts.find(
+      (cohort) => cohort.comparability.settingsPreset === "Ultra",
+    );
+    expect(bucketBoth?.observationCount).toBe(32);
+    expect(bucketBoth?.rawRunCount).toBe(32);
+
+    const onlyVerified = await readGameDistribution(
+      slug,
+      { metric: "avg-fps", verifiedOnly: true },
+      db.pool,
+    );
+    const bucketVerified = onlyVerified?.cohorts.find(
+      (cohort) => cohort.comparability.settingsPreset === "Ultra",
+    );
+    // The verified reviewer AND the admin survive; only the anonymous run drops.
+    // The curve must use the same filtered rows as the cohort count. Previously
+    // it joined every observation in the selected bucket and reported 32 here.
+    expect(bucketVerified?.observationCount).toBe(31);
+    expect(bucketVerified?.rawRunCount).toBe(31);
+    expect(bucketVerified?.distribution?.sampleCount).toBe(31);
+  });
+
   it("persists a versioned outlier verdict without changing visibility", async () => {
     const summary = await recomputeGameCohortAssessments(gameId, db.pool);
     expect(summary.assessed).toBe(33); // 32 individuals + 1 set representative
@@ -187,6 +273,16 @@ describe.skipIf(!canRun)("cohort distribution + integrity (§17/§18/§19)", () 
       OUTLIER_ID,
     ]);
     expect(rows.rows[0]?.status).toBe("validated");
+
+    // The old-game recompute must clear a durable verdict when a run moves
+    // elsewhere. Before the stored game_id existed, this row was invisible to
+    // old-game cleanup and could keep a stale outlier badge forever.
+    const movedGame = await db.pool.query<{ id: string }>(
+      "insert into games (slug, name) values ('moved-assessment-game', 'Moved Assessment Game') returning id",
+    );
+    await db.pool.query("update runs set game_id = $2 where id = $1", [NORMAL_ID, movedGame.rows[0]!.id]);
+    await recomputeGameCohortAssessments(gameId, db.pool);
+    expect(await readCohortAssessment(NORMAL_ID, db.pool)).toBeNull();
   });
 
   it("enqueues, recomputes, and converges the assessment lane (§18.5)", async () => {

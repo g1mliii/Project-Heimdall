@@ -278,6 +278,26 @@ describe("RunHeader", () => {
     expect(screen.queryByText("DLSS 3")).not.toBeInTheDocument();
   });
 
+  it("tells the owner when a run was removed by moderation (§20.5)", () => {
+    // Only the owner can ever see a `moderated` run (`isVisibleTo`), so if
+    // this renders at all the reader is the one person who needs to know.
+    // Without the badge a takedown looked identical to a healthy report while
+    // the run had silently dropped out of every public surface.
+    const moderated: Run = { ...run, status: "moderated" };
+    render(<RunHeader run={moderated} />);
+    expect(screen.getByText("Removed by moderation")).toBeInTheDocument();
+    expect(screen.getByText(/Only you can see it/)).toBeInTheDocument();
+    expect(screen.queryByText("Validated")).not.toBeInTheDocument();
+    expect(screen.queryByText("Pending verification")).not.toBeInTheDocument();
+  });
+
+  it("distinguishes an integrity-flagged run from a pending one", () => {
+    const flagged: Run = { ...run, status: "flagged" };
+    render(<RunHeader run={flagged} />);
+    expect(screen.getByText("Failed integrity check")).toBeInTheDocument();
+    expect(screen.queryByText("Pending verification")).not.toBeInTheDocument();
+  });
+
   it("copies the share link and confirms", async () => {
     const writeText = vi.fn(() => Promise.resolve());
     Object.assign(navigator, { clipboard: { writeText } });

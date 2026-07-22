@@ -10,6 +10,7 @@ import {
   CAPABILITY_MANIFEST_VERSION,
   DIAGNOSTICS,
   DIAGNOSTICS_RULE_GENERATION,
+  writableRunStatusSql,
   type CapabilityManifest,
   type DiagnosticFinding,
   type GeneratedFrameTech,
@@ -520,7 +521,7 @@ export async function applyReprocessResult(
                 runs.methodology_manifest_version
               )
         where id = $1
-          and status <> 'hidden'
+          and ${writableRunStatusSql()}
           and exists (select 1 from job_claim)
         returning id
      ), summary_update as (
@@ -622,7 +623,7 @@ export async function applyDriverRefresh(
          update runs
             set driver_evaluated_at = now()
           where id = $1
-            and status <> 'hidden'
+            and ${writableRunStatusSql()}
             and exists (select 1 from job_claim)
           returning id
        )
@@ -656,7 +657,7 @@ export async function applyDriverRefresh(
        update runs
           set driver_evaluated_at = now()
         where id = $1
-          and status <> 'hidden'
+          and ${writableRunStatusSql()}
           and exists (select 1 from job_claim)
         returning id
      ), diagnostics_delete as (

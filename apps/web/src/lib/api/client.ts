@@ -18,12 +18,16 @@ import {
   searchResponseSchema,
 } from "@heimdall/shared";
 import type {
+  CreateReportRequest,
   FramesUrlResponse,
   GameDistributionQuery,
   GameDistributionResponse,
   GameSubmissionsPage,
   GameSubmissionsQuery,
+  GrantVerificationRequest,
+  RunVisibility,
   SearchResponse,
+  UpdateReportRequest,
 } from "@heimdall/shared";
 import { readApiFailure } from "./errors";
 import { decodeFrameParquetToSeries } from "../parquet/frame-metadata";
@@ -51,8 +55,12 @@ function failure<T>(code: string, message: string): ApiResult<T> {
   return { ok: false, code, message };
 }
 
-function transportFetch(transport: ApiTransport, input: RequestInfo | URL, signal?: AbortSignal) {
-  return signal === undefined ? transport.fetch(input) : transport.fetch(input, { signal });
+function transportFetch(transport: ApiTransport, input: RequestInfo | URL, init?: RequestInit) {
+  return init === undefined ? transport.fetch(input) : transport.fetch(input, init);
+}
+
+function signalInit(signal?: AbortSignal): RequestInit | undefined {
+  return signal === undefined ? undefined : { signal };
 }
 
 async function getJson<T>(
@@ -64,7 +72,7 @@ async function getJson<T>(
 ): Promise<ApiResult<T>> {
   let response: Response;
   try {
-    response = await transportFetch(transport, path, signal);
+    response = await transportFetch(transport, path, signalInit(signal));
   } catch (error) {
     return failure(signal?.aborted ? "aborted" : "network", error instanceof Error ? error.message : String(error));
   }
@@ -77,6 +85,145 @@ async function getJson<T>(
   } catch (error) {
     return failure("invalid-response", error instanceof Error ? error.message : String(error));
   }
+}
+
+/**
+ * Mutation half of {@link getJson}. Success bodies are deliberately discarded:
+ * every mutation route in the app answers either 204/202-empty or with a body
+ * the caller already has (`{ id, visibility }` echoes the request), so the
+ * useful half of the response is the failure envelope — which components must
+ * not re-derive from a bare status code.
+ */
+async function sendJson(
+  path: string,
+  method: "POST" | "PATCH" | "DELETE",
+  body: unknown,
+  fallback: string,
+  transport: ApiTransport,
+): Promise<ApiResult<void>> {
+  const init: RequestInit =
+    body === undefined
+      ? { method }
+      : { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
+  let response: Response;
+  try {
+    response = await transportFetch(transport, path, init);
+  } catch (error) {
+    return failure("network", error instanceof Error ? error.message : String(error));
+  }
+  if (!response.ok) {
+    const apiFailure = await readApiFailure(response, fallback);
+    return failure(apiFailure.code, apiFailure.message);
+  }
+  return { ok: true, data: undefined };
+}
+
+/** `PATCH /api/runs/:id` — owner-only visibility switcher (§20.2). */
+export function updateRunVisibility(
+  id: string,
+  visibility: RunVisibility,
+  transport: ApiTransport = defaultTransport(),
+): Promise<ApiResult<void>> {
+  return sendJson(
+    `/api/runs/${encodeURIComponent(id)}`,
+    "PATCH",
+    { visibility },
+    "couldn't update visibility",
+    transport,
+  );
+}
+
+/** `DELETE /api/runs/:id` — owner/token-holder delete; drops the R2 frames too (§20.2). */
+export function deleteRun(
+  id: string,
+  transport: ApiTransport = defaultTransport(),
+): Promise<ApiResult<void>> {
+  return sendJson(
+    `/api/runs/${encodeURIComponent(id)}`,
+    "DELETE",
+    undefined,
+    "couldn't delete that run",
+    transport,
+  );
+}
+
+/** `POST /api/account/delete` — right-to-erasure request; the cascade is async (§20.4). */
+export function deleteAccount(
+  transport: ApiTransport = defaultTransport(),
+): Promise<ApiResult<void>> {
+  return sendJson(
+    "/api/account/delete",
+    "POST",
+    undefined,
+    "couldn't delete your account",
+    transport,
+  );
+}
+
+/** `POST /api/reports` — anonymous-allowed content report (§20.5). */
+export function createReport(
+  report: CreateReportRequest,
+  transport: ApiTransport = defaultTransport(),
+): Promise<ApiResult<void>> {
+  return sendJson("/api/reports", "POST", report, "couldn't submit that report", transport);
+}
+
+/** `POST /api/admin/verifications` — grant the verified-reviewer tier (§20.3). */
+export function grantVerification(
+  request: GrantVerificationRequest,
+  transport: ApiTransport = defaultTransport(),
+): Promise<ApiResult<void>> {
+  return sendJson(
+    "/api/admin/verifications",
+    "POST",
+    request,
+    "couldn't grant verified reviewer",
+    transport,
+  );
+}
+
+/** `PATCH /api/admin/games/:id` — admin display-name fix (§20.5). */
+export function renameGame(
+  id: string,
+  name: string,
+  transport: ApiTransport = defaultTransport(),
+): Promise<ApiResult<void>> {
+  return sendJson(
+    `/api/admin/games/${encodeURIComponent(id)}`,
+    "PATCH",
+    { name },
+    "couldn't rename that game",
+    transport,
+  );
+}
+
+/** `PATCH /api/admin/reports/:id` — resolve or dismiss a queued report (§20.5). */
+export function updateReportStatus(
+  id: string,
+  status: UpdateReportRequest["status"],
+  transport: ApiTransport = defaultTransport(),
+): Promise<ApiResult<void>> {
+  return sendJson(
+    `/api/admin/reports/${encodeURIComponent(id)}`,
+    "PATCH",
+    { status },
+    "couldn't update that report",
+    transport,
+  );
+}
+
+/** `POST /api/admin/runs/:id/moderate` — moderator takedown; resolves the run's reports (§20.5). */
+export function moderateRun(
+  runId: string,
+  transport: ApiTransport = defaultTransport(),
+): Promise<ApiResult<void>> {
+  return sendJson(
+    `/api/admin/runs/${encodeURIComponent(runId)}/moderate`,
+    "POST",
+    undefined,
+    "couldn't hide that run",
+    transport,
+  );
 }
 
 /**
@@ -105,7 +252,7 @@ export async function fetchFrames(
 ): Promise<ApiResult<FrameSeries>> {
   let response: Response;
   try {
-    response = await transportFetch(transport, url, signal);
+    response = await transportFetch(transport, url, signalInit(signal));
   } catch (error) {
     return failure(signal?.aborted ? "aborted" : "network", error instanceof Error ? error.message : String(error));
   }
@@ -168,6 +315,7 @@ export function loadGameDistribution(
   if (options.upscaler) query.set("upscaler", options.upscaler);
   if (options.rayTracing) query.set("rayTracing", options.rayTracing);
   if (options.viewerRunId) query.set("viewerRunId", options.viewerRunId);
+  if (options.verifiedOnly) query.set("verifiedOnly", "true");
   return getJson(
     `/api/games/${encodeURIComponent(slug)}/distribution?${query}`,
     (body) => gameDistributionResponseSchema.parse(body),

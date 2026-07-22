@@ -20,3 +20,6 @@ overrides:
   # GHSA-g7r4-m6w7-qqqr (Windows dev-server arbitrary file read).
   esbuild: 0.28.1
   postcss: 8.5.15
+  brace-expansion@^2.0.0: 2.1.2
+  brace-expansion@^5.0.0: 5.0.7
+  protobufjs@^7.5.0: 7.6.5

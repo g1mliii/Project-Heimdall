@@ -10,6 +10,8 @@
 import * as React from "react";
 import { Badge, Button } from "@heimdall/ui";
 import type { Run } from "@heimdall/shared";
+import { ReportButton } from "@/components/moderation/ReportButton";
+import { VISIBILITY_LABELS } from "@/lib/format";
 import { CheckIcon, ClapperboardIcon, GitCompareIcon, ShareIcon } from "./icons";
 
 const TECH_LABELS: Record<Run["generatedFrameTech"], string | null> = {
@@ -26,14 +28,53 @@ const SOURCE_LABELS: Record<Run["captureSource"], string> = {
   mangohud: "MangoHud log",
 };
 
-const VISIBILITY_LABELS: Record<Run["visibility"], string> = {
-  public: "Public",
-  unlisted: "Unlisted",
-  private: "Private",
-};
-
 const COPY_RESET_MS = 2000;
 const COMING_SOON = "Coming in a later update";
+
+/**
+ * Status badge (§20.5). `moderated` and `flagged` runs 404 for everyone but
+ * their owner (`isVisibleTo` in lib/repo/runs.ts), so if one of those renders
+ * at all the reader IS the owner — and they are the one person who needs to
+ * be told the run is no longer public, and why. Silence here meant a takedown
+ * looked identical to a normal report while the run had quietly dropped out
+ * of every public surface. `hidden` is the deletion tombstone: never visible
+ * to anyone, so it has no badge.
+ */
+function StatusBadge({ status }: { status: Run["status"] }) {
+  switch (status) {
+    case "validated":
+      return (
+        <Badge tone="good" dot>
+          Validated
+        </Badge>
+      );
+    case "moderated":
+      return (
+        <Badge tone="bad" dot>
+          Removed by moderation
+        </Badge>
+      );
+    case "flagged":
+      return (
+        <Badge tone="warn" dot>
+          Failed integrity check
+        </Badge>
+      );
+    default:
+      return (
+        <Badge tone="info" dot>
+          Pending verification
+        </Badge>
+      );
+  }
+}
+
+const OWNER_ONLY_STATUS_NOTE: Partial<Record<Run["status"], string>> = {
+  moderated:
+    "A moderator removed this run from public view. Only you can see it — it is excluded from game pages and public averages.",
+  flagged:
+    "This run failed a server-side integrity check. Only you can see it — it is excluded from public averages.",
+};
 
 function subtitle(run: Run): string {
   const parts = [SOURCE_LABELS[run.captureSource]];
@@ -65,6 +106,7 @@ export function RunHeader({ run }: { run: Run }) {
   }
 
   const techLabel = TECH_LABELS[run.generatedFrameTech];
+  const statusNote = OWNER_ONLY_STATUS_NOTE[run.status];
 
   return (
     <div
@@ -84,18 +126,21 @@ export function RunHeader({ run }: { run: Run }) {
             marginBottom: "var(--space-2)",
           }}
         >
-          {run.status === "validated" ? (
-            <Badge tone="good" dot>
-              Validated
-            </Badge>
-          ) : (
-            <Badge tone="info" dot>
-              Pending verification
-            </Badge>
-          )}
+          <StatusBadge status={run.status} />
           {techLabel && <Badge tone="brand">{techLabel}</Badge>}
           <Badge tone="neutral">{VISIBILITY_LABELS[run.visibility]}</Badge>
         </div>
+        {statusNote && (
+          <p
+            style={{
+              font: "var(--type-body-sm)",
+              color: "var(--fg-2)",
+              marginBottom: "var(--space-2)",
+            }}
+          >
+            {statusNote}
+          </p>
+        )}
         <h1 style={{ font: "var(--type-title)", color: "var(--fg-1)", overflowWrap: "anywhere" }}>
           {run.game}
         </h1>
@@ -110,7 +155,8 @@ export function RunHeader({ run }: { run: Run }) {
           {subtitle(run)}
         </p>
       </div>
-      <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: "var(--space-2)" }}>
+      <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: "var(--space-2)", alignItems: "center" }}>
+        <ReportButton subject={{ type: "run", id: run.id }} />
         <Button
           variant="secondary"
           disabled

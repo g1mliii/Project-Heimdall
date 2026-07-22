@@ -411,7 +411,7 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     expect(result).toMatchObject({ claimed: 1, failed: 1 });
     const run = await readRun("run_wk_corrupt", db.pool);
     expect(run?.status).toBe(RUN_STATUS.flagged);
-    expect(await readVisibleRun("run_wk_corrupt", db.pool)).toBeNull();
+    expect(await readVisibleRun("run_wk_corrupt", null, db.pool)).toBeNull();
   });
 
   it("rejects invalid report-only columns before a run can validate", async () => {

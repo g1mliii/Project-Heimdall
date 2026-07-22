@@ -52,6 +52,35 @@ const ingestEnvSchema = z.object({
   RATE_LIMIT_DELETE_PER_HOUR: z.coerce.number().int().min(1).default(20),
   /** Catalog typeahead is read-only but intentionally chatty. */
   RATE_LIMIT_SEARCH_PER_HOUR: z.coerce.number().int().min(1).default(600),
+  /** Claiming an anonymous run onto a signed-in account (§20.2e). */
+  RATE_LIMIT_CLAIM_PER_HOUR: z.coerce.number().int().min(1).default(20),
+  /** Anonymous-allowed moderation reports (§20.5). */
+  RATE_LIMIT_CREATE_REPORT_PER_HOUR: z.coerce.number().int().min(1).default(20),
+  /** The one proxy allowed to supply an anonymous rate-limit client IP. */
+  RATE_LIMIT_TRUSTED_PROXY: z.enum(["none", "cloudflare", "x-forwarded-for"]).default("none"),
+});
+
+const authEnvSchema = z.object({
+  /**
+   * Server-side Clerk secret. Optional so anonymous-only dev/test/CI boots
+   * without a Clerk instance (§20.1) — routes that need a signed-in viewer
+   * simply see `getViewer()` return null when this is absent.
+   */
+  CLERK_SECRET_KEY: z
+    .string()
+    .min(1)
+    .optional()
+    .or(z.literal("").transform(() => undefined)),
+  /** Svix signing secret for POST /api/webhooks/clerk; the route 503s without it (fail closed). */
+  CLERK_WEBHOOK_SIGNING_SECRET: z
+    .string()
+    .min(1)
+    .optional()
+    .or(z.literal("").transform(() => undefined)),
+  /** CSV of Clerk user ids promote-only bootstrapped to the admin role on first sync. */
+  CLERK_ADMIN_USER_IDS: z.string().default(""),
+  /** Multiplier applied to the per-IP hourly limits when the requester is signed in (§20.1f). */
+  RATE_LIMIT_AUTHED_MULTIPLIER: z.coerce.number().min(1).default(3),
 });
 
 function parseEnv<T extends z.ZodRawShape>(schema: z.ZodObject<T>, label: string) {
@@ -66,6 +95,7 @@ function parseEnv<T extends z.ZodRawShape>(schema: z.ZodObject<T>, label: string
 let dbEnvCache: z.infer<typeof dbEnvSchema> | undefined;
 let r2EnvCache: z.infer<typeof r2EnvSchema> | undefined;
 let ingestEnvCache: z.infer<typeof ingestEnvSchema> | undefined;
+let authEnvCache: z.infer<typeof authEnvSchema> | undefined;
 
 export function getDbEnv(): z.infer<typeof dbEnvSchema> {
   dbEnvCache ??= parseEnv(dbEnvSchema, "Postgres");
@@ -80,4 +110,21 @@ export function getR2Env(): z.infer<typeof r2EnvSchema> {
 export function getIngestEnv(): z.infer<typeof ingestEnvSchema> {
   ingestEnvCache ??= parseEnv(ingestEnvSchema, "ingest");
   return ingestEnvCache;
+}
+
+export function getAuthEnv(): z.infer<typeof authEnvSchema> {
+  authEnvCache ??= parseEnv(authEnvSchema, "auth");
+  return authEnvCache;
+}
+
+/**
+ * True once both halves of a Clerk instance are configured. Gates
+ * `<ClerkProvider>`, `proxy.ts`, and `getViewer()` so an unconfigured
+ * deployment (or CI) stays anonymous-only instead of crashing (§20.1a).
+ * Reads `process.env` directly (not `getAuthEnv()`/`getR2Env()`-style
+ * caching) because `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` must stay a literal
+ * `process.env.*` expression for Next's build-time inlining to reach it.
+ */
+export function isClerkConfigured(): boolean {
+  return Boolean(process.env.CLERK_SECRET_KEY) && Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 }
