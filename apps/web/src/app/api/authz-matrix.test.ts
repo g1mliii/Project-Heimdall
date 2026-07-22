@@ -115,6 +115,12 @@ describe.skipIf(!canRun)("authz matrix (§20 regression baseline)", () => {
     process.env.RATE_LIMIT_DELETE_PER_HOUR = "10000";
     process.env.RATE_LIMIT_CLAIM_PER_HOUR = "10000";
     process.env.RATE_LIMIT_CREATE_REPORT_PER_HOUR = "10000";
+    // POST /api/account/delete fail-closes with 503 unless a webhook signing
+    // secret is configured (§20.4) — the erasure cascade's sole trigger. The
+    // matrix simulates a normally-configured deployment so the row asserts the
+    // route's authz posture (202 for a signed-in caller), not its unconfigured
+    // fallback, which account/delete/api.test.ts covers separately.
+    process.env.CLERK_WEBHOOK_SIGNING_SECRET = "whsec_test";
     await db.pool.query(
       `insert into users (id, role) values ($1, 'public'), ($2, 'public'), ($3, 'admin')
        on conflict (id) do nothing`,
