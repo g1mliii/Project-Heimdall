@@ -21,7 +21,11 @@ import {
 const RUN_URL = `/runs/${E2E_RUN_ID}`;
 const VRAM_RUN_URL = `/runs/${E2E_VRAM_RUN_ID}`;
 const BENCHMARK_SET_RUN_URL = `/runs/${E2E_BENCHMARK_SET_RUN_ID}`;
-const FRAMES_OBJECT_URL = "https://r2.invalid/frames.parquet";
+// A presigned-GET-shaped origin: real frame reads come back on
+// *.r2.cloudflarestorage.com, which the production CSP `connect-src` allows.
+// A bogus host (e.g. r2.invalid) is blocked by that policy under `next start`,
+// so the browser never fetches the mock and the chart never reaches ready.
+const FRAMES_OBJECT_URL = "https://test.r2.cloudflarestorage.com/frames.parquet";
 
 const R2_CORS = { "access-control-allow-origin": "http://localhost:3000" };
 

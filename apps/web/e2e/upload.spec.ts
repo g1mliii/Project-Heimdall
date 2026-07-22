@@ -58,12 +58,12 @@ test("single-file upload flow reaches done with mocked ingest APIs", async ({ pa
       contentType: "application/json",
       body: JSON.stringify({
         id: SINGLE_UPLOAD_RUN_ID,
-        uploadUrl: "https://r2.invalid/put",
+        uploadUrl: "https://test.r2.cloudflarestorage.com/put",
         uploadObjectKey: `staging/runs/${SINGLE_UPLOAD_RUN_ID}.parquet`,
       }),
     }),
   );
-  await page.route("https://r2.invalid/put", fulfillR2Cors);
+  await page.route("https://test.r2.cloudflarestorage.com/put", fulfillR2Cors);
   await page.route(`**/api/runs/${SINGLE_UPLOAD_RUN_ID}/finalize`, (route) =>
     route.fulfill({
       status: 200,
@@ -93,12 +93,12 @@ test("ambiguous finalize failures keep the delete token visible", async ({ page 
       contentType: "application/json",
       body: JSON.stringify({
         id: "run_e2e_recovery",
-        uploadUrl: "https://r2.invalid/recovery-put",
+        uploadUrl: "https://test.r2.cloudflarestorage.com/recovery-put",
         uploadObjectKey: "staging/runs/run_e2e_recovery.parquet",
       }),
     }),
   );
-  await page.route("https://r2.invalid/recovery-put", fulfillR2Cors);
+  await page.route("https://test.r2.cloudflarestorage.com/recovery-put", fulfillR2Cors);
   await page.route("**/api/runs/run_e2e_recovery/finalize", (route) =>
     route.abort("connectionreset"),
   );
@@ -125,12 +125,12 @@ test("batch upload: per-file status, one bad file never blocks the rest (§11.8)
       contentType: "application/json",
       body: JSON.stringify({
         id: `run_e2e_b${created}`,
-        uploadUrl: `https://r2.invalid/put/${created}`,
+        uploadUrl: `https://test.r2.cloudflarestorage.com/put/${created}`,
         uploadObjectKey: `staging/runs/run_e2e_b${created}.parquet`,
       }),
     });
   });
-  await page.route("https://r2.invalid/put/**", fulfillR2Cors);
+  await page.route("https://test.r2.cloudflarestorage.com/put/**", fulfillR2Cors);
   await page.route("**/api/runs/*/finalize", (route) =>
     route.fulfill({
       status: 200,
