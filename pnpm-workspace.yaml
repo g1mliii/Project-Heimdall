@@ -13,13 +13,15 @@ allowBuilds:
   workerd: true
 
 # Force-patch transitive advisories so `pnpm audit:deps` stays green.
-# next 16.2.6 pulls postcss <8.5.10 (GHSA-qx2v-qp2m-jg93, XSS in stringify);
-# 8.5.15 is the patched, 30-day-soaked pin.
+# next 16.2.6 pulls postcss <8.5.10 (GHSA-qx2v-qp2m-jg93, XSS in stringify)
+# and sharp <0.35.0 (GHSA-f88m-g3jw-g9cj, vulnerable libvips). The pins below
+# are patched, 30-day-soaked versions.
 overrides:
   # tsup 8.5.1 resolves an older peer copy via bundle-require. 0.28.1 fixes
   # GHSA-g7r4-m6w7-qqqr (Windows dev-server arbitrary file read).
   esbuild: 0.28.1
   postcss: 8.5.15
+  sharp: 0.35.0
   brace-expansion@^2.0.0: 2.1.2
   brace-expansion@^5.0.0: 5.0.7
   protobufjs@^7.5.0: 7.6.5

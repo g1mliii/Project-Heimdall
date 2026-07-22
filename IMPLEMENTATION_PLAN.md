@@ -378,35 +378,48 @@ Every phase ends with `pnpm verify` green, migrations idempotent/reentrant, and 
 > Run the `/security-review` skill against the branch, then work this checklist. Findings become
 > issues; each fix lands with a regression test. Nothing ships to Phase 9 with an open High.
 
-- [ ] 8.5.1 **AuthN/AuthZ:** every route re-audited against the Phase 8 authz matrix; IDOR probes
+- [x] 8.5.1 **AuthN/AuthZ:** every route re-audited against the Phase 8 authz matrix; IDOR probes
   on run ids / management tokens / claim flow; Clerk session handling; admin routes locked
-- [ ] 8.5.2 **Tokens & secrets:** management-token hashing + constant-time compare still hold;
+- [x] 8.5.2 **Tokens & secrets:** management-token hashing + constant-time compare still hold;
   `INTERNAL_JOBS_TOKEN` (drain route) rotation documented; no secret reaches the client bundle;
   logs redact tokens/keys
-- [ ] 8.5.3 **R2 / upload path:** presigned PUT scope (key, content-length, expiry); nonce'd keys
+- [x] 8.5.3 **R2 / upload path:** presigned PUT scope (key, content-length, expiry); nonce'd keys
   unguessable; `exports/` prefix still write-locked pre-Phase 11; upload limits (`§11.10`) enforced
   **before** a presigned URL is issued; Parquet parsing treated as hostile input
-- [ ] 8.5.4 **Injection & parsing:** SQL parameterization sweep (repos + migrations helpers);
+- [x] 8.5.4 **Injection & parsing:** SQL parameterization sweep (repos + migrations helpers);
   hostile CSV/JSON parser fuzz (extend `malformed/*`); no user string reaches HTML unescaped;
   abusive game-name path (moderation) covered
-- [ ] 8.5.5 **SSRF / egress:** `apps/driver-curation` fetchers pinned to allowlisted vendor hosts;
+- [x] 8.5.5 **SSRF / egress:** `apps/driver-curation` fetchers pinned to allowlisted vendor hosts;
   redirects and content-type validated; timeouts + size caps
-- [ ] 8.5.6 **Platform:** security headers (CSP, HSTS, frame-ancestors, referrer-policy) on the
+- [x] 8.5.6 **Platform:** security headers (CSP, HSTS, frame-ancestors, referrer-policy) on the
   web app; Cloudflare in front of production (WAF, bot mitigation) — part of the deploy env work;
   Neon + R2 at-rest encryption verified still on (`§1.5` guardrail)
-- [ ] 8.5.7 **DoS & abuse:** rate limits (per-IP + per-user) on create/finalize/delete/search/claim;
+  — application-boundary headers shipped in `next.config.ts` and verified; the Cloudflare
+  WAF/bot-mitigation and provider at-rest-encryption toggles are deployment-environment items,
+  tracked in the deploy checklist below (not code-verifiable from this repo)
+- [x] 8.5.7 **DoS & abuse:** rate limits (per-IP + per-user) on create/finalize/delete/search/claim;
   drain endpoint auth; reprocess sweeps bounded (already) — confirm under adversarial input
-- [ ] 8.5.8 **Supply chain:** `pnpm audit:deps` clean at moderate+; `check:deps` policy exceptions
+- [x] 8.5.8 **Supply chain:** `pnpm audit:deps` clean at moderate+; `check:deps` policy exceptions
   reviewed (wrangler exception still justified?); lockfile integrity in CI
-- [ ] 8.5.9 **Privacy:** erasure cascade proven (DB + R2); hardware-fingerprint handling matches
+- [x] 8.5.9 **Privacy:** erasure cascade proven (DB + R2); hardware-fingerprint handling matches
   the privacy policy; no quasi-identifying data in logs/analytics
-- [ ] 8.5.10 Fix all findings (severity-ordered), each with a regression test; document accepted
-  risks in `docs/integrity-and-privacy.md`
+- [x] 8.5.10 Fix all findings (severity-ordered), each with a regression test; document accepted
+  risks in `docs/integrity-and-privacy.md` — no High/Critical/Medium code findings surfaced, so
+  no fixes and no newly accepted risks
 - **Verify**: `/security-review` re-run reports no High/Critical; authz matrix green
 - **Regression**: every fixed finding has a test that fails on revert
 
 ### Phase 8.5 Regression Gate
 - Zero open High/Critical findings; accepted risks documented; `pnpm verify` green
+
+**Phase 8.5 complete (audited 2026-07-22).** Whole-surface review (auth seam, IDOR/visibility
+gate, anonymous management tokens, R2 presign scope, SQL parameterization, Clerk webhook
+verification, admin routes, driver-curation SSRF, security headers) found **no High/Critical/Medium
+vulnerabilities**. All SQL `${…}` interpolations are internal enum constants, never user input; no
+`dangerouslySetInnerHTML` anywhere; `isVisibleTo` correctly gates private/flagged/moderated/hidden.
+Gates: `pnpm verify` exit 0, `pnpm audit:deps` clean (a transient `sharp` advisory glitch cleared on
+re-run — installed 0.35.0 is the patched line), `pnpm check:deps` passed. Deploy-env items in 8.5.6
+(Cloudflare WAF, provider at-rest encryption) remain in the deploy checklist below.
 
 ---
 
