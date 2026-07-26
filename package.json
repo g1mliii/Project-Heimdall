@@ -11,7 +11,8 @@
   },
   "dependencyPolicy": {
     "minimumAgeExceptions": {
-      "wrangler@4.110.0": "Security exception: replaces the 30-day-soaked 4.100.0 release whose Miniflare tree contains patched undici and ws advisories (GHSA-vmh5-mc38-953g, GHSA-vxpw-j846-p89q, GHSA-hm92-r4w5-c3mj, GHSA-96hv-2xvq-fx4p)."
+      "wrangler@4.110.0": "Security exception: replaces the 30-day-soaked 4.100.0 release whose Miniflare tree contains patched undici and ws advisories (GHSA-vmh5-mc38-953g, GHSA-vxpw-j846-p89q, GHSA-hm92-r4w5-c3mj, GHSA-96hv-2xvq-fx4p).",
+      "next@16.2.11": "Security exception: 16.2.6 carries 9 advisories fixed in 16.2.11 — Middleware/Proxy bypass in App Router, SSRF in rewrites and in Server Actions, DoS in App Router Server Components and in the Image Optimization API, response-body cache confusion, unauthenticated Server Function endpoint disclosure, and unbounded Edge Server Action payloads. 16.2.11 is the lowest patched release, preferred over the newer 16.2.12 for soak time."
     }
   },
   "scripts": {
