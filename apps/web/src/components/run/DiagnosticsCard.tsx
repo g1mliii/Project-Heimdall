@@ -14,6 +14,7 @@
 import type * as React from "react";
 import { Badge, Card, Diagnostic } from "@heimdall/ui";
 import { RUN_STATUS, type Diagnostic as DiagnosticData, type RunStatus } from "@heimdall/shared";
+import { DiagnosticEvidenceDetail } from "./DiagnosticEvidenceDetail";
 
 const ATTRIBUTION_INFO_CODES = new Set([
   "likely-cpu-bound",
@@ -74,6 +75,10 @@ export function DiagnosticsCard({
                 >
                   {diagnostic.confidence ? `${diagnostic.confidence} confidence — ` : ""}
                   {diagnostic.detail}
+                  {/* §8.6.4 — the structured evidence the finding fired on */}
+                  {diagnostic.evidence && (
+                    <DiagnosticEvidenceDetail evidence={diagnostic.evidence} />
+                  )}
                 </Diagnostic>
               ))}
             </>

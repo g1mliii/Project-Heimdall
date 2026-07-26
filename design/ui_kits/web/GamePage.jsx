@@ -6,12 +6,21 @@ function GamePage() {
   // Sample counts per GPU bucket drive the §17.4 cold-start threshold (~30).
   const SAMPLES = { '4070': 412, '4090': 156, '7800xt': 63, 'b580': 7 };
   const GPU_LABEL = { '4070': 'RTX 4070', '4090': 'RTX 4090', '7800xt': 'RX 7800 XT', 'b580': 'Arc B580' };
+  // meth: line 1 = comparability facts; line 2 (§8.6.2) = declared settings +
+  // frame pacing; profile = low-frequency provenance behind the info affordance.
   const allRows = [
-    { gpu: 'RTX 4090', cpu: '7800X3D', avg: 198, p1: 142, p01: 110, by: 'hardwarecanucks', v: true, scene: 'benchmark' },
-    { gpu: 'RTX 4070', cpu: '7800X3D', avg: 145, p1: 98, p01: 71, by: 'you', v: false, me: true, scene: 'benchmark' },
-    { gpu: 'RX 7800 XT', cpu: '5800X', avg: 131, p1: 88, p01: 64, by: 'frame_chaser', v: true, scene: 'gameplay' },
-    { gpu: 'RTX 4070', cpu: '13600K', avg: 139, p1: 91, p01: 66, by: 'anon', v: false, scene: 'gameplay' },
-    { gpu: 'Arc B580', cpu: '7600', avg: 96, p1: 61, p01: 44, by: 'intel_labs', v: true, scene: 'benchmark' },
+    { gpu: 'RTX 4090', cpu: '7800X3D', avg: 198, p1: 142, p01: 110, by: 'hardwarecanucks', v: true, scene: 'benchmark',
+      meth: '4K · DX12 · DLSS · RT', declared: 'Ultra · Dogtown market · 116 FPS cap · VRR · 240 Hz',
+      profile: 'Game build 2.21 · CapFrameX 1.7.2 · Warm-up: discarded first 10 s · HAGS enabled' },
+    { gpu: 'RTX 4070', cpu: '7800X3D', avg: 145, p1: 98, p01: 71, by: 'you', v: false, me: true, scene: 'benchmark',
+      meth: '1440p · DX12 · DLSS · RT', declared: 'Ultra · Dogtown market · VRR · 144 Hz',
+      profile: 'Game build 2.21 · PresentMon 2.3 · HAGS enabled' },
+    { gpu: 'RX 7800 XT', cpu: '5800X', avg: 131, p1: 88, p01: 64, by: 'frame_chaser', v: true, scene: 'gameplay',
+      meth: '1440p · DX12 · FSR', declared: 'High · Vsync', profile: 'Game build 2.20 · MangoHud 0.8' },
+    { gpu: 'RTX 4070', cpu: '13600K', avg: 139, p1: 91, p01: 66, by: 'anon', v: false, scene: 'gameplay',
+      meth: '1440p · DX12 · DLSS', declared: null, profile: null },
+    { gpu: 'Arc B580', cpu: '7600', avg: 96, p1: 61, p01: 44, by: 'intel_labs', v: true, scene: 'benchmark',
+      meth: '1080p · DX12 · XeSS', declared: 'Medium · Dogtown market', profile: 'Game build 2.21 · PresentMon 2.3' },
   ];
   const rows = allRows.filter((r) => workload === 'all' || r.scene === workload);
   const sampleN = SAMPLES[gpu];
@@ -107,8 +116,8 @@ function GamePage() {
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr>
-              {['GPU', 'CPU', 'Scene', 'Avg', '1% Low', '0.1% Low', 'By'].map((h, i) => (
-                <th key={h} style={{ textAlign: i > 2 && i < 6 ? 'right' : 'left', font: 'var(--type-overline)', letterSpacing: 'var(--tracking-wide)', textTransform: 'uppercase', color: 'var(--fg-3)', padding: '10px var(--space-5)', borderBottom: '1px solid var(--line-2)' }}>{h}</th>
+              {['GPU', 'CPU', 'Scene', 'Methodology', 'Avg', '1% Low', '0.1% Low', 'By'].map((h, i) => (
+                <th key={h} style={{ textAlign: i > 3 && i < 7 ? 'right' : 'left', font: 'var(--type-overline)', letterSpacing: 'var(--tracking-wide)', textTransform: 'uppercase', color: 'var(--fg-3)', padding: '10px var(--space-5)', borderBottom: '1px solid var(--line-2)' }}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -119,6 +128,18 @@ function GamePage() {
                 <td style={{ padding: '12px var(--space-5)', borderBottom: '1px solid var(--line-1)', font: 'var(--type-body-sm)', color: 'var(--fg-2)' }}>{r.cpu}</td>
                 <td style={{ padding: '12px var(--space-5)', borderBottom: '1px solid var(--line-1)' }}>
                   <span className={`hd-badge hd-badge--${r.scene === 'benchmark' ? 'info' : 'neutral'}`}>{r.scene === 'benchmark' ? 'Bench' : 'Play'}</span>
+                </td>
+                {/* §8.6.2 — line 1: comparability facts; line 2: declared settings
+                    + pacing (omitted when undeclared, never dashed out); info
+                    affordance carries the low-frequency declared profile */}
+                <td style={{ padding: '12px var(--space-5)', borderBottom: '1px solid var(--line-1)' }}>
+                  <span style={{ display: 'block', font: 'var(--type-body-sm)', color: 'var(--fg-2)' }}>{r.meth}</span>
+                  {r.declared && (
+                    <span style={{ display: 'block', font: 'var(--type-caption)', color: 'var(--fg-3)', marginTop: '3px' }}>
+                      {r.declared}
+                      {r.profile && <span title={r.profile} style={{ display: 'inline-flex', verticalAlign: 'middle', marginLeft: '5px', cursor: 'help' }}><Icon n="info" size={12} /></span>}
+                    </span>
+                  )}
                 </td>
                 <td data-mono style={{ padding: '12px var(--space-5)', borderBottom: '1px solid var(--line-1)', textAlign: 'right', font: 'var(--type-data)', color: 'var(--tier-avg)', fontWeight: 600 }}>{r.avg}</td>
                 <td data-mono style={{ padding: '12px var(--space-5)', borderBottom: '1px solid var(--line-1)', textAlign: 'right', font: 'var(--type-data)', color: 'var(--fg-1)' }}>{r.p1}</td>

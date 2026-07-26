@@ -125,9 +125,56 @@ test("public benchmark sets show repeatability without promoting warm-ups (§16c
 
   await expect(page.getByLabel("Benchmark set repeatability")).toBeVisible();
   await expect(page.getByText("3 measured runs · 1 warm-up pass excluded")).toBeVisible();
-  await expect(page.getByText("High confidence")).toBeVisible();
+  // exact — the §8.6.6 sample-count caption also contains "high confidence".
+  await expect(page.getByText("High confidence", { exact: true })).toBeVisible();
   await expect(page.getByText("Mean avg FPS")).toBeVisible();
   await expect(page.getByText("Relative variation (CV)")).toBeVisible();
+});
+
+test("capability panel, declared subtitle, tail tiles, sample count, busy overlay (§8.6)", async ({ page }) => {
+  await mockFramesFlow(page, E2E_BENCHMARK_SET_RUN_ID);
+  await page.goto(BENCHMARK_SET_RUN_URL);
+  await readyChart(page);
+
+  // §8.6.2 — the declared settings string from the methodology manifest.
+  await expect(page.getByText(/Ultra · 2560x1440 · DX12 · \d+s capture/)).toBeVisible();
+  // §8.6.3 — the run's own tail-latency tiles.
+  await expect(page.getByText("P95 frame time")).toBeVisible();
+  await expect(page.getByText("P99 frame time")).toBeVisible();
+  await expect(page.getByText("Stutter events")).toBeVisible();
+  // §8.6.6 — the grading basis as visible text.
+  await expect(page.getByText(/Graded from [\d,]+ frames/)).toBeVisible();
+  // §8.6.1 — capability panel with sensor coverage and readiness statement.
+  await expect(page.getByText("Capture capability")).toBeVisible();
+  await expect(page.getByText("CPU busy time")).toBeVisible();
+  await expect(page.getByText("Bottleneck data ready")).toBeVisible();
+  // §8.6.8 — the overlay toggles on with its legend chips. The switch input
+  // itself is visually hidden (the track is the rendered control), so click
+  // the label like a user would.
+  const toggle = page.getByRole("switch", { name: "Busy time" });
+  await expect(toggle).toBeEnabled();
+  await page.locator("label.hd-switch", { hasText: "Busy time" }).click();
+  await expect(page.getByText("CPU busy", { exact: true })).toBeVisible();
+  await expect(page.getByText("GPU busy", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Gaps mark frames the sensor did not report/)).toBeVisible();
+});
+
+test("manifest-less run: overlay named unavailable; driver evidence opens (§8.6)", async ({ page }) => {
+  await mockFramesFlow(page);
+  await page.goto(RUN_URL);
+  await readyChart(page);
+
+  // No capability manifest → the switch is disabled and the reason is visible,
+  // and no capability panel renders (honest absence, no placeholder).
+  await expect(page.getByRole("switch", { name: "Busy time" })).toBeDisabled();
+  await expect(page.getByText(/Capture capability is unknown for this run/)).toBeVisible();
+  await expect(page.getByText("Capture capability", { exact: true })).toHaveCount(0);
+
+  // §8.6.4 — the driver finding's evidence disclosure carries its provenance
+  // (scoped to the details: the finding's prose also names the version).
+  const evidence = page.locator("details").filter({ hasText: "Evidence" }).first();
+  await evidence.locator("summary").click();
+  await expect(evidence.locator("[data-mono]").filter({ hasText: "566.36" })).toBeVisible();
 });
 
 test("ms/FPS toggle re-labels the y axis through the same scale (§13.1)", async ({ page }) => {

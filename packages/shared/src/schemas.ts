@@ -20,7 +20,8 @@ import {
   MIN_FRAME_TIME_MS,
   SEARCH_RESULT_LIMIT,
 } from "./constants";
-import type { CapabilitySensorField } from "./constants";
+import type { CapabilitySensorField, DiagnosticEvidenceMetricKey } from "./constants";
+import { canonicalGraphicsApi } from "./graphics-api";
 
 /* ── Primitive enums (kept in lockstep with the domain unions in types.ts) ── */
 
@@ -64,7 +65,6 @@ const MAX_METADATA_TEXT_LENGTH = 512;
  */
 export const MAX_INDEXED_METADATA_TEXT_LENGTH = 64;
 const MAX_MANIFEST_CAVEATS = 16;
-const MAX_EVIDENCE_METRICS = 16;
 const metadataText = (maxLength: number) => z.string().trim().min(1).max(maxLength);
 const metadataTextSchema = metadataText(MAX_METADATA_TEXT_LENGTH);
 const indexedMetadataTextSchema = metadataText(MAX_INDEXED_METADATA_TEXT_LENGTH);
@@ -78,7 +78,21 @@ export const benchmarkSetCredentialsSchema = z.object({
   secret: benchmarkSetSecretSchema,
 });
 export type BenchmarkSetCredentials = z.infer<typeof benchmarkSetCredentialsSchema>;
-const evidenceMetricNameSchema = z.string().trim().min(1).max(64);
+/**
+ * Written out rather than built from DIAGNOSTIC_EVIDENCE_METRIC_KEYS: a mapped
+ * shape needs an `as` cast that would absorb exactly the drift the closed
+ * vocabulary exists to catch. `satisfies` makes a missing or extra key a
+ * compile error, and the runtime side stays pinned by the key-set test.
+ */
+const diagnosticEvidenceMetricsSchema = z
+  .object({
+    pairedSamples: z.number(),
+    cpuBoundFraction: z.number(),
+    gpuBoundFraction: z.number(),
+    cappedFraction: z.number(),
+  } satisfies Record<DiagnosticEvidenceMetricKey, z.ZodNumber>)
+  .partial()
+  .strict();
 
 export const hardwareSnapshotSchema = z.object({
   gpu: z.string().min(1),
@@ -104,12 +118,7 @@ export const hardwareSnapshotSchema = z.object({
 export const diagnosticEvidenceSchema = z.object({
   coverageFraction: z.number().min(0).max(1).optional(),
   sensors: z.array(z.enum(CAPABILITY_SENSOR_FIELDS)).max(CAPABILITY_SENSOR_FIELDS.length).optional(),
-  metrics: z
-    .record(evidenceMetricNameSchema, z.number())
-    .refine((metrics) => Object.keys(metrics).length <= MAX_EVIDENCE_METRICS, {
-      message: `at most ${MAX_EVIDENCE_METRICS} evidence metrics are allowed`,
-    })
-    .optional(),
+  metrics: diagnosticEvidenceMetricsSchema.optional(),
   caveats: z.array(metadataTextSchema).max(MAX_MANIFEST_CAVEATS).optional(),
   provenance: z
     .object({
@@ -218,14 +227,16 @@ export const upscalerModeSchema = z.enum(["none", "dlss", "fsr", "xess", "unknow
 export const rayTracingModeSchema = z.enum(["off", "on", "unknown"]);
 export const hagsStateSchema = z.enum(["enabled", "disabled", "unknown"]);
 
+// `runs.frame_pacing_cap` is an integer. Reject fractional limiter values at
+// every wire boundary rather than letting schema-valid data fail at Postgres.
+const frameCapFpsSchema = z.number().int().positive();
+const refreshRateHzSchema = z.number().positive();
+
 export const framePacingSchema = z.object({
-  // `runs.frame_pacing_cap` is an integer. Reject fractional limiter values
-  // at the API boundary rather than letting a schema-valid request fail during
-  // the database insert.
-  capFps: z.number().int().positive().optional(),
+  capFps: frameCapFpsSchema.optional(),
   vsync: z.boolean(),
   vrr: z.boolean(),
-  refreshHz: z.number().positive().optional(),
+  refreshHz: refreshRateHzSchema.optional(),
 });
 
 /** Mirrors the `MethodologyManifest` domain type; drift-guarded in the tests. */
@@ -235,7 +246,7 @@ export const methodologyManifestSchema = z.object({
   scene: indexedMetadataTextSchema.optional(),
   sceneType: sceneTypeSchema,
   settingsPreset: indexedMetadataTextSchema.optional(),
-  graphicsApi: indexedMetadataTextSchema.optional(),
+  graphicsApi: indexedMetadataTextSchema.transform(canonicalGraphicsApi).optional(),
   resolution: indexedMetadataTextSchema.optional(),
   upscaler: upscalerModeSchema,
   rayTracing: rayTracingModeSchema,
@@ -302,11 +313,23 @@ export type GameSubmissionsQuery = z.infer<typeof gameSubmissionsQuerySchema>;
 
 export const gameSubmissionMethodologySchema = z.object({
   profileComplete: z.boolean(),
-  resolution: z.string().nullable(),
-  graphicsApi: z.string().nullable(),
+  resolution: indexedMetadataTextSchema.nullable(),
+  graphicsApi: indexedMetadataTextSchema.transform(canonicalGraphicsApi).nullable(),
   upscaler: upscalerModeSchema.nullable(),
   rayTracing: rayTracingModeSchema.nullable(),
   frameGeneration: generatedFrameTechSchema,
+  // §8.6.2 declared-profile fields — null means "not declared", which for the
+  // tri-state booleans is distinct from a declared false.
+  settingsPreset: indexedMetadataTextSchema.nullable(),
+  scene: indexedMetadataTextSchema.nullable(),
+  capFps: frameCapFpsSchema.nullable(),
+  vsync: z.boolean().nullable(),
+  vrr: z.boolean().nullable(),
+  refreshHz: refreshRateHzSchema.nullable(),
+  gameBuild: metadataTextSchema.nullable(),
+  captureTool: metadataTextSchema.nullable(),
+  warmupPolicy: metadataTextSchema.nullable(),
+  hags: hagsStateSchema.nullable(),
 });
 
 export const gameSubmissionRowSchema = z.object({

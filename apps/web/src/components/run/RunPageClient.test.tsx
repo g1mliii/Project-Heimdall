@@ -14,18 +14,27 @@ import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom/vitest";
 import { computeRunSummary } from "@heimdall/parsers";
 import { makeSyntheticFrames, RUN_STATUS, syntheticRunBase } from "@heimdall/shared";
-import type { Run } from "@heimdall/shared";
+import type { CapabilityManifest, MethodologyManifest, Run } from "@heimdall/shared";
 import type { ApiResult } from "@/lib/api/client";
 import { buildFrameSeries, type FrameSeries } from "@/lib/run/frame-series";
 import { RunPageClient, type FramesLoader } from "./RunPageClient";
+import { HAGS_QUALIFICATION } from "./busy-readiness";
+import { HardwareCard } from "./HardwareCard";
 import { RunHeader } from "./RunHeader";
 import { RunStatTiles } from "./RunStatTiles";
 
 vi.mock("./chart/FrameTimeChart", () => ({
-  FrameTimeChart: ({ stutterIndices }: { stutterIndices: Uint32Array }) => (
+  FrameTimeChart: ({
+    stutterIndices,
+    showBusy,
+  }: {
+    stutterIndices: Uint32Array;
+    showBusy?: boolean;
+  }) => (
     <div
       aria-label="Frame-time progression chart"
       data-stutter-count={stutterIndices.length}
+      data-show-busy={showBusy ? "true" : "false"}
       role="img"
     />
   ),
@@ -250,6 +259,11 @@ describe("RunPageClient states", () => {
     expect(screen.queryByText("No issues detected")).not.toBeInTheDocument();
   });
 
+  it("omits the capability panel for runs without a manifest (§8.6.1)", () => {
+    render(<RunPageClient run={run} loadFrames={okLoader} />);
+    expect(screen.queryByText("Capture capability")).not.toBeInTheDocument();
+  });
+
   it("shows a pending diagnostics state (never a false all-clear) before verification", () => {
     const pendingRun: Run = { ...run, status: RUN_STATUS.pending, diagnostics: [] };
     render(<RunPageClient run={pendingRun} loadFrames={okLoader} />);
@@ -298,6 +312,109 @@ describe("RunHeader", () => {
     expect(screen.queryByText("Pending verification")).not.toBeInTheDocument();
   });
 
+  it("renders the declared settings string from the methodology manifest (§8.6.2)", () => {
+    const manifest: MethodologyManifest = {
+      version: 1,
+      sceneType: "benchmark-scene",
+      settingsPreset: "Ultra",
+      graphicsApi: "dx12",
+      resolution: "2560x1440",
+      upscaler: "dlss",
+      rayTracing: "on",
+      frameGeneration: "dlss3",
+      framePacing: { vsync: false, vrr: true },
+      captureDurationSeconds: 62,
+    };
+    render(<RunHeader run={{ ...run, methodologyManifest: manifest }} />);
+    expect(
+      screen.getByText(
+        `CapFrameX log · Ultra · Ray tracing · 2560x1440 · DX12 · DLSS · ${Math.round(run.summary.durationSeconds)}s capture`,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the capture source when a methodology manifest is present", () => {
+    // The capability panel's source badge does NOT cover this: it renders only
+    // with a capability manifest, which is a different optional field and only
+    // lands canonically once the verify worker runs. Dropping the source from
+    // this branch hid it entirely for methodology-declaring pending runs.
+    const manifest: MethodologyManifest = {
+      version: 1,
+      sceneType: "benchmark-scene",
+      upscaler: "none",
+      rayTracing: "off",
+      frameGeneration: "none",
+      framePacing: { vsync: false, vrr: false },
+    };
+    render(
+      <RunHeader
+        run={{ ...run, methodologyManifest: manifest, capabilityManifest: undefined }}
+      />,
+    );
+    expect(screen.getByText(/^CapFrameX log · /)).toBeInTheDocument();
+  });
+
+  it("takes capture length from the canonical summary, never the declared manifest", () => {
+    // §11.5: the methodology manifest is uploader-declared and never
+    // recomputed, so it must not override the server's recomputed duration.
+    const manifest: MethodologyManifest = {
+      version: 1,
+      sceneType: "benchmark-scene",
+      upscaler: "none",
+      rayTracing: "off",
+      frameGeneration: "none",
+      framePacing: { vsync: false, vrr: false },
+      captureDurationSeconds: 600,
+    };
+    render(<RunHeader run={{ ...run, methodologyManifest: manifest }} />);
+    expect(
+      screen.getByText(new RegExp(`${Math.round(run.summary.durationSeconds)}s capture$`)),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/600s capture/)).not.toBeInTheDocument();
+  });
+
+  it("renders upscaler and graphics API in brand casing, not raw upper case", () => {
+    const manifest: MethodologyManifest = {
+      version: 1,
+      sceneType: "benchmark-scene",
+      graphicsApi: "vulkan",
+      upscaler: "xess",
+      rayTracing: "off",
+      frameGeneration: "none",
+      framePacing: { vsync: false, vrr: false },
+    };
+    render(<RunHeader run={{ ...run, methodologyManifest: manifest }} />);
+    // "XESS"/"VULKAN" read as a different brand than the badge map's "XeSS".
+    expect(screen.getByText(/Vulkan · XeSS/)).toBeInTheDocument();
+  });
+
+  it("skips undeclared settings fields rather than dashing them out (§8.6.2)", () => {
+    const sparse: MethodologyManifest = {
+      version: 1,
+      sceneType: "gameplay",
+      upscaler: "unknown",
+      rayTracing: "unknown",
+      frameGeneration: "none",
+      framePacing: { vsync: false, vrr: false },
+    };
+    render(<RunHeader run={{ ...run, methodologyManifest: sparse }} />);
+    // Falls back to the hardware resolution; duration from the summary.
+    expect(
+      screen.getByText(
+        `CapFrameX log · 2560x1440 · ${Math.round(run.summary.durationSeconds)}s capture`,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the pre-8.6 capture-facts subtitle for manifest-less runs", () => {
+    render(<RunHeader run={run} />);
+    expect(
+      screen.getByText(
+        `CapFrameX log · 2560x1440 · ${Math.round(run.summary.durationSeconds)}s capture`,
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("copies the share link and confirms", async () => {
     const writeText = vi.fn(() => Promise.resolve());
     Object.assign(navigator, { clipboard: { writeText } });
@@ -305,6 +422,257 @@ describe("RunHeader", () => {
     await userEvent.click(screen.getByRole("button", { name: /Share/ }));
     expect(writeText).toHaveBeenCalledWith(window.location.href);
     expect(await screen.findByText("Link copied")).toBeInTheDocument();
+  });
+});
+
+function busyCapableManifest(overrides: Partial<CapabilityManifest> = {}): CapabilityManifest {
+  return {
+    version: 1,
+    source: "presentmon",
+    sensors: {
+      gpuLoadPct: { present: true, frameAligned: true },
+      gpuClockMhz: { present: true, frameAligned: true },
+      gpuPowerW: { present: true, frameAligned: true },
+      vramUsedMb: { present: true, frameAligned: true },
+      cpuLoadPct: { present: true, frameAligned: true },
+      cpuBusyMs: { present: true, frameAligned: true },
+      gpuBusyMs: { present: true, frameAligned: true },
+    },
+    presentationMode: "hardware-independent-flip",
+    syncMode: "vrr",
+    frameGenerationObserved: true,
+    vramCapacity: { totalMb: 12288 },
+    caveats: [],
+    ...overrides,
+  };
+}
+
+describe("Busy-time overlay gating (§8.6.8)", () => {
+  it("offers the overlay when busy telemetry is frame-aligned, with legend and caption", async () => {
+    const loader = vi.fn<FramesLoader>(okLoader);
+    render(
+      <RunPageClient
+        run={{ ...run, capabilityManifest: busyCapableManifest() }}
+        loadFrames={loader}
+      />,
+    );
+    await screen.findByRole("img", { name: "Frame-time progression chart" });
+    expect(loader).toHaveBeenCalledWith(run.id, expect.anything(), { busyColumns: true });
+
+    const toggle = screen.getByRole("switch", { name: "Busy time" });
+    expect(toggle).toBeEnabled();
+    expect(screen.queryByText("CPU busy")).not.toBeInTheDocument();
+
+    await userEvent.click(toggle);
+    expect(screen.getByText("CPU busy")).toBeInTheDocument();
+    expect(screen.getByText("GPU busy")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Frame-time progression chart" })).toHaveAttribute(
+      "data-show-busy",
+      "true",
+    );
+    expect(screen.getByText(/Gaps mark frames the sensor did not report/)).toBeInTheDocument();
+    // No HAGS caveat unless HAGS was declared enabled.
+    expect(screen.queryByText(/HAGS-affected/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the HAGS qualification on the drawn overlay when declared enabled", async () => {
+    const hagsManifest: MethodologyManifest = {
+      version: 1,
+      sceneType: "benchmark-scene",
+      upscaler: "none",
+      rayTracing: "off",
+      frameGeneration: "none",
+      framePacing: { vsync: false, vrr: false },
+      hags: "enabled",
+    };
+    render(
+      <RunPageClient
+        run={{
+          ...run,
+          capabilityManifest: busyCapableManifest(),
+          methodologyManifest: hagsManifest,
+        }}
+        loadFrames={okLoader}
+      />,
+    );
+    await screen.findByRole("img", { name: "Frame-time progression chart" });
+
+    await userEvent.click(screen.getByRole("switch", { name: "Busy time" }));
+    // The chart caption and the capability panel state ONE qualification
+    // sentence: the caption used to hand-write a second, differently-worded
+    // copy of it, so this asserts both carry the shared string verbatim.
+    const qualified = screen
+      .getAllByText((_, element) => element?.textContent?.includes(HAGS_QUALIFICATION.trim()) ?? false)
+      .map((element) => element.textContent);
+    expect(qualified).toEqual(
+      expect.arrayContaining([
+        `Gaps mark frames the sensor did not report.${HAGS_QUALIFICATION}`,
+      ]),
+    );
+  });
+
+  it("disables the overlay with the reason when telemetry is not frame-aligned", async () => {
+    const manifest = busyCapableManifest();
+    manifest.sensors = {
+      ...manifest.sensors,
+      gpuBusyMs: { present: true, frameAligned: false },
+    };
+    render(<RunPageClient run={{ ...run, capabilityManifest: manifest }} loadFrames={okLoader} />);
+    await screen.findByRole("img", { name: "Frame-time progression chart" });
+
+    expect(screen.getByRole("switch", { name: "Busy time" })).toBeDisabled();
+    expect(
+      screen.getByText(/periodically sampled, not per-frame — it can't be drawn honestly/),
+    ).toBeInTheDocument();
+  });
+
+  it("disables the overlay with the reason when busy telemetry is absent", async () => {
+    const manifest = busyCapableManifest();
+    manifest.sensors = {
+      ...manifest.sensors,
+      cpuBusyMs: { present: false, frameAligned: false },
+      gpuBusyMs: { present: false, frameAligned: false },
+    };
+    render(<RunPageClient run={{ ...run, capabilityManifest: manifest }} loadFrames={okLoader} />);
+    await screen.findByRole("img", { name: "Frame-time progression chart" });
+
+    expect(screen.getByRole("switch", { name: "Busy time" })).toBeDisabled();
+    // Both the chart caption and the capability panel name the absence.
+    expect(
+      screen.getAllByText(/carries no CPU\/GPU busy-time telemetry/).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("treats a missing capability manifest as unavailable, never fabricating a trace", async () => {
+    render(<RunPageClient run={run} loadFrames={okLoader} />);
+    await screen.findByRole("img", { name: "Frame-time progression chart" });
+
+    expect(screen.getByRole("switch", { name: "Busy time" })).toBeDisabled();
+    expect(screen.getByText(/Capture capability is unknown for this run/)).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Frame-time progression chart" })).toHaveAttribute(
+      "data-show-busy",
+      "false",
+    );
+  });
+
+  it("disables the switch in FPS mode and names the reason as visible text", async () => {
+    render(
+      <RunPageClient
+        run={{ ...run, capabilityManifest: busyCapableManifest() }}
+        loadFrames={okLoader}
+      />,
+    );
+    await screen.findByRole("img", { name: "Frame-time progression chart" });
+
+    await userEvent.click(screen.getByRole("button", { name: "FPS" }));
+    expect(screen.getByRole("switch", { name: "Busy time" })).toBeDisabled();
+    // The visible label now carries the tooltip too, but the reason must still
+    // be on the page for keyboard/touch users, like §8.6.6's count.
+    expect(screen.getByText("Busy time is a duration — switch to ms")).toBeVisible();
+  });
+
+  it("refuses the overlay when only one busy column decoded", async () => {
+    // The legend advertises both traces but the chart draws each only if its
+    // column exists, so one-sided data must not read as available.
+    const oneSided: FramesLoader = () =>
+      Promise.resolve({
+        ok: true,
+        data: { ...series, cpuBusyMs: new Float64Array(series.count).fill(4), gpuBusyMs: undefined },
+      });
+    render(
+      <RunPageClient
+        run={{ ...run, capabilityManifest: busyCapableManifest() }}
+        loadFrames={oneSided}
+      />,
+    );
+    await screen.findByRole("img", { name: "Frame-time progression chart" });
+
+    expect(screen.getByRole("switch", { name: "Busy time" })).toBeDisabled();
+    expect(screen.getByText(/decoded frames carry no busy-time samples/)).toBeVisible();
+    expect(screen.queryByText("GPU busy")).not.toBeInTheDocument();
+  });
+
+  it("skips decoding the busy columns when the manifest declares them absent", async () => {
+    const absent = busyCapableManifest();
+    absent.sensors = {
+      ...absent.sensors,
+      cpuBusyMs: { present: false, frameAligned: false },
+      gpuBusyMs: { present: false, frameAligned: false },
+    };
+    const loader = vi.fn<FramesLoader>(() => Promise.resolve({ ok: true, data: series }));
+
+    render(<RunPageClient run={{ ...run, capabilityManifest: absent }} loadFrames={loader} />);
+    await screen.findByRole("img", { name: "Frame-time progression chart" });
+
+    expect(loader).toHaveBeenCalledWith(run.id, expect.anything(), { busyColumns: false });
+  });
+});
+
+describe("SmoothnessBars sample count (§8.6.6)", () => {
+  it("shows the frame count as visible text, not just a tooltip title", () => {
+    render(
+      <RunPageClient
+        run={{ ...run, summary: { ...run.summary, sampleCount: 12480 } }}
+        loadFrames={okLoader}
+      />,
+    );
+    const count = screen.getByText("12,480");
+    expect(count).toBeVisible();
+    expect(count).toHaveAttribute("data-mono");
+    expect(screen.getByText(/for high confidence/)).toBeInTheDocument();
+  });
+});
+
+describe("HardwareCard (§8.6.5)", () => {
+  it("meters peak VRAM against the declared capacity", () => {
+    render(
+      <HardwareCard
+        hardware={{ ...run.hardware, gpuVramTotalMb: 12288 }}
+        series={{ ...series, peakVramUsedMb: 11674 }}
+      />,
+    );
+    expect(screen.getByText("11.4 / 12.0 GB")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "Peak VRAM" })).toBeInTheDocument();
+  });
+
+  it("keeps peak VRAM a plain row when no capacity was declared", () => {
+    render(<HardwareCard hardware={run.hardware} series={{ ...series, peakVramUsedMb: 11674 }} />);
+    // A meter against an unknown max would lie — plain data row only.
+    expect(screen.getByText("11.4 GB")).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar", { name: "Peak VRAM" })).not.toBeInTheDocument();
+  });
+
+  it("meters against the manifest's declared capacity when hardware has none", () => {
+    // deriveCapabilityManifest falls back to the declared vramCapacity exactly
+    // when gpuVramTotalMb is absent, and verification preserves it — so the
+    // capacity IS known here and a bare row would contradict the capability
+    // panel printing "12.0 GB" beside it.
+    render(
+      <HardwareCard
+        hardware={{ ...run.hardware, gpuVramTotalMb: undefined }}
+        capabilityManifest={busyCapableManifest({ vramCapacity: { totalMb: 12288 } })}
+        series={{ ...series, peakVramUsedMb: 11674 }}
+      />,
+    );
+    expect(screen.getByText("11.4 / 12.0 GB")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "Peak VRAM" })).toBeInTheDocument();
+  });
+
+  it("prefers the hardware-owned capacity over a conflicting client manifest", () => {
+    render(
+      <HardwareCard
+        hardware={{ ...run.hardware, gpuVramTotalMb: 8192 }}
+        capabilityManifest={busyCapableManifest({ vramCapacity: { totalMb: 12288 } })}
+        series={{ ...series, peakVramUsedMb: 7168 }}
+      />,
+    );
+    expect(screen.getByText("7.0 / 8.0 GB")).toBeInTheDocument();
+    expect(screen.queryByText("7.0 / 12.0 GB")).not.toBeInTheDocument();
+  });
+
+  it("has no GPU vendor row — the GPU string already leads with the vendor", () => {
+    render(<HardwareCard hardware={run.hardware} />);
+    expect(screen.queryByText("GPU vendor")).not.toBeInTheDocument();
   });
 });
 
@@ -320,5 +688,19 @@ describe("RunStatTiles", () => {
     render(<RunStatTiles summary={run.summary} />);
     expect(screen.getByText(run.summary.avgFps.toFixed(1))).toBeInTheDocument();
     expect(screen.getByText(run.summary.pointOnePercentLowFps.toFixed(1))).toBeInTheDocument();
+  });
+
+  it("renders the run's own P95/P99 frame times and stutter count (§8.6.3)", () => {
+    render(
+      <RunStatTiles
+        summary={{ ...run.summary, frameTimeP95Ms: 9.42, frameTimeP99Ms: 14.18, stutterCount: 12 }}
+      />,
+    );
+    expect(screen.getByText("P95 frame time")).toBeInTheDocument();
+    expect(screen.getByText("9.4")).toBeInTheDocument();
+    expect(screen.getByText("P99 frame time")).toBeInTheDocument();
+    expect(screen.getByText("14.2")).toBeInTheDocument();
+    expect(screen.getByText("Stutter events")).toBeInTheDocument();
+    expect(screen.getByText("12")).toBeInTheDocument();
   });
 });

@@ -228,7 +228,7 @@ describe("readGameDistribution", () => {
       fakeDb({ game: GAME, buckets: [], summary: SUMMARY }),
     );
     expect(result!.betterDirection).toBe("lower");
-    expect(result!.cohortDefinitionVersion).toBe(2);
+    expect(result!.cohortDefinitionVersion).toBe(3);
     expect(result!.minSampleSize).toBe(OUTLIER.minSampleSize);
     expect(result!.exclusionSummary).toEqual({
       aggregateEligibleRuns: 60,

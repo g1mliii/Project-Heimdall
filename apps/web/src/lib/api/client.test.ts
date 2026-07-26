@@ -26,7 +26,10 @@ import {
   loadRunFrames,
   type ApiTransport,
 } from "./client";
-import { FRAME_CHART_PARQUET_COLUMN_NAMES } from "../parquet/frame-metadata";
+import {
+  FRAME_BUSY_PARQUET_COLUMN_NAMES,
+  FRAME_CHART_PARQUET_COLUMN_NAMES,
+} from "../parquet/frame-metadata";
 
 function transportReturning(handler: (url: string) => Response | Promise<Response>): ApiTransport {
   return {
@@ -99,10 +102,28 @@ describe("fetchFrames", () => {
       );
       expect(result.data.peakVramUsedMb).toBe(Math.max(...frames.map((frame) => frame.vramUsedMb!)));
     }
-    expect(read).toHaveBeenCalledTimes(FRAME_CHART_PARQUET_COLUMN_NAMES.length);
-    expect(read.mock.calls.map(([options]) => options.columns)).toEqual(
-      FRAME_CHART_PARQUET_COLUMN_NAMES.map((column) => [column]),
+    expect(read).toHaveBeenCalledTimes(
+      FRAME_CHART_PARQUET_COLUMN_NAMES.length + FRAME_BUSY_PARQUET_COLUMN_NAMES.length,
     );
+    expect(read.mock.calls.map(([options]) => options.columns)).toEqual(
+      [...FRAME_CHART_PARQUET_COLUMN_NAMES, ...FRAME_BUSY_PARQUET_COLUMN_NAMES].map((column) => [
+        column,
+      ]),
+    );
+  });
+
+  it("passes the busy-column decode gate through to the decoder", async () => {
+    const frames = makeSyntheticFrames({ seed: 3, count: 200 });
+    const transport = transportReturning(() => new Response(parquetBytes(frames)));
+    const read = vi.mocked(parquetRead);
+    read.mockClear();
+
+    const result = await fetchFrames("https://r2.example.test/get", transport, undefined, {
+      busyColumns: false,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(read).toHaveBeenCalledTimes(FRAME_CHART_PARQUET_COLUMN_NAMES.length);
   });
 
   it("reports http-<status> when the signed URL rejects", async () => {

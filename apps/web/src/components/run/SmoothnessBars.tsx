@@ -10,18 +10,27 @@
 import { Badge, Meter } from "@heimdall/ui";
 import { POINT_ONE_PERCENT_LOW_CONFIDENCE_FRAMES } from "@heimdall/shared";
 import type { RunSummary } from "@heimdall/shared";
+import { formatCount } from "@/lib/format";
+import { CAPTION_STYLE } from "../primitives";
 import { CONFIDENCE_TONE } from "./confidence";
 
-function confidenceTitle(summary: RunSummary): string {
-  const { high } = POINT_ONE_PERCENT_LOW_CONFIDENCE_FRAMES;
+/**
+ * The high-confidence threshold as text. The badge tooltip and the §8.6.6
+ * visible caption both state the grading basis, so they read from this one
+ * number rather than two hand-built sentences that drift apart.
+ */
+const HIGH_CONFIDENCE_FRAMES = formatCount(POINT_ONE_PERCENT_LOW_CONFIDENCE_FRAMES.high);
+
+function confidenceTitle(summary: RunSummary, sampleCount: string): string {
   return (
     `Confidence: ${summary.pointOnePercentLowConfidence} — graded by sample count. ` +
-    `${summary.sampleCount.toLocaleString()} frames captured; ` +
-    `0.1% lows need ${high.toLocaleString()}+ for high confidence.`
+    `${sampleCount} frames captured; ` +
+    `0.1% lows need ${HIGH_CONFIDENCE_FRAMES}+ for high confidence.`
   );
 }
 
 export function SmoothnessBars({ summary }: { summary: RunSummary }) {
+  const sampleCount = formatCount(summary.sampleCount);
   // Nice headroom above the fastest tier so no bar renders 100% wide. Floor at
   // 10 so a degenerate 0-fps summary can't make every bar width NaN.
   const barMax = Math.max(10, Math.ceil((summary.avgFps * 1.1) / 10) * 10);
@@ -46,7 +55,11 @@ export function SmoothnessBars({ summary }: { summary: RunSummary }) {
             <>
               {row.label}
               {row.confidence && (
-                <Badge title={confidenceTitle(summary)} tone={CONFIDENCE_TONE[row.confidence]} dot>
+                <Badge
+                  title={confidenceTitle(summary, sampleCount)}
+                  tone={CONFIDENCE_TONE[row.confidence]}
+                  dot
+                >
                   {row.confidence}
                 </Badge>
               )}
@@ -58,6 +71,11 @@ export function SmoothnessBars({ summary }: { summary: RunSummary }) {
           color={row.color}
         />
       ))}
+      {/* §8.6.6 — the grading basis as visible text, not only a badge tooltip. */}
+      <p style={CAPTION_STYLE}>
+        Graded from <span data-mono>{sampleCount}</span> frames — 0.1% lows need{" "}
+        <span data-mono>{HIGH_CONFIDENCE_FRAMES}</span>+ for high confidence.
+      </p>
     </div>
   );
 }

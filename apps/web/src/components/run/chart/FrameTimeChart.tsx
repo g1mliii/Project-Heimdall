@@ -26,7 +26,7 @@ import { scaleLinear } from "d3-scale";
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
 import type { FrameSeries } from "@/lib/run/frame-series";
-import { downsampleMinMax, sliceVisible } from "@/lib/run/downsample";
+import { downsampleMinMaxMulti, sliceVisible } from "@/lib/run/downsample";
 import { bucketStutterIndices } from "@/lib/run/stutters";
 import { bandThresholdMs, formatTimeTick, formatValueTick, toDisplay, type ChartUnit } from "@/lib/run/units";
 import { useChartSize } from "./useChartSize";
@@ -44,6 +44,8 @@ interface ChartColors {
   band: string;
   grid: string;
   halo: string;
+  cpuBusy: string;
+  gpuBusy: string;
 }
 
 function resolveColors(element: HTMLElement): ChartColors {
@@ -60,6 +62,8 @@ function resolveColors(element: HTMLElement): ChartColors {
     band: token("--chart-band", "rgba(255, 255, 255, 0.03)"),
     grid: token("--chart-grid", "rgba(255, 255, 255, 0.06)"),
     halo: token("--bg-card", "black"),
+    cpuBusy: token("--chart-cpu-busy", "dodgerblue"),
+    gpuBusy: token("--chart-gpu-busy", "mediumpurple"),
   };
 }
 
@@ -69,12 +73,16 @@ export function FrameTimeChart({
   unit,
   avgFps,
   height = DEFAULT_HEIGHT,
+  showBusy = false,
 }: {
   series: FrameSeries;
   stutterIndices: Uint32Array;
   unit: ChartUnit;
   avgFps: number;
   height?: number;
+  /** §8.6.8 — draw the CPU/GPU busy-time overlays (ms mode only; busy time
+   * is a duration, so it is never converted to FPS). */
+  showBusy?: boolean;
 }) {
   const [containerRef, width] = useChartSize<HTMLDivElement>();
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
@@ -242,19 +250,53 @@ export function FrameTimeChart({
     const start = Math.max(0, range.start - 1);
     const end = Math.min(series.count, range.end + 1);
     const buckets = Math.max(1, Math.ceil(plotRight - PAD.left));
-    const points = downsampleMinMax(series.times, series.frameTimes, start, end, buckets);
 
-    context.strokeStyle = colors.trace;
-    context.lineWidth = 1.6;
-    context.lineJoin = "round";
-    context.beginPath();
-    for (let i = 0; i < points.x.length; i++) {
-      const px = xScale(points.x[i]!);
-      const py = yScale(toDisplay(points.y[i]!, unit));
-      if (i === 0) context.moveTo(px, py);
-      else context.lineTo(px, py);
+    // Busy-time overlays draw first, under the frame-time trace, which stays
+    // primary. All of them bin against the same timestamps, so one pass covers
+    // the lot instead of re-streaming `series.times` per trace (§13.1).
+    const overlaid = showBusy && unit === "ms";
+    const traces: { values: Float64Array; color: string; lineWidth: number; alpha: number }[] = [];
+    if (overlaid && series.cpuBusyMs) {
+      traces.push({ values: series.cpuBusyMs, color: colors.cpuBusy, lineWidth: 1, alpha: 0.85 });
     }
-    context.stroke();
+    if (overlaid && series.gpuBusyMs) {
+      traces.push({ values: series.gpuBusyMs, color: colors.gpuBusy, lineWidth: 1, alpha: 0.85 });
+    }
+    traces.push({ values: series.frameTimes, color: colors.trace, lineWidth: 1.6, alpha: 1 });
+
+    const binned = downsampleMinMaxMulti(
+      series.times,
+      traces.map((trace) => trace.values),
+      start,
+      end,
+      buckets,
+    );
+
+    // NaN-aware polyline: a NaN sample lifts the pen, so an unreported frame
+    // reads as a hole in the trace — never a 0 ms floor (§8.6.8).
+    traces.forEach((trace, index) => {
+      const points = binned[index]!;
+      context.globalAlpha = trace.alpha;
+      context.strokeStyle = trace.color;
+      context.lineWidth = trace.lineWidth;
+      context.lineJoin = "round";
+      context.beginPath();
+      let penDown = false;
+      for (let i = 0; i < points.x.length; i++) {
+        const value = points.y[i]!;
+        if (Number.isNaN(value)) {
+          penDown = false;
+          continue;
+        }
+        const px = xScale(points.x[i]!);
+        const py = yScale(toDisplay(value, unit));
+        if (penDown) context.lineTo(px, py);
+        else context.moveTo(px, py);
+        penDown = true;
+      }
+      context.stroke();
+    });
+    context.globalAlpha = 1;
 
     // Keep representative stutters to one per horizontal pixel. The trace
     // retains the actual spikes without letting dense markers monopolize paint.

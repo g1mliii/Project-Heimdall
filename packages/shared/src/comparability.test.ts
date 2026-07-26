@@ -52,6 +52,15 @@ describe("comparabilityKey (§16c.3)", () => {
     }
   });
 
+  it("pools known graphics API aliases but preserves unknown APIs", () => {
+    expect(comparabilityKey({ ...base, graphicsApi: "D3D-12" })).toBe(
+      comparabilityKey({ ...base, graphicsApi: "dx12" }),
+    );
+    expect(comparabilityKey({ ...base, graphicsApi: "Future API A" })).not.toBe(
+      comparabilityKey({ ...base, graphicsApi: "Future API B" }),
+    );
+  });
+
   it("never pools a benchmark-scene with gameplay or freeform (§17.5)", () => {
     const scene = comparabilityKey({ ...base, sceneType: "benchmark-scene" });
     const gameplay = comparabilityKey({ ...base, sceneType: "gameplay" });

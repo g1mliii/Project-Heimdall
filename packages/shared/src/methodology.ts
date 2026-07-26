@@ -5,6 +5,7 @@
  */
 
 import type { GeneratedFrameTech, HardwareSnapshot, MethodologyManifest } from "./types";
+import { canonicalGraphicsApi } from "./graphics-api";
 
 export function normalizeMethodologyManifest(
   manifest: MethodologyManifest | undefined,
@@ -16,6 +17,9 @@ export function normalizeMethodologyManifest(
   return {
     ...manifest,
     ...(hardware.resolution === undefined ? {} : { resolution: hardware.resolution }),
+    ...(manifest.graphicsApi === undefined
+      ? {}
+      : { graphicsApi: canonicalGraphicsApi(manifest.graphicsApi) }),
     frameGeneration: generatedFrameTech,
   };
 }

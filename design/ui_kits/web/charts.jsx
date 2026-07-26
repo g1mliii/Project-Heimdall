@@ -23,9 +23,40 @@ function genFrames(seed = 7, n = 220, base = 6.9) {
   return out;
 }
 
+// Busy-time overlay traces (§8.6.8) derived from the frame trace: CPU-bound
+// through the rough patch (CPU busy ≈ frame time), GPU-bound elsewhere. NaN
+// marks frames the source did not report — drawn as gaps, never as zero.
+function genBusy(frames) {
+  const cpu = [], gpu = [];
+  for (let i = 0; i < frames.length; i++) {
+    const ft = frames[i];
+    const cpuBound = i > 70 && i < 95;
+    const dropout = i > 150 && i < 162; // sensor dropout → hole in both traces
+    cpu.push(dropout ? NaN : cpuBound ? ft * 0.96 : ft * 0.55);
+    gpu.push(dropout ? NaN : cpuBound ? ft * 0.6 : ft * 0.9);
+  }
+  return { cpu, gpu };
+}
+
+// Split a series with NaN holes into gap-separated polyline point strings.
+function polySegments(data, stepX, padL, y) {
+  const segs = [];
+  let cur = [];
+  data.forEach((v, i) => {
+    if (Number.isNaN(v)) {
+      if (cur.length) { segs.push(cur.join(' ')); cur = []; }
+      return;
+    }
+    cur.push(`${padL + i * stepX},${y(v)}`);
+  });
+  if (cur.length) segs.push(cur.join(' '));
+  return segs;
+}
+
 // ── Frame-time progression plot ────────────────────────────────────────
-function FrameTimeChart({ seed = 7, height = 240, stutterThreshold = 12, fill = true, showStutters = true }) {
+function FrameTimeChart({ seed = 7, height = 240, stutterThreshold = 12, fill = true, showStutters = true, showBusy = false }) {
   const data = useMemo(() => genFrames(seed), [seed]);
+  const busy = useMemo(() => (showBusy ? genBusy(data) : null), [data, showBusy]);
   const W = 1000, H = height, padB = 22, padL = 4;
   const max = Math.max(...data, 20);
   const stepX = (W - padL) / (data.length - 1);
@@ -49,6 +80,13 @@ function FrameTimeChart({ seed = 7, height = 240, stutterThreshold = 12, fill = 
       {/* target band (good zone, < 8.3ms ≈ 120fps) */}
       <rect x={padL} y={y(8.3)} width={W - padL} height={(H - padB) - y(8.3)} fill="var(--chart-band)" />
       {fill && <polygon points={area} fill="url(#ftFill)" />}
+      {/* busy-time overlays draw under the frame-time trace; gaps stay gaps */}
+      {busy && polySegments(busy.cpu, stepX, padL, y).map((seg, i) => (
+        <polyline key={`c${i}`} points={seg} fill="none" stroke="var(--chart-cpu-busy)" strokeWidth="1" opacity="0.85" strokeLinejoin="round" />
+      ))}
+      {busy && polySegments(busy.gpu, stepX, padL, y).map((seg, i) => (
+        <polyline key={`g${i}`} points={seg} fill="none" stroke="var(--chart-gpu-busy)" strokeWidth="1" opacity="0.85" strokeLinejoin="round" />
+      ))}
       <polyline points={pts} fill="none" stroke="var(--chart-frametime)" strokeWidth="1.6" strokeLinejoin="round" />
       {showStutters && stutters.map((d, i) => (
         <circle key={i} cx={padL + d.i * stepX} cy={y(d.v)} r="3.2" fill="var(--chart-stutter)" stroke="var(--bg-card)" strokeWidth="1.5" />

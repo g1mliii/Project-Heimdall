@@ -18,7 +18,13 @@
  * signal and is NEVER promoted to a hard integrity flag.
  */
 
-import { DIAGNOSTICS, type ConfidenceLevel, type DiagnosticEvidence } from "@heimdall/shared";
+import {
+  DIAGNOSTICS,
+  hasFrameAlignedBusyTelemetry,
+  type ConfidenceLevel,
+  type DiagnosticEvidence,
+  type DiagnosticEvidenceMetricKey,
+} from "@heimdall/shared";
 import type { DiagnosticRule, DiagnosticRuleContext, RuleVerdict } from "./types";
 import { contextStableCommonFrameCap, holdsCadence } from "./frame-cap";
 
@@ -43,16 +49,6 @@ export interface BottleneckAnalysis {
  */
 const analysisByContext = new WeakMap<DiagnosticRuleContext, BottleneckAnalysis>();
 
-function hasFrameAlignedBusyTelemetry(ctx: DiagnosticRuleContext): boolean {
-  const sensors = ctx.input.capabilityManifest?.sensors;
-  return Boolean(
-    sensors?.cpuBusyMs.present &&
-      sensors.cpuBusyMs.frameAligned &&
-      sensors.gpuBusyMs.present &&
-      sensors.gpuBusyMs.frameAligned,
-  );
-}
-
 function gradeConfidence(coverage: number): ConfidenceLevel {
   if (coverage >= DIAGNOSTICS.bottleneckHighConfidenceCoverage) return "high";
   if (coverage >= DIAGNOSTICS.bottleneckMediumConfidenceCoverage) return "medium";
@@ -72,7 +68,7 @@ export function analyzeBottleneck(ctx: DiagnosticRuleContext): BottleneckAnalysi
   // A busy-time column alone is not enough evidence to correlate it with a
   // frame. This preserves the Phase 6 behavior when no capability manifest was
   // supplied and makes a real matrix's non-aligned evidence effective.
-  if (!hasFrameAlignedBusyTelemetry(ctx)) {
+  if (!hasFrameAlignedBusyTelemetry(input.capabilityManifest)) {
     const result: BottleneckAnalysis = {
       regime: "inconclusive",
       confidence: "low",
@@ -136,7 +132,7 @@ export function analyzeBottleneck(ctx: DiagnosticRuleContext): BottleneckAnalysi
       cpuBoundFraction: considered > 0 ? cpuBound / considered : 0,
       gpuBoundFraction: considered > 0 ? gpuBound / considered : 0,
       cappedFraction: considered > 0 ? capped / considered : 0,
-    },
+    } satisfies Record<DiagnosticEvidenceMetricKey, number>,
     ...(input.capabilityManifest?.caveats.length
       ? { caveats: input.capabilityManifest.caveats }
       : {}),

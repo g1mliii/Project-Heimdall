@@ -15,6 +15,8 @@ export * from "./tokens";
 export * from "./parquet";
 export * from "./naming";
 export * from "./comparability";
+export * from "./capability";
+export * from "./graphics-api";
 export * from "./methodology";
 export * from "./eligibility";
 export * from "./statistics";

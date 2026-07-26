@@ -9,7 +9,7 @@
  * `visibility.ts`, never redefined here.
  */
 
-import type { CapabilitySensorField } from "./constants";
+import type { CapabilitySensorField, DiagnosticEvidenceMetricKey } from "./constants";
 import type { RunVisibility, RunStatus } from "./visibility";
 
 export type { RunVisibility, RunStatus } from "./visibility";
@@ -279,6 +279,22 @@ export interface GameSubmissionMethodology {
   upscaler: UpscalerMode | null;
   rayTracing: RayTracingMode | null;
   frameGeneration: GeneratedFrameTech;
+  /**
+   * §8.6.2 declared-profile fields, projected straight from the run's parsed
+   * methodology manifest. `null` always means "not declared" — for the
+   * tri-state booleans below it is distinct from `false` ("declared off").
+   */
+  settingsPreset: string | null;
+  /** Free-text scene/route name; the `sceneType` bucket stays on the row. */
+  scene: string | null;
+  capFps: number | null;
+  vsync: boolean | null;
+  vrr: boolean | null;
+  refreshHz: number | null;
+  gameBuild: string | null;
+  captureTool: string | null;
+  warmupPolicy: string | null;
+  hags: HagsState | null;
 }
 
 /** One individually addressable public + validated run on a game page (§17.7). */
@@ -380,8 +396,8 @@ export interface DiagnosticEvidence {
   coverageFraction?: number;
   /** Sensor fields the finding relied on. */
   sensors?: CapabilitySensorField[];
-  /** Named measured values (e.g. `{ cpuBoundFraction: 0.62 }`). */
-  metrics?: Record<string, number>;
+  /** Named measured values from the closed shared evidence vocabulary. */
+  metrics?: Partial<Record<DiagnosticEvidenceMetricKey, number>>;
   /** Capture-semantics / source caveats that qualified the finding. */
   caveats?: string[];
   /** Curated source basis for time-sensitive driver findings (§16e.3). */

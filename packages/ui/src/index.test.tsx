@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Button, Card, Meter, NavTabs, Stat, Table } from "./index";
+import { Button, Card, Meter, NavTabs, Stat, Switch, Table } from "./index";
 
 // Server-render smoke tests: prove the primitives mount and emit their .hd-*
 // classes. (Full visual fidelity is covered by the Playwright snapshots.)
@@ -55,6 +55,16 @@ describe("@heimdall/ui primitives render", () => {
     expect(html).toContain('role="progressbar"');
     expect(html).toContain('aria-valuenow="72.4"');
     expect(html).toContain('aria-labelledby=');
+  });
+
+  it("Switch exposes its title on the visible label surface", () => {
+    const html = renderToStaticMarkup(
+      <Switch label="Busy time" disabled title="Busy telemetry is unavailable" />,
+    );
+
+    expect(html).toContain('<label class="hd-switch"');
+    expect(html).toContain('title="Busy telemetry is unavailable"');
+    expect(html).toContain('role="switch"');
   });
 
   it("Table keeps consumer order and emits accessible sort + numeric semantics", () => {

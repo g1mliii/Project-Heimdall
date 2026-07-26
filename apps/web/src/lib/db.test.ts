@@ -102,6 +102,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0036_phase_8_schema.sql",
       "0037_phase_8_online_indexes.sql",
       "0038_phase_8_validate_constraints.sql",
+      "0039_canonical_graphics_api.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
@@ -799,5 +800,42 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
     expect(rows[0]?.graphics_api).toMatch(/^legacy:[0-9a-f]{32}$/);
     expect(rows[0]?.scene).toMatch(/^legacy:[0-9a-f]{32}$/);
     expect(rows[0]?.settings_preset).toMatch(/^legacy:[0-9a-f]{32}$/);
+  });
+
+  it("canonicalizes known graphics API aliases in the cohort column and manifest", async () => {
+    const run = {
+      ...fixtureRunWithId("run_graphics_api_alias_backfill"),
+      methodologyManifest: {
+        version: 1,
+        sceneType: "benchmark-scene" as const,
+        upscaler: "none" as const,
+        rayTracing: "off" as const,
+        frameGeneration: "none" as const,
+        graphicsApi: "dx12",
+        framePacing: { vsync: false, vrr: false },
+      },
+    };
+    await insertRun(run, pool);
+    await pool.query(
+      `update runs
+          set graphics_api = 'D3D-12',
+              settings_json = jsonb_set(settings_json, '{graphicsApi}', '"D3D-12"'::jsonb)
+        where id = $1`,
+      [run.id],
+    );
+    await pool.query(
+      "delete from schema_migrations where version = '0039_canonical_graphics_api.sql'",
+    );
+
+    expect(await migrate(pool)).toEqual(["0039_canonical_graphics_api.sql"]);
+    const { rows } = await pool.query<{
+      graphics_api: string;
+      manifest_graphics_api: string;
+    }>(
+      `select graphics_api, settings_json ->> 'graphicsApi' as manifest_graphics_api
+         from runs where id = $1`,
+      [run.id],
+    );
+    expect(rows[0]).toEqual({ graphics_api: "dx12", manifest_graphics_api: "dx12" });
   });
 });

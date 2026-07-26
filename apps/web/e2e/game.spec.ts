@@ -34,9 +34,17 @@ test("search opens the game page with honest individual-run states (§17a.1)", a
     `/runs/${E2E_GAME_LEGACY_RUN_ID}`,
   );
   await expect(page.getByText("Profile incomplete")).toBeVisible();
-  await expect(page.getByText("Warm-up")).toBeVisible();
+  // exact — the §8.6.2 declared-profile tooltips also contain "Warm-up policy".
+  await expect(page.getByText("Warm-up", { exact: true })).toBeVisible();
   await expect(page.getByText("Set member").first()).toBeVisible();
   await expect(page.getByText("Driver below game minimum").first()).toBeVisible();
+  // §8.6.2 — declared settings + pacing per row (declared-off pacing renders
+  // as "no VSync"/"no VRR", distinct from undeclared, which renders nothing).
+  await expect(page.getByText(/Ultra · Dogtown route · no VSync · no VRR/).first()).toBeVisible();
+  const profileInfo = page.locator("[data-icon='declared-profile']").first();
+  await profileInfo.hover();
+  await expect(page.getByText("Capture tool").first()).toBeVisible();
+  await expect(page.getByText("CapFrameX 1.7.2").first()).toBeVisible();
   // The cohort read reaches real data, finds one bucket below the 30-run
   // minimum, and withholds the curve — never a drawn-but-fake distribution.
   const distribution = page.getByRole("region", { name: "Performance distribution" });

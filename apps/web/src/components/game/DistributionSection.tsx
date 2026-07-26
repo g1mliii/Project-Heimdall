@@ -29,6 +29,13 @@ import type {
 } from "@heimdall/shared";
 
 import { loadGameDistribution, type ApiResult } from "@/lib/api/client";
+import {
+  UPSCALER_LABELS,
+  formatCount,
+  framePacingParts,
+  graphicsApiLabel,
+  pluralCount,
+} from "@/lib/format";
 import { DistributionChart } from "./DistributionChart";
 import styles from "./DistributionSection.module.css";
 
@@ -135,17 +142,21 @@ function compactGpuLabel(gpu: string | null): string {
   return (gpu ?? "Unknown GPU").replace(/^(NVIDIA GeForce|AMD Radeon)\s+/i, "");
 }
 
-/** A complete but compact label for frame-pacing dimensions in the cohort key. */
+/**
+ * A complete but compact label for frame-pacing dimensions in the cohort key.
+ * Every dimension is stated ("uncapped", "no VSync") because a cohort's members
+ * all share one setting — unlike a run row, where an undeclared field is simply
+ * omitted. Same tokens either way (`framePacingParts`).
+ */
 function pacingLabel({
   frameCapFps,
   vsync,
   vrr,
 }: Pick<CohortDistribution["comparability"], "frameCapFps" | "vsync" | "vrr">): string {
-  return [
-    frameCapFps === null ? "uncapped" : `${frameCapFps} FPS cap`,
-    vsync ? "VSync" : "no VSync",
-    vrr ? "VRR" : "no VRR",
-  ].join(" · ");
+  // A cohort's cap is always known, so it is stated here rather than omitted;
+  // `vsync`/`vrr` are non-null booleans and pass straight through.
+  const cap = frameCapFps === null ? "uncapped" : `${frameCapFps} FPS cap`;
+  return [cap, ...framePacingParts({ capFps: null, vsync, vrr })].join(" · ");
 }
 
 function cohortOptions(data: GameDistributionResponse): { value: string; label: string }[] {
@@ -158,7 +169,7 @@ function cohortOptions(data: GameDistributionResponse): { value: string; label: 
       comparability.resolution ?? "unknown resolution",
       comparability.sceneType ?? "unknown workload",
       comparability.settingsPreset ?? "unknown preset",
-      comparability.graphicsApi?.toUpperCase() ?? "unknown API",
+      comparability.graphicsApi ? graphicsApiLabel(comparability.graphicsApi) : "unknown API",
       comparability.scene ?? "unknown scene",
       pacingLabel(comparability),
     ];
@@ -262,7 +273,7 @@ export function DistributionSection({
     <section className={styles.section} aria-label="Performance distribution">
       <span className={styles.overline}>
         {exclusionSummary
-          ? `Aggregate · ${exclusionSummary.aggregateEligibleRuns.toLocaleString()} public runs`
+          ? `Aggregate · ${formatCount(exclusionSummary.aggregateEligibleRuns)} public runs`
           : "Aggregate"}
       </span>
       <p className={styles.lede}>Where your run sits in the crowd, by hardware configuration.</p>
@@ -351,9 +362,7 @@ export function DistributionSection({
             title={`${METRIC_LABEL[metric]} distribution · ${cohort.comparability.gpu ?? "GPU"}`}
             actions={
               <span className={styles.badgeRow}>
-                <Badge tone="neutral">
-                  {cohort.observationCount} {cohort.observationCount === 1 ? "run" : "runs"}
-                </Badge>
+                <Badge tone="neutral">{pluralCount(cohort.observationCount, "run", "runs")}</Badge>
                 {cohort.viewerPercentile !== null && (
                   <Badge tone="brand">
                     You: {ordinal(cohort.viewerPercentile)} percentile
@@ -384,15 +393,13 @@ export function DistributionSection({
           <Card.Header
             title={cohort.comparability.gpu ?? "GPU"}
             actions={
-              <Badge tone="warn">
-                {cohort.observationCount} {cohort.observationCount === 1 ? "run" : "runs"}
-              </Badge>
+              <Badge tone="warn">{pluralCount(cohort.observationCount, "run", "runs")}</Badge>
             }
           />
           <Card.Body>
             <Diagnostic severity="info" title="Insufficient data for a distribution">
-              Only {cohort.observationCount}{" "}
-              {cohort.observationCount === 1 ? "run exists" : "runs exist"} for this configuration —
+              Only {pluralCount(cohort.observationCount, "run exists", "runs exist")} for this
+              configuration —
               below the {data.minSampleSize}-run minimum. A curve over a handful of runs would be
               noise, not signal, so the individual submissions are listed below instead.
             </Diagnostic>
@@ -420,7 +427,8 @@ export function DistributionSection({
                     <span className={styles.rateValue} data-mono>
                       {diagnosticRate.ratePct}%{" "}
                       <span className={styles.rateDenominator}>
-                        ({diagnosticRate.numerator}/{diagnosticRate.denominator})
+                        ({formatCount(diagnosticRate.numerator)}/
+                        {formatCount(diagnosticRate.denominator)})
                       </span>
                     </span>
                   )}
@@ -433,15 +441,16 @@ export function DistributionSection({
 
       {data && exclusionSummary && (
         <p className={styles.footnote}>
-          {exclusionSummary.pooledObservations.toLocaleString()}{" "}
-          {exclusionSummary.pooledObservations === 1
-            ? "independent observation"
-            : "independent observations"}{" "}
-          pooled from {exclusionSummary.aggregateEligibleRuns.toLocaleString()} public runs.
+          {pluralCount(
+            exclusionSummary.pooledObservations,
+            "independent observation",
+            "independent observations",
+          )}{" "}
+          pooled from {formatCount(exclusionSummary.aggregateEligibleRuns)} public runs.
           {exclusionSummary.unprofiledRuns > 0 &&
-            ` ${exclusionSummary.unprofiledRuns.toLocaleString()} excluded for an incomplete methodology profile.`}
+            ` ${formatCount(exclusionSummary.unprofiledRuns)} excluded for an incomplete methodology profile.`}
           {exclusionSummary.capabilityUnestablishedRuns > 0 &&
-            ` ${exclusionSummary.capabilityUnestablishedRuns.toLocaleString()} predate the current capability contract.`}{" "}
+            ` ${formatCount(exclusionSummary.capabilityUnestablishedRuns)} predate the current capability contract.`}{" "}
           Cohort definition v{data.cohortDefinitionVersion}.
         </p>
       )}
@@ -458,13 +467,14 @@ function CohortMeta({
   format: (value: number) => string;
 }) {
   const { comparability } = cohort;
+  // Shared closed map: `null` is the no-signal set ("none"/"unknown"), so this
+  // chip and the submissions table hide and case the same values.
+  const upscalerLabel = comparability.upscaler ? UPSCALER_LABELS[comparability.upscaler] : null;
   const chips = [
     comparability.resolution,
     comparability.scene,
-    comparability.graphicsApi,
-    comparability.upscaler && comparability.upscaler !== "none"
-      ? `${comparability.upscaler.toUpperCase()} upscaling`
-      : null,
+    comparability.graphicsApi ? graphicsApiLabel(comparability.graphicsApi) : null,
+    upscalerLabel ? `${upscalerLabel} upscaling` : null,
     comparability.rayTracing === "on" ? "ray tracing" : null,
     comparability.settingsPreset,
     pacingLabel(comparability),
@@ -481,16 +491,14 @@ function CohortMeta({
       </div>
       {cohort.rawRunCount !== cohort.observationCount && (
         <span className={styles.metaNote}>
-          {cohort.observationCount}{" "}
-          {cohort.observationCount === 1 ? "independent observation" : "independent observations"}{" "}
-          across {cohort.rawRunCount} runs — repeat benchmark sets weigh once.
+          {pluralCount(cohort.observationCount, "independent observation", "independent observations")}{" "}
+          across {formatCount(cohort.rawRunCount)} runs — repeat benchmark sets weigh once.
         </span>
       )}
       {cohort.excludedOutlierCount > 0 && (
         <span className={styles.metaNote}>
-          {cohort.excludedOutlierCount}{" "}
-          {cohort.excludedOutlierCount === 1 ? "run" : "runs"} excluded from the curve as statistical
-          outliers — still listed below, never hidden.
+          {pluralCount(cohort.excludedOutlierCount, "run", "runs")} excluded from the curve as
+          statistical outliers — still listed below, never hidden.
         </span>
       )}
       {cohort.viewerExclusion !== null && (

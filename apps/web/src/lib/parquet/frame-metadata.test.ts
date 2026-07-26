@@ -19,6 +19,7 @@ import { buildFrameSeries } from "../run/frame-series";
 import {
   computeFrameParquetSummary,
   decodeFrameParquetToSeries,
+  FRAME_BUSY_PARQUET_COLUMN_NAMES,
   FRAME_CHART_PARQUET_COLUMN_NAMES,
   FRAME_PARQUET_COLUMN_NAMES,
 } from "./frame-metadata";
@@ -109,11 +110,60 @@ describe("decodeFrameParquetToSeries", () => {
     expect(series.count).toBe(validFrames.length);
     expect(Array.from(series.times)).toEqual(Array.from(expected.times));
     expect(Array.from(series.frameTimes)).toEqual(validFrames.map((frame) => frame.frameTimeMs));
+    expect(readChunks).toHaveBeenCalledTimes(
+      FRAME_CHART_PARQUET_COLUMN_NAMES.length + FRAME_BUSY_PARQUET_COLUMN_NAMES.length,
+    );
+    expect(readChunks.mock.calls.map(([options]) => options.columns)).toEqual(
+      [...FRAME_CHART_PARQUET_COLUMN_NAMES, ...FRAME_BUSY_PARQUET_COLUMN_NAMES].map((column) => [
+        column,
+      ]),
+    );
+    expect(readObjects).not.toHaveBeenCalled();
+  });
+
+  it("skips the busy-column passes entirely when they are not requested", async () => {
+    // The overlay is already unavailable when the manifest declares the
+    // sensors absent, so decoding two full columns then discarding them is
+    // pure cost — two extra passes and two 4 MiB buffers per max capture.
+    const readChunks = vi.mocked(parquetRead);
+    readChunks.mockClear();
+
+    const series = await decodeFrameParquetToSeries(parquetBytes(), { busyColumns: false });
+
     expect(readChunks).toHaveBeenCalledTimes(FRAME_CHART_PARQUET_COLUMN_NAMES.length);
     expect(readChunks.mock.calls.map(([options]) => options.columns)).toEqual(
       FRAME_CHART_PARQUET_COLUMN_NAMES.map((column) => [column]),
     );
-    expect(readObjects).not.toHaveBeenCalled();
+    expect(series.cpuBusyMs).toBeUndefined();
+    expect(series.gpuBusyMs).toBeUndefined();
+    // The chart's own columns are unaffected by the narrower projection.
+    expect(series.count).toBe(validFrames.length);
+    expect(series.peakVramUsedMb).toBeDefined();
+  });
+
+  it("decodes busy-time columns with NaN holes for unreported rows, never zeros (§8.6.8)", async () => {
+    const interleaved = validFrames.map((frame, index) =>
+      index % 3 === 0 ? { ...frame, cpuBusyMs: undefined, gpuBusyMs: undefined } : frame,
+    );
+    const series = await decodeFrameParquetToSeries(parquetBytes(interleaved));
+
+    expect(series.cpuBusyMs).toBeDefined();
+    expect(series.gpuBusyMs).toBeDefined();
+    for (const [index, frame] of interleaved.entries()) {
+      if (frame.cpuBusyMs === undefined) {
+        expect(series.cpuBusyMs![index]).toBeNaN();
+        expect(series.gpuBusyMs![index]).toBeNaN();
+      } else {
+        expect(series.cpuBusyMs![index]).toBe(frame.cpuBusyMs);
+        expect(series.gpuBusyMs![index]).toBe(frame.gpuBusyMs);
+      }
+    }
+  });
+
+  it("drops all-null busy columns instead of shipping all-NaN arrays (§8.6.8)", async () => {
+    const series = await decodeFrameParquetToSeries(parquetBytes(missingSensorFrames));
+    expect(series.cpuBusyMs).toBeUndefined();
+    expect(series.gpuBusyMs).toBeUndefined();
   });
 
   it("handles absent and mixed optional chart sensors", async () => {

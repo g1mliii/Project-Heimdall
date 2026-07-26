@@ -75,7 +75,15 @@ describe.skipIf(!canRun)("cohort distribution + integrity (§17/§18/§19)", () 
     // independent observations, enough for a curve.
     const seeds: { run: Run; secret?: string }[] = [];
     for (let i = 0; i < 31; i++) {
-      seeds.push({ run: makeRun(`dist_normal_${String(i).padStart(2, "0")}`, 100 + i) });
+      seeds.push({
+        run: makeRun(`dist_normal_${String(i).padStart(2, "0")}`, 100 + i, {
+          // Same API, alternate capture-tool spelling. The shared write
+          // contract must canonicalize it into this one exact cohort.
+          ...(i === 0
+            ? { methodologyManifest: { ...methodology1440, graphicsApi: "D3D-12" } }
+            : {}),
+        }),
+      });
     }
     seeds.push({ run: makeRun(OUTLIER_ID, 400) });
 
@@ -117,6 +125,10 @@ describe.skipIf(!canRun)("cohort distribution + integrity (§17/§18/§19)", () 
     );
 
     expect(bucketA?.observationCount).toBe(32);
+    expect(bucketA?.comparability.graphicsApi).toBe("dx12");
+    expect(
+      result?.cohorts.filter((cohort) => cohort.comparability.settingsPreset === "Ultra"),
+    ).toHaveLength(1);
     expect(bucketA?.distribution).not.toBeNull();
     // The lone 400 fps run is dropped from the curve...
     expect(bucketA?.excludedOutlierCount).toBe(1);

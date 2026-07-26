@@ -11,7 +11,12 @@ import * as React from "react";
 import { Badge, Button } from "@heimdall/ui";
 import type { Run } from "@heimdall/shared";
 import { ReportButton } from "@/components/moderation/ReportButton";
-import { VISIBILITY_LABELS } from "@/lib/format";
+import {
+  SOURCE_LABELS,
+  UPSCALER_LABELS,
+  VISIBILITY_LABELS,
+  graphicsApiLabel,
+} from "@/lib/format";
 import { CheckIcon, ClapperboardIcon, GitCompareIcon, ShareIcon } from "./icons";
 
 const TECH_LABELS: Record<Run["generatedFrameTech"], string | null> = {
@@ -20,12 +25,6 @@ const TECH_LABELS: Record<Run["generatedFrameTech"], string | null> = {
   dlss3: "DLSS 3",
   fsr3: "FSR 3",
   xess: "XeSS",
-};
-
-const SOURCE_LABELS: Record<Run["captureSource"], string> = {
-  capframex: "CapFrameX log",
-  presentmon: "PresentMon log",
-  mangohud: "MangoHud log",
 };
 
 const COPY_RESET_MS = 2000;
@@ -76,9 +75,40 @@ const OWNER_ONLY_STATUS_NOTE: Partial<Record<Run["status"], string>> = {
     "This run failed a server-side integrity check. Only you can see it — it is excluded from public averages.",
 };
 
+/**
+ * §8.6.2 — the declared settings string per the design kit ("Ultra · Ray
+ * tracing · 2560x1440 · DX12 · 62s capture"). Declared fields that are absent
+ * are skipped, never dashed out. Runs without a methodology manifest keep the
+ * pre-8.6 capture-facts string.
+ *
+ * The capture source leads both branches. It used to be dropped from the
+ * manifest branch on the assumption that CapabilityCard's source badge covered
+ * it, but that card gates on `capabilityManifest` while this gates on
+ * `methodologyManifest` — independently optional fields, and the capability
+ * manifest only lands canonically once the verify worker runs. A run that
+ * declared methodology before verification would have named its source nowhere.
+ */
 function subtitle(run: Run): string {
+  const manifest = run.methodologyManifest;
   const parts = [SOURCE_LABELS[run.captureSource]];
-  if (run.hardware.resolution) parts.push(run.hardware.resolution);
+  if (!manifest) {
+    if (run.hardware.resolution) parts.push(run.hardware.resolution);
+    parts.push(`${Math.round(run.summary.durationSeconds)}s capture`);
+    return parts.join(" · ");
+  }
+  if (manifest.settingsPreset) parts.push(manifest.settingsPreset);
+  // The domain model records ray tracing as off/on/unknown — no named RT tier,
+  // so the kit's "Ray Tracing: Overdrive" collapses to the honest "Ray tracing".
+  if (manifest.rayTracing === "on") parts.push("Ray tracing");
+  const resolution = manifest.resolution ?? run.hardware.resolution;
+  if (resolution) parts.push(resolution);
+  if (manifest.graphicsApi) parts.push(graphicsApiLabel(manifest.graphicsApi));
+  const upscaler = UPSCALER_LABELS[manifest.upscaler];
+  if (upscaler) parts.push(upscaler);
+  // Capture length comes from the server recompute, never the declared
+  // `captureDurationSeconds`: the methodology manifest is uploader-declared and
+  // never recomputed, so preferring it let a client contradict the canonical
+  // summary the stat tiles below are rendered from (§11.5).
   parts.push(`${Math.round(run.summary.durationSeconds)}s capture`);
   return parts.join(" · ");
 }

@@ -22,6 +22,7 @@ const canRun = testDbAvailable("games.test");
 
 const completeMethodology: MethodologyManifest = {
   version: 1,
+  gameBuild: "2.21",
   scene: "Dogtown benchmark",
   sceneType: "benchmark-scene",
   settingsPreset: "Ultra",
@@ -30,7 +31,10 @@ const completeMethodology: MethodologyManifest = {
   upscaler: "none",
   rayTracing: "off",
   frameGeneration: "none",
-  framePacing: { vsync: false, vrr: false },
+  framePacing: { capFps: 120, vsync: false, vrr: true, refreshHz: 144 },
+  captureTool: "PresentMon 2.3.0",
+  warmupPolicy: "discard-first-10s",
+  hags: "enabled",
 };
 
 describe.skipIf(!canRun)("game discovery read (§17.7)", () => {
@@ -203,10 +207,42 @@ describe.skipIf(!canRun)("game discovery read (§17.7)", () => {
       }),
     );
     expect(result?.submissions.rows[0]?.methodology.profileComplete).toBe(true);
+    // §8.6.2 — declared-profile fields project from the stored manifest,
+    // per row, not just into cohort buckets.
+    expect(result?.submissions.rows[0]?.methodology).toEqual(
+      expect.objectContaining({
+        settingsPreset: "Ultra",
+        scene: "Dogtown benchmark",
+        capFps: 120,
+        vsync: false,
+        vrr: true,
+        refreshHz: 144,
+        gameBuild: "2.21",
+        captureTool: "PresentMon 2.3.0",
+        warmupPolicy: "discard-first-10s",
+        hags: "enabled",
+      }),
+    );
     expect(result?.submissions.rows[1]).toEqual(
       expect.objectContaining({ sceneType: "gameplay", isWarmup: true }),
     );
     expect(result?.submissions.rows[2]?.methodology.profileComplete).toBe(false);
+    // A manifest-less legacy run declares nothing: every §8.6.2 field is null,
+    // never a fabricated false/zero.
+    expect(result?.submissions.rows[2]?.methodology).toEqual(
+      expect.objectContaining({
+        settingsPreset: null,
+        scene: null,
+        capFps: null,
+        vsync: null,
+        vrr: null,
+        refreshHz: null,
+        gameBuild: null,
+        captureTool: null,
+        warmupPolicy: null,
+        hags: null,
+      }),
+    );
     expect(result?.submissions.rows[3]).toEqual(
       expect.objectContaining({
         sceneType: "freeform",

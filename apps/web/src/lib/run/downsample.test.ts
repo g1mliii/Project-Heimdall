@@ -92,6 +92,46 @@ describe("downsampleMinMax", () => {
     }
   });
 
+  it("never lets NaN samples become bucket extrema (§8.6.8)", () => {
+    const { times, values } = syntheticSeries(30_000, 11);
+    // Punch NaN holes through the series, including a bucket-poisoning run at
+    // the front so a NaN would be the first sample many buckets see.
+    for (let i = 0; i < 30_000; i += 7) values[i] = Number.NaN;
+    const out = downsampleMinMax(times, values, 0, 30_000, 500);
+
+    let finiteCount = 0;
+    for (const v of out.y) {
+      if (Number.isNaN(v)) continue;
+      expect(Number.isFinite(v)).toBe(true);
+      finiteCount++;
+    }
+    expect(finiteCount).toBeGreaterThan(0);
+  });
+
+  it("emits an explicit gap point for an all-NaN bucket (§8.6.8)", () => {
+    const n = 10_000;
+    const { times, values } = syntheticSeries(n, 13);
+    // A contiguous unreported stretch spanning many buckets.
+    const holeStart = Math.floor(n * 0.4);
+    const holeEnd = Math.floor(n * 0.6);
+    for (let i = holeStart; i < holeEnd; i++) values[i] = Number.NaN;
+    const out = downsampleMinMax(times, values, 0, n, 200);
+
+    const gapCount = Array.from(out.y).filter((v) => Number.isNaN(v)).length;
+    expect(gapCount).toBeGreaterThan(0);
+    // Gap points sit inside the hole's time range so the painter breaks there.
+    for (let i = 0; i < out.y.length; i++) {
+      if (Number.isNaN(out.y[i]!)) {
+        expect(out.x[i]!).toBeGreaterThan(times[holeStart - 1]!);
+        expect(out.x[i]!).toBeLessThan(times[holeEnd]!);
+      }
+    }
+    // A missing sample must never read as a value — no zeros from the hole.
+    for (const v of out.y) {
+      if (!Number.isNaN(v)) expect(v).toBeGreaterThan(0);
+    }
+  });
+
   it("handles empty and degenerate windows without throwing", () => {
     const { times, values } = syntheticSeries(100);
     expect(downsampleMinMax(times, values, 50, 50, 100).x.length).toBe(0);

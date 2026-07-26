@@ -68,6 +68,7 @@ export const e2eBenchmarkSetFixtureRun: Run = {
   benchmarkSetId: E2E_BENCHMARK_SET_ID,
   methodologyManifest: {
     version: 1,
+    gameBuild: "2.21",
     sceneType: "benchmark-scene",
     scene: "Dogtown route",
     settingsPreset: "Ultra",
@@ -77,6 +78,11 @@ export const e2eBenchmarkSetFixtureRun: Run = {
     rayTracing: "off",
     frameGeneration: e2eFixtureRun.generatedFrameTech,
     framePacing: { vsync: false, vrr: false },
+    // §8.6.2/§8.6.8 — declared-profile provenance + the HAGS qualification
+    // the run page's readiness statement and overlay caption must carry.
+    captureTool: "CapFrameX 1.7.2",
+    warmupPolicy: "discard-first-10s",
+    hags: "enabled",
   },
   // Match verification's conservative CapFrameX canonicalization rather than
   // trusting the browser-style per-frame representation.

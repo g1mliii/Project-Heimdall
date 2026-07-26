@@ -13,11 +13,20 @@ export interface SwitchProps extends Omit<React.InputHTMLAttributes<HTMLInputEle
 }
 
 /** Binary toggle — e.g. "Verified only" vs "All submissions". */
-export function Switch({ checked, onChange, label, id, disabled = false, className = "", ...rest }: SwitchProps) {
+export function Switch({
+  checked,
+  onChange,
+  label,
+  id,
+  disabled = false,
+  className = "",
+  title,
+  ...rest
+}: SwitchProps) {
   const reactId = React.useId();
   const swId = id || reactId;
   return (
-    <label className={cx("hd-switch", className)} htmlFor={swId}>
+    <label className={cx("hd-switch", className)} htmlFor={swId} title={title}>
       <input
         id={swId}
         type="checkbox"
@@ -25,6 +34,7 @@ export function Switch({ checked, onChange, label, id, disabled = false, classNa
         checked={checked}
         onChange={onChange}
         disabled={disabled}
+        title={title}
         {...rest}
       />
       <span className="hd-switch__track">

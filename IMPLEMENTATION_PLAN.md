@@ -366,9 +366,10 @@ Every phase ends with `pnpm verify` green, migrations idempotent/reentrant, and 
   create/finalize/report all still succeed — see the matrix's "anonymous-allowed by design" rows)
 - **Phase 8 is complete — every checklist item shipped, tested, and verified.** Ready for the
   Phase 8.5 security review
-  and run) and a real end-to-end webhook test through an actual public tunnel (ngrok or similar) —
-  today's webhook coverage signs payloads with the real `svix` library directly in-process, which
-  proves the route's verification logic but has never received a request from Clerk's real servers
+- **Still untested against real Clerk infrastructure:** a real end-to-end webhook delivery through
+  an actual public tunnel (ngrok or similar) — today's webhook coverage signs payloads with the
+  real `svix` library directly in-process, which proves the route's verification logic but has
+  never received a request from Clerk's real servers
 
 ---
 
@@ -433,38 +434,54 @@ re-run — installed 0.35.0 is the patched line), `pnpm check:deps` passed. Depl
 > these — the settings-string subtitle, the verified shield badge — are already drawn in the kit
 > and simply never got built).
 
-- [ ] 8.6.1 **Capability manifest panel** (run page): `sensors` coverage, `presentationMode`,
+- [x] 8.6.1 **Capability manifest panel** (run page): `sensors` coverage, `presentationMode`,
   `syncMode`, `frameGenerationObserved`, `vramCapacity`, `caveats` — none of `capabilityManifest`
   is currently displayed. For `cpuBusyMs`/`gpuBusyMs`, make the bottleneck-data readiness explicit:
   show present/absent, frame-aligned/not safe for attribution, and the HAGS qualification when it
-  applies
-- [ ] 8.6.2 **Declared methodology, shown not just validated**: `RunHeader` subtitle should read
+  applies — `CapabilityCard.tsx` + shared `sensor-labels.ts`; renders nothing (no placeholder) for
+  manifest-less runs
+- [x] 8.6.2 **Declared methodology, shown not just validated**: `RunHeader` subtitle should read
   the settings string per the kit ("Ultra · Ray Tracing: Overdrive · 1440p · DX12 · 62s capture");
   currently `methodologyManifest` is only read to name *missing* fields (`IncompleteProfileCard`),
   never to display the *declared* ones. Also missing on submission rows: `settingsPreset`, `scene`,
   frame-pacing (`capFps`/`vsync`/`vrr`/`refreshHz`), `gameBuild`, `captureTool`, `warmupPolicy`,
-  `hags` — today split inconsistently between per-row and cohort-bucket display, several nowhere
-- [ ] 8.6.3 **This run's own** `frameTimeP95Ms`/`frameTimeP99Ms`/`stutterCount` as stat tiles —
+  `hags` — today split inconsistently between per-row and cohort-bucket display, several nowhere.
+  NOTE: the per-row fields required widening `GameSubmissionMethodology` (shared type + zod +
+  `mapSubmission` projection from the already-selected `settings_json`) — no SQL/migration change,
+  so the phase's "no new backend work" premise survived in spirit. The kit's named RT tier
+  ("Ray Tracing: Overdrive") is unrepresentable (domain model is off/on/unknown) — subtitle says
+  "Ray tracing"; resolution renders raw ("2560x1440"), no lossy "1440p" prettifier
+- [x] 8.6.3 **This run's own** `frameTimeP95Ms`/`frameTimeP99Ms`/`stutterCount` as stat tiles —
   currently these are only distribution-metric *options* on the game page, never shown as the
   run's own numbers
-- [ ] 8.6.4 **Diagnostic evidence detail**: `DiagnosticEvidence.coverageFraction`, `sensors[]`,
+- [x] 8.6.4 **Diagnostic evidence detail**: `DiagnosticEvidence.coverageFraction`, `sensors[]`,
   `metrics{}` (bottleneck-attribution percentages), `caveats[]`, and
   `provenance.{sourceUrl,referencedVersion,fetchedAt}` (the driver-update source link) are computed
   server-side and dropped before the card renders. For busy-time attribution, render human labels
   (not raw metric keys) for paired-frame coverage, paired sample count, CPU-bound/GPU-bound/
-  cap-or-display-limited fractions, confidence, and HAGS caveats
-- [ ] 8.6.5 **Hardware snapshot**: add `gpuVramTotalMb` (capacity, not just peak used) and
-  `gpuVendor`
-- [ ] 8.6.6 **`RunSummary.sampleCount`** as a visible number, not just a tooltip title on the
-  confidence badge
-- [ ] 8.6.7 Depends on **§20.3 (verified-reviewer tier)** landing first: the shield-check badge on
+  cap-or-display-limited fractions, confidence, and HAGS caveats — `DiagnosticEvidenceDetail.tsx`
+  behind a native `<details>`; label map drift-guarded against
+  `DIAGNOSTIC_EVIDENCE_METRIC_KEYS`, which `packages/shared/src/constants.ts` owns (the contract's
+  vocabulary belongs with the schema, not with the attribution engine that happens to emit it)
+- [x] 8.6.5 **Hardware snapshot**: add `gpuVramTotalMb` (capacity, not just peak used) — peak VRAM
+  becomes a meter only when the capacity was declared; plain row otherwise. `gpuVendor` was
+  deliberately NOT given a row: the `gpu` string already leads with the vendor ("NVIDIA GeForce
+  RTX 4080"), so a separate row restates it, and the design kit's hardware card has none. The field
+  still drives the sensor-availability matrix upstream — it is unrendered, not unused.
+- [x] 8.6.6 **`RunSummary.sampleCount`** as a visible number, not just a tooltip title on the
+  confidence badge — "Graded from N frames" caption under the smoothness tiers
+- [x] 8.6.7 Depends on **§20.3 (verified-reviewer tier)** landing first: the shield-check badge on
   `SubmissionsTable` rows (drawn in `GamePage.jsx`, no placeholder in the component yet) and
-  activating the already-present disabled "Verified only" `Switch` in `DistributionSection`
-- [ ] 8.6.8 **Busy-time timeline** (run page): when paired, frame-aligned `cpuBusyMs` and
+  activating the already-present disabled "Verified only" `Switch` in `DistributionSection` —
+  premise was stale: both halves already shipped with §20.3 (badge at SubmissionsTable, Switch
+  fully wired, never disabled). Closed by adding the missing switch-refetch regression test
+- [x] 8.6.8 **Busy-time timeline** (run page): when paired, frame-aligned `cpuBusyMs` and
   `gpuBusyMs` telemetry is available, offer a CPU Busy / GPU Busy / frame-time chart overlay;
   otherwise state why attribution and the overlay are unavailable. Never render missing samples as
   zero; retain the HAGS qualification. This extends the front-end Parquet chart projection only —
-  no new server-side data model or API work
+  no new server-side data model or API work — chart projection widened to 6 columns, `FrameSeries`
+  carries NaN-holed busy arrays, downsampler emits explicit gap points, overlay is ms-only
+  (busy time is a duration) and gated on the capability manifest with named unavailable reasons
 - **Verify**: run page and game page visually match the current `design/ui_kits/web/**` kit;
   nothing in `packages/shared/src/types.ts`'s domain model is silently dropped between API response
   and rendered DOM (spot-check by diffing a real API response against what's on screen)
@@ -474,6 +491,28 @@ re-run — installed 0.35.0 is the patched line), `pnpm check:deps` passed. Depl
 ### Phase 8.6 Regression Gate
 - Full domain model has a UI home; `pnpm verify` green; visual baselines updated deliberately (not
   casually) to match
+
+**Phase 8.6 implemented (2026-07-22).** Kit-first: RunPage/GamePage kits extended (capability
+panel, 7-tile row, evidence disclosure, sample-count caption, busy-time overlay + legend/captions,
+Methodology column with declared line + profile tooltip) before the production build. New chart
+tokens `--chart-cpu-busy`/`--chart-gpu-busy`. API-vs-DOM spot-check of `runResponseSchema`:
+every field now has a UI home except deliberate exclusions — `ownerId` (stripped at the wire,
+§20.3), `canonicalGpuId`/`canonicalCpuId` (internal linkage), `schemaVersion`/`parserVersion`/
+`framesObjectKey` (internal provenance/plumbing), `signatureValid` (deferred to Phase 9 — browser
+uploads carry no signatures, so showing "unsigned" on every run would mislead), and
+`summary.frameTimeP50Ms` (functional home: the client stutter threshold). Gates: `pnpm verify`
+exit 0; functional e2e green (20/20).
+
+**CSP fix found via `account.spec.ts` (2026-07-22).** That spec's sign-in timeout was not an
+external Clerk outage — the §8.5.6 CSP listed Clerk in `connect-src`/`frame-src` but not
+`script-src`, so the browser blocked `clerk.browser.js`, the SDK never booted, and every auth
+surface failed to hydrate under the policy (production included, not just e2e). Fixed by hoisting
+the host list to a shared `CLERK_HOSTS` in `next.config.ts` and granting it in `script-src` too;
+pinned by `src/lib/security-headers.test.ts`. **Note for deploy:** a Clerk *production* instance on
+a custom domain (`clerk.<yourdomain>`) matches none of the current patterns — that host must be
+added before going live, or this bug returns. **Outstanding:** `@visual`
+baselines (`run-page.png`, `game-page.png`) must be regenerated ONCE on CI ubuntu in a dedicated
+commit — local Windows renders are not valid baselines.
 
 ---
 

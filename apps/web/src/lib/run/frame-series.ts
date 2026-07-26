@@ -24,11 +24,22 @@ export interface FrameSeries {
   avgGpuLoadPct?: number;
   /** Peak VRAM over frames that reported it; undefined when none did. */
   peakVramUsedMb?: number;
+  /**
+   * §8.6.8 per-frame busy times in ms for the chart overlay. `NaN` marks
+   * frames the source did not report — a missing sample must read as a hole
+   * in the trace, never as a 0 ms floor. Present only when the capture
+   * carried at least one real value for the column.
+   */
+  cpuBusyMs?: Float64Array;
+  gpuBusyMs?: Float64Array;
 }
 
 export interface FrameSeriesSensorStats {
   avgGpuLoadPct?: number;
   peakVramUsedMb?: number;
+  /** NaN-holed busy-time columns (§8.6.8); omit when the capture had none. */
+  cpuBusyMs?: Float64Array;
+  gpuBusyMs?: Float64Array;
 }
 
 /**
@@ -78,6 +89,10 @@ export function buildFrameSeries(frames: readonly FrameSample[]): FrameSeries {
   const count = frames.length;
   const times = new Float64Array(count);
   const frameTimes = new Float64Array(count);
+  // Allocated on the first real sample: a capture whose source never reports
+  // busy time must not pay two full-length NaN buffers it will discard below.
+  let cpuBusyMs: Float64Array | undefined;
+  let gpuBusyMs: Float64Array | undefined;
 
   let gpuLoadSum = 0;
   let gpuLoadCount = 0;
@@ -94,10 +109,22 @@ export function buildFrameSeries(frames: readonly FrameSample[]): FrameSeries {
     if (frame.vramUsedMb !== undefined && (peakVram === undefined || frame.vramUsedMb > peakVram)) {
       peakVram = frame.vramUsedMb;
     }
+    if (frame.cpuBusyMs !== undefined) {
+      cpuBusyMs ??= new Float64Array(count).fill(Number.NaN);
+      cpuBusyMs[i] = frame.cpuBusyMs;
+    }
+    if (frame.gpuBusyMs !== undefined) {
+      gpuBusyMs ??= new Float64Array(count).fill(Number.NaN);
+      gpuBusyMs[i] = frame.gpuBusyMs;
+    }
   }
 
   return buildFrameSeriesFromColumns(times, frameTimes, {
     ...(gpuLoadCount > 0 ? { avgGpuLoadPct: gpuLoadSum / gpuLoadCount } : {}),
     ...(peakVram !== undefined ? { peakVramUsedMb: peakVram } : {}),
+    // A busy column with zero real samples is never allocated, let alone kept
+    // as all-NaN — downstream checks read "column absent" as "not captured".
+    ...(cpuBusyMs ? { cpuBusyMs } : {}),
+    ...(gpuBusyMs ? { gpuBusyMs } : {}),
   });
 }

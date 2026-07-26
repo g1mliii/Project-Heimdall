@@ -4,6 +4,8 @@ import {
   createReportRequestSchema,
   diagnosticSchema,
   finalizeRunRequestSchema,
+  gameSubmissionMethodologySchema,
+  MAX_INDEXED_METADATA_TEXT_LENGTH,
   preAuthRunVisibilitySchema,
   runResponseSchema,
   runSummarySchema,
@@ -231,6 +233,57 @@ describe("DTO round-trip stability (§3.2)", () => {
       createRunRequestSchema.safeParse({
         ...validCreateRunRequest,
         hardware: { ...validCreateRunRequest.hardware, resolution: "x".repeat(65) },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("reuses manifest bounds and graphics API canonicalization in submission rows", () => {
+    const row = {
+      profileComplete: true,
+      resolution: "2560x1440",
+      graphicsApi: "D3D-12",
+      upscaler: "none" as const,
+      rayTracing: "off" as const,
+      frameGeneration: "none" as const,
+      settingsPreset: "Ultra",
+      scene: "Dogtown loop",
+      capFps: 120,
+      vsync: false,
+      vrr: true,
+      refreshHz: 144,
+      gameBuild: "2.21",
+      captureTool: "PresentMon 2.3.0",
+      warmupPolicy: "discard-first-10s",
+      hags: "enabled" as const,
+    };
+    expect(gameSubmissionMethodologySchema.parse(row).graphicsApi).toBe("dx12");
+    expect(
+      gameSubmissionMethodologySchema.safeParse({
+        ...row,
+        settingsPreset: "x".repeat(MAX_INDEXED_METADATA_TEXT_LENGTH + 1),
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects diagnostic evidence metric keys outside the shared contract", () => {
+    expect(
+      diagnosticSchema.safeParse({
+        id: "d1",
+        code: "likely-gpu-bound",
+        severity: "info",
+        title: "Likely GPU-bound",
+        detail: "GPU busy time dominated.",
+        evidence: { metrics: { gpuBoundFraction: 0.8 } },
+      }).success,
+    ).toBe(true);
+    expect(
+      diagnosticSchema.safeParse({
+        id: "d2",
+        code: "future-rule",
+        severity: "info",
+        title: "Future rule",
+        detail: "Unknown metric keys must not be silently stripped.",
+        evidence: { metrics: { unlabelledFutureMetric: 1 } },
       }).success,
     ).toBe(false);
   });

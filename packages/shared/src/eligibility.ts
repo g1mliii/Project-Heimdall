@@ -35,8 +35,12 @@ export type CohortExclusionReason =
  * v2 (§17.0.2): a benchmark set no longer contributes zero observations — it
  * contributes exactly one representative (its median non-warm-up member), so a
  * repeated set weighs once instead of not at all. See {@link cohortObservationsSql}.
+ *
+ * v3 (§16c.1/§16c.3): known graphics-API spelling aliases (for example
+ * `d3d12` and `dx12`) canonicalize before pooling, so one API cannot split into
+ * visually indistinguishable cohorts. Unknown free-text APIs stay distinct.
  */
-export const COHORT_DEFINITION_VERSION = 2;
+export const COHORT_DEFINITION_VERSION = 3;
 
 export interface CohortEligibilityInput {
   visibility: RunVisibility;

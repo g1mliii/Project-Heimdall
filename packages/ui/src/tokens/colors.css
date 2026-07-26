@@ -85,6 +85,8 @@
   --chart-frametime: #2ee6c6;   /* the frame-time trace            */
   --chart-stutter: #f56565;     /* highlighted spikes              */
   --chart-band: #ffffff08;      /* target/percentile bands         */
+  --chart-cpu-busy: #4d9fff;    /* CPU busy-time overlay (§8.6.8)  */
+  --chart-gpu-busy: #8b7bff;    /* GPU busy-time overlay (§8.6.8)  */
 }
 
 /* ── Light theme — marketing pages, docs, print ────────────────── */

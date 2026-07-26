@@ -22,15 +22,21 @@ import type { DiagnosticsFrameColumns } from "@heimdall/parsers";
 import { buildFrameSeriesFromColumns, type FrameSeries } from "../run/frame-series";
 
 export const FRAME_PARQUET_COLUMN_NAMES = FRAME_PARQUET_COLUMNS.map((column) => column.name);
-/** Columns needed to render the Phase 5 chart and hardware summary. */
+/** Columns needed to render the Phase 5 chart and hardware summary. Every
+ * stored blob carries all 10 columns (`validateFrameParquetMetadata` requires
+ * them), so any projection over them is decode-safe. */
 export const FRAME_CHART_PARQUET_COLUMN_NAMES = [
   "time_ms",
   "frame_time_ms",
   "gpu_load_pct",
   "vram_used_mb",
 ] as const;
+/** §8.6.8 overlay columns, decoded only when the capability manifest declares
+ * the sensors — see `decodeFrameParquetToSeries`. */
+export const FRAME_BUSY_PARQUET_COLUMN_NAMES = ["cpu_busy_ms", "gpu_busy_ms"] as const;
 const [TIME_MS_COLUMN, FRAME_TIME_MS_COLUMN, GPU_LOAD_PCT_COLUMN, VRAM_USED_MB_COLUMN] =
   FRAME_CHART_PARQUET_COLUMN_NAMES;
+const [CPU_BUSY_MS_COLUMN, GPU_BUSY_MS_COLUMN] = FRAME_BUSY_PARQUET_COLUMN_NAMES;
 const MAX_DECODED_FRAME_PARQUET_BYTES = BigInt(INGEST_LIMITS.maxParquetBytes);
 
 interface FrameParquetChunk {
@@ -311,8 +317,17 @@ export async function computeFrameParquetSummary(
  * consumes. This deliberately never builds a `FrameSample[]`: a valid
  * 500,000-frame capture otherwise creates a large object graph immediately
  * before `buildFrameSeries` copies the same fields into typed arrays.
+ *
+ * `busyColumns` gates the two §8.6.8 overlay columns. The overlay is already
+ * unavailable when the capability manifest declares the sensors absent, so
+ * decoding them then is pure cost — two extra full column passes and two
+ * 4 MiB buffers per max-size capture. When they ARE declared, they decode and
+ * the caller's belt-and-braces check still catches a manifest that lied.
  */
-export async function decodeFrameParquetToSeries(buffer: ArrayBuffer): Promise<FrameSeries> {
+export async function decodeFrameParquetToSeries(
+  buffer: ArrayBuffer,
+  { busyColumns = true }: { busyColumns?: boolean } = {},
+): Promise<FrameSeries> {
   const { parquetMetadata, parquetRead } = await import("hyparquet");
   const metadata = parquetMetadata(buffer);
   const frameCount = validateFrameParquetMetadata(metadata);
@@ -322,6 +337,28 @@ export async function decodeFrameParquetToSeries(buffer: ArrayBuffer): Promise<F
   let gpuLoadSum = 0;
   let gpuLoadCount = 0;
   let peakVramUsedMb: number | undefined;
+  // §8.6.8 busy-time overlay columns: NaN marks frames the source did not
+  // report — never a zero fill. Allocated on the first real sample, matching
+  // `computeFrameParquetSummary`'s sensor arrays: a capture whose source never
+  // reports busy time must not pay 8 MiB for two buffers it will discard.
+  const readBusyColumn = async (column: string): Promise<Float64Array | undefined> => {
+    let busyMs: Float64Array | undefined;
+    await readFrameParquetColumn(
+      parquetRead,
+      buffer,
+      metadata,
+      frameCount,
+      column,
+      (value, row) => {
+        const busy = parseOptionalFrameParquetNumber(column, value, row);
+        if (busy !== undefined) {
+          busyMs ??= new Float64Array(frameCount).fill(Number.NaN);
+          busyMs[row] = busy;
+        }
+      },
+    );
+    return busyMs;
+  };
 
   await readFrameParquetColumn(
     parquetRead,
@@ -370,6 +407,8 @@ export async function decodeFrameParquetToSeries(buffer: ArrayBuffer): Promise<F
       }
     },
   );
+  const cpuBusyMs = busyColumns ? await readBusyColumn(CPU_BUSY_MS_COLUMN) : undefined;
+  const gpuBusyMs = busyColumns ? await readBusyColumn(GPU_BUSY_MS_COLUMN) : undefined;
 
   let previousTimeMs: number | undefined;
   for (let row = 0; row < frameCount; row++) {
@@ -381,5 +420,9 @@ export async function decodeFrameParquetToSeries(buffer: ArrayBuffer): Promise<F
   return buildFrameSeriesFromColumns(times, frameTimes, {
     ...(gpuLoadCount > 0 ? { avgGpuLoadPct: gpuLoadSum / gpuLoadCount } : {}),
     ...(peakVramUsedMb !== undefined ? { peakVramUsedMb } : {}),
+    // Undefined unless a real sample landed, so the chart reads "column
+    // absent" as "not captured" instead of drawing an all-NaN trace.
+    ...(cpuBusyMs ? { cpuBusyMs } : {}),
+    ...(gpuBusyMs ? { gpuBusyMs } : {}),
   });
 }

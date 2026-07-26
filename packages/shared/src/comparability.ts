@@ -21,6 +21,7 @@ import type {
   SceneType,
   UpscalerMode,
 } from "./types";
+import { canonicalGraphicsApi } from "./graphics-api";
 
 /** Everything the comparability key is derived from (canonical, server-resolved). */
 export interface ComparabilityInput {
@@ -105,7 +106,17 @@ const KEY_FIELDS = [
  * aggregates via the eligibility guard, not here).
  */
 export function comparabilityKey(input: ComparabilityInput): string {
-  return KEY_FIELDS.map((field) => component(input[field.inputKey])).join("|");
+  // Canonicalized before the loop, never inside it: KEY_FIELDS is handled
+  // uniformly, so a field name branching in the middle of it would be the first
+  // crack in the TS↔SQL parity this module exists to hold.
+  const normalized: ComparabilityInput = {
+    ...input,
+    graphicsApi:
+      typeof input.graphicsApi === "string"
+        ? canonicalGraphicsApi(input.graphicsApi)
+        : input.graphicsApi,
+  };
+  return KEY_FIELDS.map((field) => component(normalized[field.inputKey])).join("|");
 }
 
 /**

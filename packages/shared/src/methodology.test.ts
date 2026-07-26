@@ -27,4 +27,21 @@ describe("normalizeMethodologyManifest", () => {
   it("does not manufacture a manifest for a run with no declared methodology", () => {
     expect(normalizeMethodologyManifest(undefined, { resolution: "2560x1440" }, "none")).toBeUndefined();
   });
+
+  it("canonicalizes known graphics API aliases without collapsing unknown APIs", () => {
+    expect(
+      normalizeMethodologyManifest(
+        { ...manifest, graphicsApi: "D3D-12" },
+        {},
+        "dlss3",
+      )?.graphicsApi,
+    ).toBe("dx12");
+    expect(
+      normalizeMethodologyManifest(
+        { ...manifest, graphicsApi: "Future API" },
+        {},
+        "dlss3",
+      )?.graphicsApi,
+    ).toBe("Future API");
+  });
 });

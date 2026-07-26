@@ -73,7 +73,7 @@ describe("cohortExclusionReasons (§16e.4)", () => {
 
 describe("cohortEligibilitySql", () => {
   it("composes every aggregate-read gate under one versioned definition", () => {
-    expect(COHORT_DEFINITION_VERSION).toBe(2);
+    expect(COHORT_DEFINITION_VERSION).toBe(3);
     const sql = cohortEligibilitySql("r");
     for (const predicate of [
       "r.visibility = 'public'",

@@ -25,6 +25,20 @@ function submissionsWorkload() {
   return within(screen.getByRole("group", { name: "Workload" }));
 }
 
+/** §8.6.2 declared-profile fields in their "not declared" state. */
+const undeclaredProfile = {
+  settingsPreset: null,
+  scene: null,
+  capFps: null,
+  vsync: null,
+  vrr: null,
+  refreshHz: null,
+  gameBuild: null,
+  captureTool: null,
+  warmupPolicy: null,
+  hags: null,
+} as const;
+
 function submission(
   id: string,
   overrides: Partial<GameSubmissionRow> = {},
@@ -47,6 +61,7 @@ function submission(
       upscaler: "dlss",
       rayTracing: "on",
       frameGeneration: "dlss3",
+      ...undeclaredProfile,
     },
     isWarmup: false,
     benchmarkSetId: null,
@@ -74,6 +89,7 @@ describe("GamePageClient (§17.7)", () => {
           upscaler: null,
           rayTracing: null,
           frameGeneration: "none",
+          ...undeclaredProfile,
         },
         driverBelowMinimum: false,
         driverBehindLatest: false,
@@ -111,6 +127,70 @@ describe("GamePageClient (§17.7)", () => {
     expect(container.querySelector("[data-chart], canvas")).toBeNull();
     expect(container.querySelector("[data-icon='shield-check']")).toBeNull();
     expect(screen.queryByText(/\d+\s+(?:public\s+)?runs/i)).not.toBeInTheDocument();
+  });
+
+  it("renders declared settings, pacing, and the declared-profile tooltip (§8.6.2)", () => {
+    const rows = [
+      submission("declared", {
+        methodology: {
+          profileComplete: true,
+          resolution: "2560x1440",
+          graphicsApi: "dx12",
+          upscaler: "dlss",
+          rayTracing: "on",
+          frameGeneration: "dlss3",
+          settingsPreset: "Ultra",
+          scene: "Dogtown market",
+          capFps: 120,
+          vsync: false,
+          vrr: true,
+          refreshHz: 144,
+          gameBuild: "2.21",
+          captureTool: "PresentMon 2.3.0",
+          warmupPolicy: "discard-first-10s",
+          hags: "enabled",
+        },
+      }),
+    ];
+    render(
+      <GamePageClient
+        game={game}
+        initialDistribution={null}
+        loadDistribution={idleDistributionLoader}
+        initialSubmissions={{ rows, nextCursor: null }}
+      />,
+    );
+
+    // Declared false renders as "no VSync" — visibly distinct from undeclared.
+    expect(
+      screen.getByText("Ultra · Dogtown market · 120 FPS cap · no VSync · VRR · 144 Hz"),
+    ).toBeInTheDocument();
+    // Low-frequency provenance facts live in the declared-profile tooltip.
+    expect(screen.getByText("Game build")).toBeInTheDocument();
+    expect(screen.getByText("2.21")).toBeInTheDocument();
+    expect(screen.getByText("Capture tool")).toBeInTheDocument();
+    expect(screen.getByText("PresentMon 2.3.0")).toBeInTheDocument();
+    expect(screen.getByText("Warm-up policy")).toBeInTheDocument();
+    expect(screen.getByText("discard-first-10s")).toBeInTheDocument();
+    expect(screen.getByText("HAGS")).toBeInTheDocument();
+    expect(screen.getByText("Enabled")).toBeInTheDocument();
+  });
+
+  it("omits the declared line and profile affordance when nothing was declared (§8.6.2)", () => {
+    const { container } = render(
+      <GamePageClient
+        game={game}
+        initialDistribution={null}
+        loadDistribution={idleDistributionLoader}
+        initialSubmissions={{ rows: [submission("undeclared")], nextCursor: null }}
+      />,
+    );
+
+    // null must never read as declared-off — no pacing text, no affordance.
+    expect(screen.queryByText(/FPS cap/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/no VSync/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/no VRR/)).not.toBeInTheDocument();
+    expect(container.querySelector("[data-icon='declared-profile']")).toBeNull();
   });
 
   it("shows a verified-reviewer shield only on submissions with submittedByVerified (§20.3)", () => {

@@ -42,7 +42,7 @@ function response(
     game,
     metric: "avg-fps",
     betterDirection: "higher",
-    cohortDefinitionVersion: 2,
+    cohortDefinitionVersion: 3,
     minSampleSize: 30,
     cohorts,
     truncated: false,
@@ -156,6 +156,28 @@ describe("DistributionSection (§17.1–17.5)", () => {
     );
   });
 
+  it("refetches with verifiedOnly when the Verified only switch toggles (§20.3)", async () => {
+    const user = userEvent.setup();
+    const loader = vi.fn<GameDistributionLoader>().mockResolvedValue({
+      ok: true,
+      data: response([bigCohort]),
+    });
+    render(
+      <DistributionSection game={game} initial={response([bigCohort])} loadDistribution={loader} />,
+    );
+
+    await user.click(screen.getByRole("switch", { name: "Verified only" }));
+    expect(loader).toHaveBeenCalledWith(
+      game.slug,
+      { metric: "avg-fps", verifiedOnly: true },
+      expect.any(AbortSignal),
+    );
+
+    // Toggling back off must drop the filter, not send verifiedOnly: false.
+    await user.click(screen.getByRole("switch", { name: "Verified only" }));
+    expect(loader).toHaveBeenLastCalledWith(game.slug, { metric: "avg-fps" }, expect.any(AbortSignal));
+  });
+
   it("qualifies the percentile on a lower-is-better metric", () => {
     render(
       <DistributionSection
@@ -206,6 +228,35 @@ describe("DistributionSection (§17.1–17.5)", () => {
     await user.selectOptions(selector, selector.querySelectorAll("option")[1]!.value);
     expect(selector).toHaveValue(selector.querySelectorAll("option")[1]!.value);
     expect(screen.getByText("31 runs")).toBeInTheDocument();
+  });
+
+  it("uses canonical API labels and locale-stable grouped counts", () => {
+    const aliased = {
+      ...bigCohort,
+      comparability: comparability({ graphicsApi: "D3D-12" }),
+      observationCount: 12_480,
+      rawRunCount: 13_000,
+    };
+    render(
+      <DistributionSection
+        game={game}
+        initial={response([aliased], {
+          exclusionSummary: {
+            aggregateEligibleRuns: 12_480,
+            pooledObservations: 12_480,
+            unprofiledRuns: 1_250,
+            capabilityUnestablishedRuns: 0,
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByLabelText("Exact cohort")).toHaveTextContent("DX12");
+    expect(screen.getByLabelText("Exact cohort")).not.toHaveTextContent("D3D-12");
+    expect(screen.getByText("12,480 runs")).toBeInTheDocument();
+    expect(screen.getByText(/Aggregate · 12,480 public runs/)).toBeInTheDocument();
+    expect(screen.getByText(/across 13,000 runs/)).toBeInTheDocument();
+    expect(screen.getByText(/1,250 excluded/)).toBeInTheDocument();
   });
 
   it("fetches for itself and offers a retry when the server read failed", async () => {

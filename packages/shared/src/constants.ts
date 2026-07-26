@@ -173,6 +173,21 @@ export const CAPABILITY_MANIFEST_VERSION = 1;
 export const DIAGNOSTICS_RULE_GENERATION = 1;
 
 /**
+ * Closed metric vocabulary persisted inside `DiagnosticEvidence` (§16b.2).
+ * Additions are shared-contract changes: the rules engine, wire schema, and
+ * human-label map must move together so no raw or silently dropped key reaches
+ * a report.
+ */
+export const DIAGNOSTIC_EVIDENCE_METRIC_KEYS = [
+  "pairedSamples",
+  "cpuBoundFraction",
+  "gpuBoundFraction",
+  "cappedFraction",
+] as const;
+export type DiagnosticEvidenceMetricKey =
+  (typeof DIAGNOSTIC_EVIDENCE_METRIC_KEYS)[number];
+
+/**
  * Methodology-manifest schema version (Phase 6.5 §16c.1). The methodology
  * manifest is quasi-identifying and versioned independently of the capability
  * manifest so the two can evolve on their own cadence.

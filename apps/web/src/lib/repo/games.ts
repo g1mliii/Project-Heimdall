@@ -160,6 +160,9 @@ function mapSubmission(row: GameSubmissionDbRow): GameSubmissionRow {
     parsedMethodology !== null &&
     parsedMethodology.success &&
     missingComparabilityProfileFields(parsedMethodology.data).length === 0;
+  // §8.6.2 declared-profile fields project from the parsed manifest; existing
+  // fields stay column-sourced so their behavior cannot drift.
+  const manifest = parsedMethodology?.success ? parsedMethodology.data : null;
 
   return {
     id: row.submission_id!,
@@ -179,6 +182,16 @@ function mapSubmission(row: GameSubmissionDbRow): GameSubmissionRow {
       upscaler: row.upscaler,
       rayTracing: row.ray_tracing,
       frameGeneration: row.generated_frame_tech!,
+      settingsPreset: manifest?.settingsPreset ?? null,
+      scene: manifest?.scene ?? null,
+      capFps: manifest?.framePacing.capFps ?? null,
+      vsync: manifest?.framePacing.vsync ?? null,
+      vrr: manifest?.framePacing.vrr ?? null,
+      refreshHz: manifest?.framePacing.refreshHz ?? null,
+      gameBuild: manifest?.gameBuild ?? null,
+      captureTool: manifest?.captureTool ?? null,
+      warmupPolicy: manifest?.warmupPolicy ?? null,
+      hags: manifest?.hags ?? null,
     },
     isWarmup: row.is_warmup ?? false,
     benchmarkSetId: row.benchmark_set_id,

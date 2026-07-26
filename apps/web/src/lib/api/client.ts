@@ -244,11 +244,21 @@ export function getFramesUrl(
   );
 }
 
+/**
+ * Decode options threaded from the run page: `busyColumns` is false when the
+ * run's capability manifest already says the §8.6.8 sensors are absent, so the
+ * decoder can skip two full column passes it would only discard.
+ */
+export interface FrameDecodeOptions {
+  busyColumns?: boolean;
+}
+
 /** Fetch the signed Parquet URL and decode it directly into chart columns. */
 export async function fetchFrames(
   url: string,
   transport: ApiTransport = defaultTransport(),
   signal?: AbortSignal,
+  decode: FrameDecodeOptions = {},
 ): Promise<ApiResult<FrameSeries>> {
   let response: Response;
   try {
@@ -263,7 +273,7 @@ export async function fetchFrames(
     if (buffer.byteLength > INGEST_LIMITS.maxParquetBytes) {
       return failure("parquet-too-large", `frames object is ${buffer.byteLength} bytes`);
     }
-    return { ok: true, data: await decodeFrameParquetToSeries(buffer) };
+    return { ok: true, data: await decodeFrameParquetToSeries(buffer, decode) };
   } catch (error) {
     return failure("invalid-response", error instanceof Error ? error.message : String(error));
   }
@@ -274,10 +284,11 @@ export async function loadRunFrames(
   id: string,
   transport: ApiTransport = defaultTransport(),
   signal?: AbortSignal,
+  decode: FrameDecodeOptions = {},
 ): Promise<ApiResult<FrameSeries>> {
   const urlResult = await getFramesUrl(id, transport, signal);
   if (!urlResult.ok) return urlResult;
-  return fetchFrames(urlResult.data.url, transport, signal);
+  return fetchFrames(urlResult.data.url, transport, signal, decode);
 }
 
 /** Bounded individual-run page for the game discovery screen (§17.7). */

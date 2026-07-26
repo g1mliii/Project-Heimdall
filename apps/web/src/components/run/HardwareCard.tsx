@@ -1,49 +1,35 @@
 /**
- * Hardware + software snapshot panel (§13.4). Key/value rows from the run's
- * `HardwareSnapshot` (RAM warns when actual < rated speed); once frames are
- * loaded, sensor aggregates appear below — a Meter for average GPU load and
- * peak VRAM as a plain data row (the snapshot has no VRAM-capacity field, so
- * a meter against an unknown max would lie). Absent sensors render nothing.
+ * Hardware + software snapshot panel (§13.4, §8.6.5). Key/value rows from the
+ * run's `HardwareSnapshot` (RAM warns when actual < rated speed); once frames
+ * are loaded, sensor aggregates appear below — a Meter for average GPU load,
+ * and peak VRAM as a meter against the known capacity when there is one, or a
+ * plain data row when there isn't (a meter against an unknown max would lie).
+ * Absent sensors render nothing.
  */
 
 import { Card, Meter } from "@heimdall/ui";
-import type { HardwareSnapshot } from "@heimdall/shared";
+import type { CapabilityManifest, HardwareSnapshot } from "@heimdall/shared";
+import { formatGb, formatGbRange } from "@/lib/format";
 import type { FrameSeries } from "@/lib/run/frame-series";
-import { TriangleAlertIcon } from "./icons";
+import { SnapshotRow } from "./SnapshotRow";
 
-function SnapshotRow({ k, v, warn }: { k: string; v: string; warn?: boolean }) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        paddingTop: "var(--space-2)",
-        paddingBottom: "var(--space-2)",
-        borderBottomWidth: "var(--border-thin)",
-        borderBottomStyle: "solid",
-        borderBottomColor: "var(--line-1)",
-      }}
-    >
-      <span style={{ font: "var(--type-body-sm)", color: "var(--fg-3)" }}>{k}</span>
-      <span
-        data-mono
-        style={{
-          font: "var(--type-data)",
-          color: warn ? "var(--warn)" : "var(--fg-1)",
-          display: "inline-flex",
-          minWidth: 0,
-          alignItems: "center",
-          gap: "var(--space-1)",
-          overflowWrap: "anywhere",
-          textAlign: "right",
-        }}
-      >
-        {warn && <TriangleAlertIcon size={13} style={{ color: "var(--warn)" }} />}
-        {v}
-      </span>
-    </div>
-  );
+/** VRAM meters go bad-red at this fill fraction, per the design kit. */
+const VRAM_PRESSURE_FRACTION = 0.95;
+
+/**
+ * The capacity the meter is drawn against. `gpuVramTotalMb` is the parsed
+ * hardware fact and therefore wins over the client-declared capability
+ * manifest (§11.5/§16a.4). The manifest is a fallback for captures whose
+ * hardware snapshot has no total; canonical verification preserves that
+ * explicit state, so those runs still get an honest meter.
+ */
+function vramCapacityMb(
+  hardware: HardwareSnapshot,
+  manifest?: CapabilityManifest,
+): number | undefined {
+  if (hardware.gpuVramTotalMb !== undefined) return hardware.gpuVramTotalMb;
+  const declared = manifest?.vramCapacity;
+  return declared && "totalMb" in declared ? declared.totalMb : undefined;
 }
 
 function ramRow(hardware: HardwareSnapshot): { v: string; warn: boolean } | null {
@@ -58,23 +44,29 @@ function ramRow(hardware: HardwareSnapshot): { v: string; warn: boolean } | null
 
 export function HardwareCard({
   hardware,
+  capabilityManifest,
   series,
 }: {
   hardware: HardwareSnapshot;
+  capabilityManifest?: CapabilityManifest;
   series?: FrameSeries;
 }) {
   const ram = ramRow(hardware);
+  const peakVramMb = series?.peakVramUsedMb;
+  const vramTotalMb = vramCapacityMb(hardware, capabilityManifest);
   return (
     <Card>
       <Card.Header title="Hardware snapshot" />
       <Card.Body>
+        {/* No separate vendor row: the GPU string already leads with the
+            vendor, and the design kit's hardware card has no such row. */}
         <SnapshotRow k="GPU" v={hardware.gpu} />
         <SnapshotRow k="CPU" v={hardware.cpu} />
         {hardware.gpuDriver && <SnapshotRow k="Driver" v={hardware.gpuDriver} />}
         {ram && <SnapshotRow k="RAM" v={ram.v} warn={ram.warn} />}
         {hardware.os && <SnapshotRow k="OS" v={hardware.os} />}
-        {series?.peakVramUsedMb !== undefined && (
-          <SnapshotRow k="Peak VRAM" v={`${(series.peakVramUsedMb / 1024).toFixed(1)} GB`} />
+        {peakVramMb !== undefined && vramTotalMb === undefined && (
+          <SnapshotRow k="Peak VRAM" v={formatGb(peakVramMb)} />
         )}
         {series?.avgGpuLoadPct !== undefined && (
           <div style={{ marginTop: "var(--space-4)" }}>
@@ -83,6 +75,19 @@ export function HardwareCard({
               value={series.avgGpuLoadPct}
               max={100}
               display={`${Math.round(series.avgGpuLoadPct)}%`}
+            />
+          </div>
+        )}
+        {peakVramMb !== undefined && vramTotalMb !== undefined && (
+          <div style={{ marginTop: "var(--space-4)" }}>
+            <Meter
+              label="Peak VRAM"
+              value={peakVramMb}
+              max={vramTotalMb}
+              display={formatGbRange(peakVramMb, vramTotalMb)}
+              color={
+                peakVramMb / vramTotalMb >= VRAM_PRESSURE_FRACTION ? "var(--bad)" : undefined
+              }
             />
           </div>
         )}
