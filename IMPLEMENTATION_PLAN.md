@@ -616,8 +616,8 @@ commit — local Windows renders are not valid baselines.
     stop pooling silently with genuine ones.
   - [ ] Still open: making the numbers themselves meaningful under frame generation — a generated
     frame is not a rendered frame, so avg FPS, 1% lows and stutter counts all describe something
-    other than what they claim. Needs a product decision (exclude generated frames from the summary?
-    report both rates?), not just a plumbing change.
+    other than what they claim. Scheduled as **Phase 9.6**, together with physics-based detection of
+    undeclared frame generation.
 - [ ] 22.7 Packaging — **partially blocked on out-of-band credentials.**
   - [x] NSIS installer (per-user install), bundled sidecar + license resource; `cargo tauri build`
     runs in CI and produced a working installer locally
@@ -714,6 +714,58 @@ commit — local Windows renders are not valid baselines.
 
 ### Phase 9.5 Regression Gate
 - Linux capture parity with Windows; both clients on the same ingest contract
+
+---
+
+## Phase 9.6: Frame Generation — honest numbers and physics-based evidence — §22.11
+
+> Phase 9 stopped a frame-generated run from *claiming* it was not generated (§22.11). It did not
+> make its numbers mean anything. A generated frame is not a rendered frame, so avg FPS, 1% lows and
+> stutter counts on such a run all describe something other than what they say — measured on an
+> RX 9070 XT, Cyberpunk 2077 reported 243.9 avg FPS with frame generation on against 130.7 with it
+> off. This phase is about the numbers, and about detecting the case where nobody declared anything.
+
+- [ ] 22.12 **Dual summary where frame-type evidence exists.** Compute a second summary over
+  non-generated frames only, and offer a toggle on the run report: "how fast did it render" vs "how
+  smooth did it feel". Both are legitimate answers to different questions, which is why this is a
+  toggle and not a replacement.
+  - Only available where the capture reports frame type. AMD frame generation carries no evidence
+    (§22.6), so the toggle is absent there — stated, not silently omitted.
+  - Presentation only, at least initially. `frameGeneration` is already a comparability key, so
+    declared-FG and declared-non-FG runs are in different buckets regardless; this does not need to
+    touch pooling.
+  - Open question to settle first: does the rendered-frame rate belong in the stored summary, or is
+    it derived at read time? Storing it changes `summaryMismatch` and the client/server recompute
+    contract, so it is not a free addition.
+
+- [ ] 22.13 **Physics-based frame-generation evidence (research first, rule second).** Detect
+  undeclared frame generation from WITHIN a run, not by comparing it to an aggregate.
+  - The signal: sub-millisecond presents. The two captures above showed a 0.32 ms minimum with
+    frame generation on versus 3.11 ms with it off. A 0.32 ms present is not a plausible rendered
+    frame at that resolution.
+  - Why within-run and not ratio-vs-average: an aggregate baseline is already contaminated by the
+    undeclared runs it is meant to find; it is inert below the §17.4/§18.2 cold-start threshold, so
+    it does nothing at current data volume; and 2x is not a clean constant (DLSS4 multi-frame
+    generation is 3–4x, and the multiplier drifts with base framerate). Comparability keys control
+    resolution/preset/upscaler/scene, but settings vary within a preset and a CPU-bound section
+    moves FPS more than frame generation does.
+  - **Research task before any rule ships:** characterise the signature across vendors, titles and
+    base framerates. One machine and one title cannot calibrate a threshold. Belongs with the
+    §18.2 telemetry-physics layer, which already exists to flag physically inconsistent runs.
+  - **Evidence, never an accusation.** Consistent with §0.5: annotate the run, surface it for
+    review. Telling an honest uploader their run looks like cheating is a worse failure than
+    missing a dishonest one, and a false positive is unfalsifiable from the uploader's side.
+
+- **Verify**: a frame-generated capture with frame-type evidence reports both rates and the toggle
+  switches between them; a run with sub-millisecond presents is annotated, not rejected
+- **Regression**:
+  - [ ] Dual-summary golden fixtures (hand-computed, both rates)
+  - [ ] Toggle absent — and said to be absent — when the capture carries no frame-type evidence
+  - [ ] Physics rule fires on a known-FG capture and stays silent on the matched non-FG one
+
+### Phase 9.6 Regression Gate
+- No run reports a number it cannot support; undeclared frame generation is visible as evidence
+  without any run being auto-rejected for it
 
 ---
 
