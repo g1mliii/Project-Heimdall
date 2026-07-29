@@ -591,6 +591,24 @@ commit — local Windows renders are not valid baselines.
     tail-end edit to Phase 9.
   - Sub-millisecond presents (min 0.32 ms vs 3.11 ms) appear only with FG on and may be a usable
     detection signal, but one machine and one title is not enough to calibrate a rule on.
+  - **Implementation path, and it is smaller than it looks.** `frame.generated` is only ever set to
+    `true` (frames.ts) — never `false` — so a capture with no `FrameType` column and one whose every
+    row reads `Application` both serialize to all-null. The evidence distinction is lost before the
+    server sees it. But `generated` is ALREADY a nullable BOOLEAN in the v1 Parquet schema, so no
+    migration is needed:
+    1. Parser: write `generated: false` when the frame-type column exists and reads `Application`;
+       leave it undefined only when the format carries no such column. Parser version bump.
+    2. Verify worker: alongside `generatedFramePct`, note whether any non-null `generated` value was
+       read — that is the "did we look" bit.
+    3. `reconcileGeneratedFrameTech`: with no evidence, stop returning `none`. Fall back to the
+       client's declaration, and to `unknown` when there is none.
+    4. Collect frame generation in the desktop Run details form and on the web upload page.
+    5. Existing rows are all-null and become `unknown` on reprocess — which is the honest answer for
+       every run captured so far.
+  - Trusting the declaration here is not a departure. `upscaler`, `rayTracing`, `settingsPreset` and
+    `scene` are already unverifiable client declarations AND comparability key fields.
+    `frameGeneration` is the odd one out in being server-derived, and that special case is precisely
+    what manufactures the false `none`.
 - [ ] 22.7 Packaging — **partially blocked on out-of-band credentials.**
   - [x] NSIS installer (per-user install), bundled sidecar + license resource; `cargo tauri build`
     runs in CI and produced a working installer locally
