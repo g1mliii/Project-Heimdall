@@ -56,12 +56,14 @@ pub struct CaptureTarget {
 ///   instead of failing on a leftover ETW session.
 /// * `--terminate_on_proc_exit` ends the capture when the game closes, so a
 ///   crashed game cannot leave the sidecar running.
-/// * `--track_frame_type` adds the `FrameType` column that distinguishes
-///   generated frames (FSR3/AFMF/DLSS-FG) from presented ones. It is a beta
-///   option that needs application or driver instrumentation; on an
-///   uninstrumented title the column is simply absent, which the parser
-///   already handles — so it costs nothing and is the only way
-///   `generatedFramePct` is ever non-zero.
+/// * `--track_frame_type` adds the `FrameType` column. Kept because it costs
+///   nothing, but do NOT expect it to identify generated frames on AMD: the
+///   flag's own help says it "requires application and/or driver
+///   instrumentation using Intel-PresentMon provider", and AMD's driver does
+///   not emit that provider. Verified on an RX 9070 XT running Cyberpunk 2077
+///   with FSR and frame generation enabled — 14,241 rows, every one labelled
+///   `Application`. See docs/desktop-client.md for what that means for
+///   `generatedFramePct`.
 ///
 /// GPU telemetry columns (GPUUtilization / GPUFrequency / GPUPower /
 /// GPUMemUsed) are NOT available to this sidecar, and no flag turns them on.

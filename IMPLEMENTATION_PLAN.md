@@ -552,11 +552,23 @@ commit — local Windows renders are not valid baselines.
     switch. The columns belong to the PresentMon UI app, not the console tool, so shipping or
     recommending the full install would buy nothing. Recorded in `presentmon.rs`,
     `docs/desktop-client.md` and the fixtures README rather than left as a puzzle.
-  - What IS reachable, and is now the whole of this item: a capture from an **FSR3 / AFMF / DLSS-FG**
-    title. `--track_frame_type` really does emit a `FrameType` column (confirmed live; every row read
-    `Application` on an uninstrumented title, the expected negative case), and the client passes that
-    flag on every capture. That closes wanted-list item #9 and is the first time `generatedFramePct`
-    can be non-zero. Land the fixture + hand-computed `*.expected.json` via procedure 16a.1.
+  - Frame generation turned out to be unreachable too, on AMD at least. `--track_frame_type` needs
+    "application and/or driver instrumentation using Intel-PresentMon provider" (its own help), which
+    AMD's driver does not emit: an RX 9070 XT running Cyberpunk 2077 with FSR AND frame generation
+    enabled produced 14,241 rows, every one `Application`. Wanted-list item #9 now needs a title or
+    driver that instruments for Intel's provider. Land the fixture + hand-computed `*.expected.json`
+    via procedure 16a.1 when one is available.
+- [ ] 22.11 **Integrity gap: frame-generated runs are indistinguishable from genuine ones.** Because
+  `generatedFramePct` recomputes to 0 (22.6), `reconcileGeneratedFrameTech` resolves such a run to
+  `generatedFrameTech: none` — and a client declaration cannot override it, by design, since the
+  recomputed percentage is treated as decisive. The Cyberpunk capture above averaged 244 FPS with
+  frame generation on. If the driver inserts interpolated frames after present, that figure is an
+  honest app-side rate; if they reach the swapchain, the run overstates real rendering by ~2x. The
+  capture cannot tell us which — the frame-time distribution is unimodal. Either way such a run
+  currently pools with genuine non-generated runs in comparability buckets (`frameGeneration` is a
+  key field). Needs a decision: trust a declaration for this field, find a detectable signature, or
+  state the limitation on the run page. Not a Phase 9 regression — it predates the desktop client and
+  affects browser uploads equally — but the desktop client is the first thing that makes it common.
 - [ ] 22.7 Packaging — **partially blocked on out-of-band credentials.**
   - [x] NSIS installer (per-user install), bundled sidecar + license resource; `cargo tauri build`
     runs in CI and produced a working installer locally

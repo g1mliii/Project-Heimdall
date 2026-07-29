@@ -70,13 +70,15 @@ completes the §7.3 spike for that cell. Wanted, in priority order:
    assume GiB → ×1024 to MB), `ram` sysinfo unit (we assume MB above 256), and
    whether GPU strings can contain commas.
 9. **Any file with a frame-generation column** (DLSS3/FSR3/AFMF capture) —
-   **now reachable.** PresentMon 2.4.1's `--track_frame_type` emits a real
-   `FrameType` column, confirmed present in a live capture (every row read
-   `Application` on an uninstrumented title, which is the expected negative
-   case). The desktop client passes that flag on every capture, so a run on an
-   FSR3/AFMF/DLSS-FG title should finally produce non-`Application` values and
-   let `generatedFramePct` be something other than 0. This is the single
-   highest-value capture still wanted.
+   **still open, and harder than it looks.** `--track_frame_type` emits a
+   `FrameType` column, but its help states it "requires application and/or
+   driver instrumentation using Intel-PresentMon provider". AMD's driver does
+   not emit that provider: an RX 9070 XT running Cyberpunk 2077 with FSR AND
+   frame generation enabled produced 14,241 rows, every one `Application`.
+   A useful capture therefore needs a title or driver that instruments for
+   Intel's provider — realistically an Intel XeSS-FG title, or a game shipping
+   the PresentMon SDK. Until one lands, `generatedFramePct` is always 0 and
+   `generatedFrameTech` always resolves to `none`.
 
 ### NVIDIA and Intel cells are open contributions
 

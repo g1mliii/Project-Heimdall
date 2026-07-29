@@ -88,9 +88,28 @@ Installing the full package therefore does not unlock them for us, so asking
 users to install it would cost them an admin prompt and buy nothing. Not worth
 revisiting without evidence that a console interface has been added upstream.
 
-The `FrameType` column, by contrast, IS available (`--track_frame_type`, which
-the client always passes), and that is what makes a non-zero
-`generatedFramePct` reachable on an FSR3/AFMF/DLSS-FG title.
+### Frame generation is invisible here too
+
+`--track_frame_type` adds a `FrameType` column, and the client always passes it
+— but its own help says it "requires application and/or driver instrumentation
+using Intel-PresentMon provider", and AMD's driver does not emit that provider.
+
+Verified: an RX 9070 XT running Cyberpunk 2077 with FSR **and frame generation
+enabled** produced 14,241 rows, every single one labelled `Application`. The
+frame-time distribution was unimodal (a tight 3–6 ms cluster), so the data does
+not even reveal whether the generated frames are present in the stream.
+
+**This has a real integrity consequence, and it is not currently solved.** The
+capture above averages 244 FPS. If AMD's driver inserts its interpolated frames
+after present, that is an honest app-side rate. If they reach this swapchain, the
+run overstates real rendering by roughly 2x — and either way the pipeline records
+`generatedFrameTech: none`, because §11.5 derives it from the server's recomputed
+`generatedFramePct`, which is 0. A declaration cannot override that:
+`reconcileGeneratedFrameTech` treats a recomputed 0 as decisive, by design.
+
+So a frame-generated AMD run can pool with genuine non-generated runs in
+comparability buckets. Distinguishing the two needs evidence we do not have.
+Recorded rather than papered over; see IMPLEMENTATION_PLAN §22.11.
 
 ### GPU utilization and VRAM come from Windows instead
 
