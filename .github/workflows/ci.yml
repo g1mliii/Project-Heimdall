@@ -76,6 +76,27 @@ jobs:
             echo "Desktop client not scaffolded yet — skipping Rust gate."
           fi
 
+      # The sidecar must exist BEFORE any cargo command: tauri-build validates
+      # `bundle.externalBin` from build.rs, so even `cargo clippy` fails with
+      # "resource path ... doesn't exist" without it. Node setup therefore comes
+      # first, not just before the bundle step.
+      - if: steps.detect.outputs.present == 'true'
+        uses: pnpm/action-setup@v6
+
+      - if: steps.detect.outputs.present == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - if: steps.detect.outputs.present == 'true'
+        run: pnpm install --frozen-lockfile
+
+      # Verifies the pinned SHA-256 before installing; also vendors the fonts
+      # the Vite build inlines.
+      - if: steps.detect.outputs.present == 'true'
+        run: pnpm --filter @heimdall/desktop setup
+
       - if: steps.detect.outputs.present == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -98,26 +119,8 @@ jobs:
       - if: steps.detect.outputs.present == 'true'
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked
 
-      # ── Bundle ────────────────────────────────────────────────────────────
-      # `cargo tauri build` needs the JS bundle and the PresentMon sidecar in
-      # place; the fetch script verifies the pinned SHA-256 before installing it.
-      - if: steps.detect.outputs.present == 'true'
-        uses: pnpm/action-setup@v6
-
-      - if: steps.detect.outputs.present == 'true'
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: .node-version
-          cache: pnpm
-
-      - if: steps.detect.outputs.present == 'true'
-        run: pnpm install --frozen-lockfile
-
       - if: steps.detect.outputs.present == 'true'
         run: pnpm --filter @heimdall/ui build
-
-      - if: steps.detect.outputs.present == 'true'
-        run: pnpm --filter @heimdall/desktop setup
 
       # Unsigned and non-updating: the Authenticode certificate and the updater
       # keypair live in the release workflow's overlay config, not here, so a

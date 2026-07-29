@@ -182,6 +182,10 @@ export function RunHeader({ run }: { run: Run }) {
             alignItems: "center",
             gap: "var(--space-2)",
             marginBottom: "var(--space-2)",
+            // A run can carry four badges (status, frame-gen tech, visibility,
+            // signature). At 375px that overflows the viewport unless the row
+            // is allowed to wrap.
+            flexWrap: "wrap",
           }}
         >
           <StatusBadge status={run.status} />
