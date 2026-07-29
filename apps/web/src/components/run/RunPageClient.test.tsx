@@ -285,6 +285,27 @@ describe("RunHeader", () => {
     expect(screen.getByRole("button", { name: /Export video/ })).toBeDisabled();
   });
 
+  it("shows client-signature evidence only when the server actually checked one (§22.3)", () => {
+    // A desktop run whose payload matched its signature.
+    render(<RunHeader run={{ ...run, signatureValid: true }} />);
+    expect(screen.getByText("Client signature checks out")).toBeInTheDocument();
+    cleanup();
+
+    // A mismatch is evidence, not a verdict: the run is still Validated beside
+    // it, because that comes from the server recompute (§0.5).
+    render(<RunHeader run={{ ...run, signatureValid: false }} />);
+    expect(screen.getByText("Client signature mismatch")).toBeInTheDocument();
+    expect(screen.getByText("Validated")).toBeInTheDocument();
+    cleanup();
+
+    // Browser uploads carry no signature at all. Stamping "unsigned" on every
+    // one of those would read as a defect rather than the norm it is.
+    const unsigned: Run = { ...run };
+    delete unsigned.signatureValid;
+    render(<RunHeader run={unsigned} />);
+    expect(screen.queryByText(/Client signature/)).not.toBeInTheDocument();
+  });
+
   it("marks non-validated runs honestly and omits the tech badge for none", () => {
     const pending: Run = { ...run, status: "pending", generatedFrameTech: "none" };
     render(<RunHeader run={pending} />);

@@ -1,5 +1,6 @@
+import { createPublicKey, verify as cryptoVerify } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { FRAME_PARQUET_COLUMNS, INGEST_LIMITS } from "@heimdall/shared";
+import { FRAME_PARQUET_COLUMNS, INGEST_LIMITS, finalizeRunRequestSchema } from "@heimdall/shared";
 import { validateFrameParquetMetadata } from "../parquet/frame-metadata";
 
 function metadata(
@@ -46,5 +47,50 @@ describe("validateFrameParquetMetadata", () => {
     expect(() =>
       validateFrameParquetMetadata(metadata(16n, [16n], BigInt(INGEST_LIMITS.maxParquetBytes))),
     ).toThrow(/decoded-byte limit/);
+  });
+});
+
+/**
+ * Cross-language signature contract (§22.3).
+ *
+ * The desktop client signs in Rust (`ed25519-dalek`); this server verifies in
+ * Node. The two implementations never meet at runtime, so an encoding drift on
+ * either side would surface only as every desktop run silently recording
+ * `signature_valid: false` — evidence quietly turning into noise.
+ *
+ * The constants below are a golden vector PRODUCED BY the Rust implementation
+ * and pinned there too (`apps/desktop/src-tauri/src/signing.rs`, `mod vector`).
+ * Neither side can be changed without the other failing. This asserts the exact
+ * primitives `verifyEd25519` uses in verify-run.ts — base64 DER SPKI key, raw
+ * (not prehashed) Ed25519, base64 signature.
+ */
+describe("desktop client signature format (§22.3)", () => {
+  const PAYLOAD = Buffer.from("PAR1heimdall-desktop-signature-vector-v1PAR1");
+  const SPKI_BASE64 = "MCowBQYDK2VwAyEA6kpsY+KcUgq+9VB7Ey7F+ZVHdq6+vnuSQh7qaRRG0iw=";
+  const SIGNATURE_BASE64 =
+    "OvYTS1iE8BLlqaiIHb4f4/I/eay8Bp1C6g5uW90Q47bJecqybaDNGSzvGXHvv173r0UW8l2H6iEoSxVtRLk0CQ==";
+
+  const publicKey = () =>
+    createPublicKey({ key: Buffer.from(SPKI_BASE64, "base64"), format: "der", type: "spki" });
+
+  it("verifies a signature produced by the Rust client", () => {
+    expect(
+      cryptoVerify(null, PAYLOAD, publicKey(), Buffer.from(SIGNATURE_BASE64, "base64")),
+    ).toBe(true);
+  });
+
+  it("fits the 512-char bound finalizeRunRequestSchema enforces", () => {
+    // Raw Ed25519 is 64 bytes → 88 base64 chars. A switch to any enveloped
+    // format would blow past the wire limit and fail finalize outright.
+    expect(SIGNATURE_BASE64).toHaveLength(88);
+    expect(finalizeRunRequestSchema.shape.signature.safeParse(SIGNATURE_BASE64).success).toBe(true);
+  });
+
+  it("rejects the same signature over one flipped byte", () => {
+    const tampered = Buffer.from(PAYLOAD);
+    tampered.writeUInt8(tampered.readUInt8(4) ^ 0x01, 4);
+    expect(
+      cryptoVerify(null, tampered, publicKey(), Buffer.from(SIGNATURE_BASE64, "base64")),
+    ).toBe(false);
   });
 });

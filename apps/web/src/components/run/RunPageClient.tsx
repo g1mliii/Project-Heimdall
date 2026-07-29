@@ -32,6 +32,7 @@ import { DiagnosticsCard } from "./DiagnosticsCard";
 import { HardwareCard } from "./HardwareCard";
 import { BenchmarkSetCard } from "./BenchmarkSetCard";
 import { IncompleteProfileCard } from "./IncompleteProfileCard";
+import { ClaimRunCard } from "./ClaimRunCard";
 import styles from "./RunPageClient.module.css";
 
 export type FramesLoader = (
@@ -94,10 +95,16 @@ export function RunPageClient({
   run,
   benchmarkSet,
   loadFrames = defaultFramesLoader,
+  claimToken,
 }: {
   run: Run;
   benchmarkSet?: BenchmarkSetStats | null;
   loadFrames?: FramesLoader;
+  /**
+   * Plaintext management token from a desktop handoff's `?claim=` parameter
+   * (§22.5). Only ever set when the run is still unowned; the server decides.
+   */
+  claimToken?: string;
 }) {
   const [frames, setFrames] = React.useState<FramesState>({ kind: "loading" });
   const [attempt, setAttempt] = React.useState(0);
@@ -166,6 +173,9 @@ export function RunPageClient({
   return (
     <main id="main-content" tabIndex={-1} className={styles.page}>
       <RunHeader run={run} />
+      {claimToken === undefined ? null : (
+        <ClaimRunCard runId={run.id} token={claimToken} />
+      )}
       <RunStatTiles summary={run.summary} />
 
       <div className={styles.mainGrid}>
