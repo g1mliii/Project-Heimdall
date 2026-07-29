@@ -1,0 +1,23 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Least-privilege capability set for the capture window. Everything privileged (sidecar spawn, registry/WMI reads, signing, the R2 PUT) is a Rust command; the webview only gets what it needs to talk to the hub.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-hide",
+    "core:window:allow-start-dragging",
+    "store:default",
+    "opener:default",
+    "updater:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "http://localhost:3000/*" },
+        { "url": "https://*.heimdall.dev/*" }
+      ]
+    }
+  ]
+}

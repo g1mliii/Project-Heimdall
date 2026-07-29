@@ -61,9 +61,8 @@ jobs:
       - run: pnpm --filter @heimdall/web test:e2e:functional
 
   desktop:
-    name: Desktop (cargo fmt / clippy / test)
+    name: Desktop (cargo fmt / clippy / test / bundle)
     runs-on: windows-latest
-    # No-op until the Tauri client exists (Phase 9). Runs once Cargo.toml lands.
     steps:
       - uses: actions/checkout@v7
 
@@ -82,6 +81,14 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      # Without a cache every PR rebuilds the whole Tauri dependency tree from
+      # scratch, which is the difference between a ~3-minute job and a ~20-minute
+      # one.
+      - if: steps.detect.outputs.present == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
       - if: steps.detect.outputs.present == 'true'
         run: cargo fmt --check --manifest-path apps/desktop/src-tauri/Cargo.toml
 
@@ -89,4 +96,31 @@ jobs:
         run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --all-features --locked -- -D warnings -D clippy::perf
 
       - if: steps.detect.outputs.present == 'true'
-        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked
+
+      # ── Bundle ────────────────────────────────────────────────────────────
+      # `cargo tauri build` needs the JS bundle and the PresentMon sidecar in
+      # place; the fetch script verifies the pinned SHA-256 before installing it.
+      - if: steps.detect.outputs.present == 'true'
+        uses: pnpm/action-setup@v6
+
+      - if: steps.detect.outputs.present == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - if: steps.detect.outputs.present == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - if: steps.detect.outputs.present == 'true'
+        run: pnpm --filter @heimdall/ui build
+
+      - if: steps.detect.outputs.present == 'true'
+        run: pnpm --filter @heimdall/desktop setup
+
+      # Unsigned and non-updating: the Authenticode certificate and the updater
+      # keypair live in the release workflow's overlay config, not here, so a
+      # fork's CI builds the same artifact without any secrets.
+      - if: steps.detect.outputs.present == 'true'
+        run: pnpm --filter @heimdall/desktop exec tauri build

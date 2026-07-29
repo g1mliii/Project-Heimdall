@@ -1,0 +1,189 @@
+/* ───────────────────────────────────────────────────────────────
+   Heimdall Capture — webview stylesheet (§21.1, §22.4).
+
+   Two jobs, both of which the web hub gets for free and the desktop
+   webview does not:
+
+   1. Supply the three design-system faces. packages/ui/src/tokens/fonts.css
+      deliberately loads nothing; the web app injects
+      --font-space-grotesk / --font-hanken-grotesk / --font-jetbrains-mono
+      via next/font. Here they are self-hosted WOFF2 (see
+      scripts/fetch-fonts.mjs) and the same three variables are declared
+      locally, so --font-display / --font-sans / --font-mono resolve and
+      every numeric renders in tabular JetBrains Mono.
+
+   2. Draw the native window chrome from the desktop kit
+      (design/ui_kits/desktop/index.html): .win / .titlebar / .winctl /
+      .body, with -webkit-app-region: drag swapped for the
+      data-tauri-drag-region attribute Tauri 2 uses.
+   ─────────────────────────────────────────────────────────────── */
+
+@import "@heimdall/ui/styles.css";
+
+@font-face {
+  font-family: "Space Grotesk";
+  src: url("./assets/fonts/space-grotesk.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Hanken Grotesk";
+  src: url("./assets/fonts/hanken-grotesk.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("./assets/fonts/jetbrains-mono.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --font-space-grotesk: "Space Grotesk";
+  --font-hanken-grotesk: "Hanken Grotesk";
+  --font-jetbrains-mono: "JetBrains Mono";
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-base);
+  color: var(--fg-1);
+  font: var(--type-body);
+  /* The window itself is the frame; nothing may scroll it sideways. */
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+/* ── Window chrome ─────────────────────────────────────────────── */
+
+.win {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-base);
+}
+
+.titlebar {
+  height: 38px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--line-1);
+}
+
+.titlebar__name {
+  font: var(--type-caption);
+  font-weight: var(--weight-medium);
+  color: var(--fg-2);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  /* Grows so the whole empty strip drags, not just the label. */
+  flex: 1;
+  min-width: 0;
+}
+
+.winctl {
+  margin-left: auto;
+  flex: none;
+  display: flex;
+  gap: 2px;
+}
+
+.winctl button {
+  width: 26px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  color: var(--fg-3);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+
+.winctl button:hover {
+  background: var(--bg-card-hover);
+  color: var(--fg-1);
+}
+
+.winctl button:focus-visible {
+  box-shadow: var(--focus-ring-tight);
+}
+
+.winctl .winctl__close:hover {
+  background: var(--bad);
+  color: var(--fg-on-accent);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-5);
+}
+
+/* ── Local composites ──────────────────────────────────────────────────────
+   Structural rules that would otherwise be inline styles carrying raw px.
+   The design-system adherence lint forbids raw px/hex in .ts/.tsx precisely so
+   this kind of chrome lives in CSS next to the tokens it uses.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* Inset panel — the kit's .hd-card--inset, rebuilt from tokens. */
+.panel {
+  padding: var(--space-3);
+  background: var(--bg-raised);
+  border: 1px solid var(--line-1);
+  border-radius: var(--radius-md);
+}
+
+.panel--roomy {
+  padding: var(--space-4);
+}
+
+/* One "Detected hardware" row: label left, monospace value right. */
+.hw-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line-1);
+}
+
+.hw-row__label {
+  font: var(--type-body-sm);
+  color: var(--fg-3);
+  flex: none;
+}
+
+.hw-row__value {
+  font: var(--type-data);
+  color: var(--fg-1);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Caption under a collapsed disclosure. */
+.panel__note {
+  font: var(--type-caption);
+  color: var(--fg-3);
+  margin: var(--space-2) 0 0;
+}

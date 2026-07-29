@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "//": [
+    "Release-only overlay, merged by .github/workflows/release.yml:",
+    "  cargo tauri build --config src-tauri/tauri.release.conf.json",
+    "",
+    "It lives out of tauri.conf.json on purpose. `plugins.updater.pubkey` must",
+    "be a real key or the build fails, and `bundle.windows.signCommand` needs",
+    "Azure Trusted Signing credentials that only exist in CI. Keeping both here",
+    "means a contributor can run `cargo tauri build` locally with no secrets at",
+    "all and still get a working (unsigned, non-updating) installer.",
+    "",
+    "THREE DISTINCT KEYS — see docs/desktop-client.md:",
+    "  1. Authenticode certificate  → installer trust (signCommand below)",
+    "  2. Tauri updater keypair     → update-manifest trust (pubkey below)",
+    "  3. Ed25519 payload key       → §22.3 upload tamper-evidence (build env var)",
+    "They are not interchangeable and must never be reused across roles."
+  ],
+  "bundle": {
+    "createUpdaterArtifacts": true,
+    "windows": {
+      "signCommand": "trusted-signing-cli -e %AZURE_SIGN_ENDPOINT% -a %AZURE_SIGN_ACCOUNT% -c %AZURE_SIGN_PROFILE% %1"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/g1mliii/Project-Heimdall/releases/latest/download/latest.json"
+      ],
+      "pubkey": "REPLACE_WITH_TAURI_UPDATER_PUBLIC_KEY",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

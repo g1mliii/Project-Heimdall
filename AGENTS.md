@@ -18,7 +18,15 @@ pnpm verify                  # lint + typecheck + test, all packages — the gat
 pnpm check:deps              # dependency minimum-age policy (must pass before adding deps)
 pnpm audit:deps              # advisory audit, moderate+
 pnpm --filter @heimdall/web test:e2e:functional   # Playwright minus @visual baselines
+
+pnpm --filter @heimdall/desktop setup   # vendor webfonts + the pinned PresentMon sidecar (once)
+pnpm --filter @heimdall/desktop dev     # Tauri capture client (Windows)
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml   # the Rust half
 ```
+
+- The desktop client's Rust half is Windows-only; its JS half must pass on Linux (CI runs
+  `pnpm verify` on ubuntu). Keep platform-specific logic in Rust. See
+  [`docs/desktop-client.md`](docs/desktop-client.md).
 
 - Web tests import the **built** `@heimdall/ui` entrypoint (`dist/`). If UI tests fail on a clean
   checkout, run `pnpm --filter @heimdall/ui build` first (CI does).
@@ -33,10 +41,11 @@ pnpm --filter @heimdall/web test:e2e:functional   # Playwright minus @visual bas
 apps/web/               Next.js hub — pages (/, /upload, /runs/[id], /games/[slug]) + API routes
   src/lib/repo/         Postgres repositories (parameterized SQL only)
   src/lib/jobs/         durable verification/reprocess workers (DB-queue claimed, never fire-and-forget)
-  src/lib/upload/       browser parse → presigned Parquet PUT flow (§11)
+  src/lib/upload/       browser-held benchmark-set capability (the §11 flow itself lives in packages/ingest-client)
 apps/driver-curation/   scheduled driver-currency ingest (Phase 6.6)
-apps/desktop/           empty until Phase 9 (Tauri 2)
+apps/desktop/           Tauri 2 Windows capture client — React webview (src/) + Rust core (src-tauri/)
 packages/shared/        zod schemas, types, visibility/integrity/comparability — single source of truth
+packages/ingest-client/ the §11 create → PUT → finalize protocol, shared by web upload and desktop
 packages/parsers/       CapFrameX/PresentMon/MangoHud parsers + metrics + diagnostics (pure TS, runs in browser AND server)
 packages/ui/            design system: tokens + primitives; reference lives in design/
 infra/db/migrations/    numbered SQL, idempotent/reentrant (create ... if not exists, drop trigger if exists)

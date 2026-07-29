@@ -17,6 +17,23 @@ version-stamp + defense-in-depth only**, never as proof a capture is genuine.
 - Optional future hardening (per-user keys, server-issued capture nonces) does not change this
   posture. See [`PLAN.md`](../PLAN.md) "Honest note on cryptographic signing."
 
+**As shipped (Phase 9, §22.3):** the desktop client embeds **one** Ed25519 key at build time. Every
+copy of the installer carries the same key, so anyone who downloads it can extract it and sign
+anything they like. This is a deliberate, recorded choice — the alternative (per-user keys issued by
+the server) would build an attestation surface we have just said we do not trust.
+
+What `signature_valid: true` therefore means, exactly: *the payload was produced by something that
+looks like an unmodified client.* Nothing stronger. A forged signature yields `signature_valid:
+false` and the run is still accepted and still validated on its own merits — that behaviour is
+pinned by a regression test. The signature covers the **frame Parquet only**; the declared hardware
+and methodology sent alongside it are unsigned, and the client UI says so rather than implying the
+whole submission is attested.
+
+The matching public key (`HEIMDALL_SIGNING_PUBLIC_KEY`) is publishable by design: publishing it is
+what lets anyone verify a run's signature without trusting us. See
+[`desktop-client.md`](desktop-client.md) for the three distinct keys involved and why they are never
+interchangeable.
+
 ## 2. Never trust the client; integrity is server-side
 
 A run's public-facing numbers are **provisional** until a durable server job recomputes the summary
@@ -68,6 +85,25 @@ sensor telemetry). In combination this is a **quasi-identifying hardware fingerp
 - Surface it in the privacy policy as collected, quasi-identifying data (Phase 8 §20.4 / Phase 12).
 - It is subject to the deletion / right-to-erasure path alongside the run.
 - Aggregate pages group on **canonical** hardware/game ids (§4.4), never raw display strings.
+
+### What the desktop capture client collects (§22.2)
+
+The client reads a *richer* snapshot than a browser upload can, because DXGI, WMI and the registry
+answer questions no capture file contains — exact VRAM, the marketing driver version, configured vs
+rated memory speed, the OS build, the game monitor's resolution, and whether HAGS is on. That is the
+point: it unlocks diagnostics (RAM below its rated speed, driver currency) that browser uploads
+cannot reach. It is also strictly more identifying, so it follows the same rules as any other
+snapshot — attached to the run, deleted with the run, never sent anywhere else.
+
+Beyond that snapshot and the frame data itself, the client sends nothing:
+
+- **No telemetry, analytics, or usage reporting.** There is no SDK and no background beacon.
+- **Raw capture files never leave the machine.** PresentMon streams CSV over stdout straight into
+  memory; only the derived frame Parquet is uploaded, exactly as in the browser flow.
+- **Crash logs are local and opt-in.** A panic writes one plain-text file to the app's local data
+  directory. The UI offers to open a pre-filled GitHub issue; a human reads it and presses submit,
+  or dismisses it. Nothing is transmitted automatically.
+- **The management token is shown once and handed only to the browser**, in the claim URL.
 
 ## 6. Account erasure and delivery replay fence (§20.4)
 

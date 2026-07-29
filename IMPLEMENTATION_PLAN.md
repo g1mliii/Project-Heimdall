@@ -40,10 +40,10 @@ missing sensors; visibility × validation gates every aggregate).
 | Object storage | Cloudflare R2 | Raw per-frame Parquet (`runs/{id}/{nonce}.parquet`); `exports/` prefix reserved for Phase 11 video |
 | Analytics DB | ClickHouse (**Phase 12** — env vars stubbed, `infra/clickhouse/` empty until then) | Cross-run/population analytics too heavy for Postgres |
 | Auth | Clerk (**Phase 8** — env keys stubbed in `.env.example`) | Accounts, private runs, run management, verified-reviewer tier |
-| Desktop client | Tauri 2 (Rust) — **Phase 9+**, `apps/desktop` is empty scaffolding | Bundled Intel PresentMon (Windows), MangoHud watcher (Linux/SteamOS), global hotkey, Ed25519-signed uploads |
+| Desktop client | Tauri 2 (Rust) — Windows shipped in **Phase 9**, `apps/desktop` | Bundled Intel PresentMon (Windows), MangoHud watcher (Linux/SteamOS), global hotkey, Ed25519-signed uploads |
 | Parsing | `packages/parsers` — pure TS, runs in browser and server | Same code parses client-side (upload preview) and server-side (canonical recompute) |
 | Testing | Vitest (unit), Playwright (e2e + visual baseline), golden fixtures | Every parseable fixture has a hand-computed `*.expected.json` |
-| CI | GitHub Actions (`ci.yml`) | verify + migrations + e2e; Tauri job is a no-op until `Cargo.toml` lands (Phase 9, §0.8) |
+| CI | GitHub Actions (`ci.yml`, `release.yml`) | verify + migrations + e2e; Windows job runs cargo fmt/clippy/test and builds the Tauri bundle |
 | Monorepo | pnpm workspaces | `apps/*` + `packages/*` + `infra/*`; dependency minimum-age policy in `scripts/check-dependency-policy.mjs` |
 
 ---
@@ -52,7 +52,7 @@ missing sensors; visibility × validation gates every aggregate).
 
 ```text
 apps/web/              Next.js hub: pages (/, /upload, /runs/[id], /games/[slug]) + API routes
-apps/desktop/          Tauri 2 capture client — empty until Phase 9
+apps/desktop/          Tauri 2 Windows capture client (Phase 9) — React webview + Rust core
 apps/driver-curation/  scheduled driver-currency ingest (Phase 6.6)
 packages/shared/       zod schemas, types, visibility/integrity/comparability primitives, fixtures
 packages/parsers/      CapFrameX / PresentMon / MangoHud parsers, metrics, diagnostics rules
@@ -499,7 +499,8 @@ tokens `--chart-cpu-busy`/`--chart-gpu-busy`. API-vs-DOM spot-check of `runRespo
 every field now has a UI home except deliberate exclusions — `ownerId` (stripped at the wire,
 §20.3), `canonicalGpuId`/`canonicalCpuId` (internal linkage), `schemaVersion`/`parserVersion`/
 `framesObjectKey` (internal provenance/plumbing), `signatureValid` (deferred to Phase 9 — browser
-uploads carry no signatures, so showing "unsigned" on every run would mislead), and
+uploads carry no signatures, so showing "unsigned" on every run would mislead; **shipped in Phase 9
+as §22.8**, rendered only when a signature was actually checked), and
 `summary.frameTimeP50Ms` (functional home: the client stutter threshold). Gates: `pnpm verify`
 exit 0; functional e2e green (20/20).
 
@@ -518,40 +519,122 @@ commit — local Windows renders are not valid baselines.
 
 ## Phase 9: Desktop Capture Client — Windows (Tauri 2 + PresentMon) — §21–§22
 
-> The second product surface. `apps/desktop` is empty scaffolding; the CI Tauri job un-no-ops the
-> moment `Cargo.toml` lands (`§0.8`). Visual target: `design/ui_kits/desktop/CaptureClient.jsx`
-> (ready → capturing → complete, `§22.4`). Parser fixture work: live-client confirmation of
-> PresentMon cells per `packages/parsers/fixtures/README.md` (Phase 9 §22).
+> The second product surface. Runbook: [`docs/desktop-client.md`](docs/desktop-client.md).
+> Visual target: `design/ui_kits/desktop/CaptureClient.jsx` (onboarding → ready → capturing →
+> complete, `§22.4`). The §11 ingest protocol was extracted to `packages/ingest-client` so the web
+> hub and the desktop client speak it from one implementation.
 
-- [ ] 21.1 Tauri 2 scaffold in `apps/desktop` (Rust backend + web frontend using `@heimdall/ui`
+- [x] 21.1 Tauri 2 scaffold in `apps/desktop` (Rust backend + web frontend using `@heimdall/ui`
   tokens); wire into pnpm workspace + CI (Tauri job now real)
-- [ ] 21.2 Bundle Intel PresentMon as a sidecar binary; license/attribution; version pinned and
+- [x] 21.2 Bundle Intel PresentMon as a sidecar binary; license/attribution; version pinned and
   recorded in the capture provenance (`§2.2`)
-- [ ] 21.3 Global hotkey (default Shift+F11) start/stop; ~60 s guidance; tray presence
-- [ ] 22.1 Capture pipeline: spawn PresentMon against the foreground game process → stream CSV →
+- [x] 21.3 Global hotkey (default Shift+F11) start/stop; ~60 s guidance; tray presence
+- [x] 22.1 Capture pipeline: spawn PresentMon against the foreground game process → stream CSV →
   parse with `@heimdall/parsers` (same code as web) → live frame count + trace during capture
-- [ ] 22.2 Hardware snapshot (GPU/driver/CPU/RAM speed + rated speed/OS/resolution, HAGS state) —
+- [x] 22.2 Hardware snapshot (GPU/driver/CPU/RAM speed + rated speed/OS/resolution, HAGS state) —
   **declared by the client**, per the `§8`/`§16a` contract in `packages/parsers` (columns.ts /
   presentmon.ts say these must come from the client, never inferred)
-- [ ] 22.3 Ed25519 payload signing (key in client; server records `signature_valid` via
+- [x] 22.3 Ed25519 payload signing (key in client; server records `signature_valid` via
   `HEIMDALL_SIGNING_PUBLIC_KEY`) — tamper-evidence only, per `§0.5`; never marketed as anti-cheat
-- [ ] 22.4 Three-state UI per the kit: Ready (hardware + hotkey) → Capturing (timer, live trace,
+- [x] 22.4 Four-state UI per the kit: Ready (hardware + hotkey) → Capturing (timer, live trace,
   frame count) → Complete (smoothness tiles, "payload signed" note, upload & share / discard)
-- [ ] 22.5 Upload through the existing ingest API (presigned Parquet PUT); signed-in via Clerk
+- [x] 22.5 Upload through the existing ingest API (presigned Parquet PUT); signed-in via Clerk
   device flow or browser handoff; anonymous fallback keeps the management-token path
-- [ ] 22.6 Real-capture fixture sweep: land real PresentMon (and CapFrameX-NVIDIA launch-wedge)
-  exports and flip `SENSOR_AVAILABILITY` cells to `verified-real` via procedure 16a.1
-- [ ] 22.7 Packaging: signed Windows installer, auto-update channel, crash reporting (opt-in)
+- [ ] 22.6 Real-capture fixture sweep — **needs a real game capture on owned hardware.**
+  Scope was narrowed to AMD by decision; NVIDIA/Intel cells stay `synthetic` and are documented as
+  open contributions in `packages/parsers/fixtures/README.md`.
+  - The AMD PresentMon cell is ALREADY `verified-real` (`presentmon/v2-amd-real.csv`) for
+    `CPUBusy`/`GPUBusy`, so the original "extend it with GPU telemetry" plan is **not achievable**:
+    `GPUUtilization`/`GPUFrequency`/`GPUPower`/`GPUMemUsed` are not emitted by ANY PresentMon
+    console CLI. Tested three ways on Windows 11 / RX 9070 XT — bundled 2.4.1 alone, 2.4.1 with
+    Intel's full MSI installed and `PresentMonSharedService` running, and Intel's own 2.5.1 console
+    CLI with the service running — identical header each time, and 2.5.1's `--help` has no telemetry
+    switch. The columns belong to the PresentMon UI app, not the console tool, so shipping or
+    recommending the full install would buy nothing. Recorded in `presentmon.rs`,
+    `docs/desktop-client.md` and the fixtures README rather than left as a puzzle.
+  - What IS reachable, and is now the whole of this item: a capture from an **FSR3 / AFMF / DLSS-FG**
+    title. `--track_frame_type` really does emit a `FrameType` column (confirmed live; every row read
+    `Application` on an uninstrumented title, the expected negative case), and the client passes that
+    flag on every capture. That closes wanted-list item #9 and is the first time `generatedFramePct`
+    can be non-zero. Land the fixture + hand-computed `*.expected.json` via procedure 16a.1.
+- [ ] 22.7 Packaging — **partially blocked on out-of-band credentials.**
+  - [x] NSIS installer (per-user install), bundled sidecar + license resource; `cargo tauri build`
+    runs in CI and produced a working installer locally
+  - [x] Crash reporting, opt-in by construction: a panic hook writes one local plain-text log and
+    the UI offers a pre-filled GitHub issue. No SDK, no dependency, nothing sent automatically
+  - [x] Release pipeline authored: `.github/workflows/release.yml` on `desktop-v*` tags, plus the
+    `tauri.release.conf.json` overlay that keeps signing/updater config out of local builds
+  - [ ] **Authenticode signing** — needs an Azure Trusted Signing account (`signCommand` is wired,
+    credentials are not). Until then installers are unsigned and SmartScreen warns
+  - [ ] **Auto-update channel live** — plugin registered and `latest.json` publishing wired, but
+    `plugins.updater.pubkey` is a placeholder until the updater keypair is generated
+- [x] 22.8 Surface `signature_valid` on the run report (§11.7) — a neutral badge when the payload
+  matched, a `warn` badge when it did not, and **nothing at all** when no signature was checked.
+  This closes the Phase 8.6 deferral: browser uploads carry no signature, so an "unsigned" stamp on
+  every run would have read as a defect rather than the norm
+- [x] 22.9 GPU utilization + VRAM from Windows performance counters (§22.2). PresentMon supplies
+  neither (see 22.6), so the client samples `\GPU Engine(*)\Utilization Percentage` and
+  `\GPU Process Memory(*)\Local Usage` itself — no elevation, no vendor SDK, no extra install —
+  attributes them to the captured pid, and appends them to the capture stream as
+  `HeimdallGpuUtilization`/`HeimdallGpuMemUsedMb`. Verified against live counters on an RX 9070 XT.
+  - Parser `presentmon@1.1.0`: GPU utilization/clock/power/VRAM are now reported as **polled**, not
+    frame-aligned. They always were — the parser used to claim otherwise, which would have let the
+    per-frame `cpu-bottleneck` rule draw conclusions from a ~200 ms average. `SourceColumns` gained
+    `periodicSensors` to express it.
+  - GPU **clock** and **power** stay unavailable: PDH has no counters for them; they need vendor
+    SDKs (ADLX / NVML / IGCL). Deferred, not forgotten.
+- [ ] 22.10 (optional, needs data) A periodic-sensor bottleneck rule. `cpu-bottleneck` deliberately
+  refuses polled data, so GPU load from 22.9 does not feed it. A rule that reasons over sampling
+  intervals instead of frames is legitimate but is a DIFFERENT statistic — its thresholds cannot be
+  inherited from the frame-aligned rule and need real captures to calibrate. Would land as its own
+  rule code with its own confidence label (§16b.2), never as a flag on the existing one.
 - **Verify**: hotkey capture on a real game → shareable link in <10 s after stop; run page shows
   declared hardware + `signature_valid: true`
+  - [ ] Not yet performed. Requires a signed build (for `signature_valid` to be non-null) and a real
+    game session on Windows. Hardware collection *was* verified against real silicon during
+    implementation — DXGI/WMI/registry return correct GPU, driver, VRAM, CPU, RAM speeds, OS and
+    resolution on a Ryzen 9800X3D / RX 9070 XT machine
 - **Regression**:
-  - [ ] Rust unit tests: PresentMon spawn/stream/teardown, hotkey lifecycle, signing
-  - [ ] Parser golden tests for any new real fixtures (hand-verified expected numbers)
-  - [ ] Ingest e2e: signed desktop payload accepted; tampered payload records `signature_valid: false` **but is still accepted** (evidence, not gate)
-  - [ ] CI builds the Tauri app on Windows runner
+  - [x] Rust unit tests (38): sidecar argv + CSV stream framing, hotkey state contract, driver/WMI/
+    HAGS mapping, payload custody, Ed25519 sign → verify
+  - [x] Desktop JS tests (57, must pass on ubuntu): capture state machine, live frame-time readout,
+    transport adapter against a mocked `invoke`, methodology completeness, all four kit screens
+  - [x] `packages/ingest-client` tests (20): `uploadCaptureBytes` parity with `uploadCapture`, and
+    the `signPayload` hook signing the exact bytes it PUTs
+  - [x] Ingest e2e: signed payload accepted; tampered payload records `signature_valid: false`
+    **but is still accepted** (`jobs.test.ts` "records signature_valid as evidence"). Backed by a
+    cross-language golden vector — the Rust client's exact signature + SPKI bytes are pinned in
+    `signing.rs` and re-verified by Node in `verify-run.unit.test.ts`, so an encoding drift cannot
+    silently turn every desktop run into `signature_valid: false`
+  - [ ] Parser golden tests for any new real fixtures (hand-verified expected numbers) — with 22.6
+  - [x] CI builds the Tauri app on Windows runner (`cargo tauri build`, NSIS bundle)
 
 ### Phase 9 Regression Gate
-- Desktop capture → upload → report works end-to-end on Windows; CI green including Tauri build
+- [x] `pnpm verify` exit 0 across the widened workspace (8 projects); `cargo fmt --check`,
+  `cargo clippy -D warnings -D clippy::perf` and `cargo test` clean; `pnpm check:deps` passes
+- [ ] CI green including the Tauri build — the workflow is written and the bundle builds locally,
+  but it has not yet run on a GitHub Windows runner
+- [ ] Desktop capture → upload → report works end-to-end on Windows (the **Verify** run above)
+
+**Outstanding, all needing action outside this repo:**
+1. **A capture from an FSR3 / AFMF / DLSS-FG title** (22.6). Everything else about the fixture
+   sweep is either done or established as unreachable — see 22.6 above.
+2. **An Azure Trusted Signing account** (or equivalent Authenticode certificate). Purely an
+   account-and-billing step; `signCommand` and the CI env are already wired.
+3. **The Ed25519 payload keypair.** Run
+   `pnpm --filter @heimdall/desktop exec node scripts/generate-signing-key.mjs --out <path outside the repo>`,
+   then private half → repo secret `HEIMDALL_SIGNING_PRIVATE_KEY`, public half →
+   `HEIMDALL_SIGNING_PUBLIC_KEY` on the server. The script's PKCS#8 output is pinned by a Rust test,
+   so it cannot fail at release time.
+4. **The Tauri updater keypair.** `tauri signer generate` → public key into
+   `tauri.release.conf.json`, private key + password into CI secrets.
+5. **A production hub origin** for `HEIMDALL_API_BASE_URL`, plus a real bundle identifier —
+   `dev.heimdall.capture` is a placeholder and is baked into installer upgrade paths, so it must
+   change before the first signed release, not after.
+6. Carried from Phase 8.6: `@visual` baselines. Now a one-click job — run the
+   **Regenerate visual baselines** workflow (`workflow_dispatch`), which generates the ubuntu
+   `-chromium-linux.png` set on the runner that asserts them, re-asserts against a clean run, and
+   opens a PR with the diffs to review.
 
 ---
 
@@ -685,5 +768,7 @@ commit — local Windows renders are not valid baselines.
 - [ ] Cloudflare in front of the web app: TLS Full (Strict), HSTS, WAF baseline, bot mitigation (Phase 8.5 §8.5.6)
 - [ ] Clerk production instance + webhook secret (Phase 8)
 - [ ] `INTERNAL_JOBS_TOKEN` generated + platform cron hitting `/api/internal/jobs/drain`
-- [ ] `HEIMDALL_SIGNING_PUBLIC_KEY` published once the desktop client ships (Phase 9)
+- [ ] `HEIMDALL_SIGNING_PUBLIC_KEY` published once the desktop client ships (Phase 9) — the value
+  is **publishable by design**; publishing it is what lets anyone verify a run's signature
+  independently. Generate the pair per `docs/desktop-client.md`.
 - [ ] ClickHouse credentials (Phase 12)
