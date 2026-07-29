@@ -17,21 +17,34 @@ interface FrameTimeChartProps {
 
 const VIEW_WIDTH = 360;
 
+/** One decimal, without `toFixed`'s string formatting on every coordinate. */
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
 export function FrameTimeChart({ samples, height = 86 }: FrameTimeChartProps) {
   const points = samples.length;
   // Clamp the domain so one 400 ms hitch does not flatten the whole trace into
   // a line at the bottom of the strip.
-  const peak = Math.max(1, Math.min(Math.max(...samples, 1), 60));
-  const path =
-    points < 2
-      ? ""
-      : samples
-          .map((value, index) => {
-            const x = (index / (points - 1)) * VIEW_WIDTH;
-            const y = height - Math.min(value, peak) / peak * height;
-            return `${index === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`;
-          })
-          .join(" ");
+  //
+  // A plain loop rather than `Math.max(...samples)`: the window holds 600
+  // points, and spreading it is both an allocation and an argument list a few
+  // engines cap.
+  let tallest = 1;
+  for (const value of samples) {
+    if (value > tallest) tallest = value;
+  }
+  const peak = Math.min(tallest, 60);
+  // Built by appending to one string instead of map + join, which allocates an
+  // intermediate array and a string per point on every redraw.
+  let path = "";
+  if (points >= 2) {
+    for (let index = 0; index < points; index += 1) {
+      const x = (index / (points - 1)) * VIEW_WIDTH;
+      const y = height - (Math.min(samples[index]!, peak) / peak) * height;
+      path += `${index === 0 ? "M" : "L"}${round1(x)} ${round1(y)}`;
+    }
+  }
 
   return (
     <svg

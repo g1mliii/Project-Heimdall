@@ -598,22 +598,35 @@ commit — local Windows renders are not valid baselines.
     migration is needed:
     1. Parser: write `generated: false` when the frame-type column exists and reads `Application`;
        leave it undefined only when the format carries no such column. Parser version bump.
-    2. Verify worker: alongside `generatedFramePct`, note whether any non-null `generated` value was
-       read — that is the "did we look" bit.
-    3. `reconcileGeneratedFrameTech`: with no evidence, stop returning `none`. Fall back to the
-       client's declaration, and to `unknown` when there is none.
-    4. Collect frame generation in the desktop Run details form and on the web upload page.
-    5. Existing rows are all-null and become `unknown` on reprocess — which is the honest answer for
-       every run captured so far.
+    2. `reconcileGeneratedFrameTech`: let the recompute overrule a declaration only where it
+       OBSERVED generated frames. A zero count is not evidence of absence.
+    3. Collect frame generation in the desktop Run details form and on the web upload page.
+    4. `none` is then only ever recorded because a human declared it; an undeclared run is
+       `unknown`.
+  - **The "did we look" bit does not exist, and the first attempt at this shipped a fix that did
+    not fix the measured case.** The plan above originally routed the decision through "was any
+    non-null `generated` value read". But the client passes `--track_frame_type`, so the AMD capture
+    above HAS a `FrameType` column — 14,241 rows of `Application`. Column presence therefore read as
+    evidence, the recompute overruled the uploader's `fsr3`, and the run went out as `none` again.
+    An all-`Application` column is exactly what an uninstrumented driver produces, so it can never
+    be distinguished from no column at all; only an observed `true` carries information. The rule
+    now keys on that, and lives in `@heimdall/shared` because the client applied one copy at create
+    and the verify worker another at finalize — they had already drifted (the client kept a declared
+    `none` the server rewrote).
+  - Consequence accepted: pre-existing rows carry a `none` that the OLD rule manufactured, and
+    nothing in the data distinguishes it from a declared one, so a reprocess leaves it as `none`.
+    Scrubbing those is a data decision (a targeted reprocess), not something the reconcile rule can
+    infer.
   - Trusting the declaration here is not a departure. `upscaler`, `rayTracing`, `settingsPreset` and
     `scene` are already unverifiable client declarations AND comparability key fields.
     `frameGeneration` is the odd one out in being server-derived, and that special case is precisely
     what manufactures the false `none`.
-  - **DONE** — all five steps landed, `presentmon@1.2.0`. What this does and does not fix: the
-    reported FPS of a frame-generated run is still inflated, because the interpolated frames really
-    are in the present stream and nothing distinguishes them. What no longer happens is the run
-    ALSO claiming it was not frame-generated. Such runs now carry `unknown` (or a declaration) and
-    stop pooling silently with genuine ones.
+  - **DONE** — `presentmon@1.2.0`. What this does and does not fix: the reported FPS of a
+    frame-generated run is still inflated, because the interpolated frames really are in the present
+    stream and nothing distinguishes them. What no longer happens is the pipeline MANUFACTURING the
+    claim that a run was not frame-generated. A declared run keeps its declaration; an undeclared
+    one carries `unknown`. A run whose uploader declares `none` while frame generation is on is
+    still indistinguishable from an honest one — that needs §22.13, not a frame-type column.
   - [ ] Still open: making the numbers themselves meaningful under frame generation — a generated
     frame is not a rendered frame, so avg FPS, 1% lows and stutter counts all describe something
     other than what they claim. Scheduled as **Phase 9.6**, together with physics-based detection of

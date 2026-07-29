@@ -20,7 +20,13 @@ import type {
 export type Screen = "onboarding" | "ready" | "capturing" | "complete";
 
 export interface AnalyzedCapture {
-  csv: string;
+  /**
+   * The capture as the exact bytes the upload sends. Encoded once, on analyze:
+   * holding the CSV string here instead would mean a second full UTF-8 encode
+   * on upload, and both copies of a multi-megabyte capture resident for as long
+   * as the Complete screen is open.
+   */
+  bytes: Uint8Array;
   summary: RunSummary;
   warnings: ParseWarning[];
   frames: number;

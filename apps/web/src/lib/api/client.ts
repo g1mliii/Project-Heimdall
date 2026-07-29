@@ -29,7 +29,7 @@ import type {
   SearchResponse,
   UpdateReportRequest,
 } from "@heimdall/shared";
-import { readApiFailure } from "@heimdall/ingest-client";
+import { readApiFailure } from "@heimdall/shared";
 import { decodeFrameParquetToSeries } from "../parquet/frame-metadata";
 import type { FrameSeries } from "../run/frame-series";
 

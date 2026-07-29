@@ -18,7 +18,6 @@
 
 use std::sync::Mutex;
 
-use futures_util::StreamExt as _;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
@@ -27,8 +26,10 @@ use crate::signing::{PayloadSigner, MAX_SIGNATURE_CHARS};
 
 pub const EVENT_UPLOAD_PROGRESS: &str = "upload://progress";
 
-/// Content type the presigned PUT is signed for; a mismatch is a 403 from R2.
-const PARQUET_CONTENT_TYPE: &str = "application/vnd.apache.parquet";
+/// One client for the process. `Client::new()` builds a fresh connection pool
+/// and reloads the root certificate store, which is wasted on every upload
+/// after the first.
+static HTTP: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
 
 /// Hub origin. Baked in at build time so a shipped client cannot be pointed at
 /// an attacker's host by editing a config file; overridable for local
@@ -117,35 +118,49 @@ pub fn prepare(state: &PayloadState, bytes: Vec<u8>) -> AppResult<PreparedPayloa
 /// the hub origin, so a webview PUT to an R2 presigned URL would be blocked.
 /// Routing it through reqwest needs no CSP hole and keeps the signing key off
 /// the JS heap.
-pub async fn put_prepared(app: &AppHandle, state: &PayloadState, url: &str) -> AppResult<()> {
+pub async fn put_prepared(
+    app: &AppHandle,
+    state: &PayloadState,
+    url: &str,
+    content_type: &str,
+) -> AppResult<()> {
     let bytes = state.take()?;
     let total = bytes.len() as u64;
 
     // 256 KiB chunks: frequent enough for a smooth progress bar, coarse enough
     // that the event stream is not itself the bottleneck.
+    //
+    // Cut lazily, one chunk at a time. Collecting them up front would hold a
+    // COMPLETE second copy of a payload that can reach 64 MiB before the
+    // request even starts.
     const CHUNK: usize = 256 * 1024;
     let handle = app.clone();
-    let mut sent: u64 = 0;
-    let chunks: Vec<Result<Vec<u8>, std::io::Error>> = bytes
-        .chunks(CHUNK)
-        .map(|chunk| Ok(chunk.to_vec()))
-        .collect();
-    let progress = futures_util::stream::iter(chunks).inspect(move |chunk| {
-        if let Ok(chunk) = chunk {
-            sent += chunk.len() as u64;
+    let progress = futures_util::stream::unfold((bytes, 0usize), move |(bytes, offset)| {
+        let handle = handle.clone();
+        async move {
+            if offset >= bytes.len() {
+                return None;
+            }
+            let end = (offset + CHUNK).min(bytes.len());
+            let chunk = bytes[offset..end].to_vec();
             let _ = handle.emit(
                 EVENT_UPLOAD_PROGRESS,
                 UploadProgress {
-                    sent_bytes: sent,
+                    sent_bytes: end as u64,
                     total_bytes: total,
                 },
             );
+            Some((
+                Ok::<Vec<u8>, std::io::Error>(chunk),
+                (bytes, end),
+            ))
         }
     });
 
-    let response = reqwest::Client::new()
+    let response = HTTP
+        .get_or_init(reqwest::Client::new)
         .put(url)
-        .header("content-type", PARQUET_CONTENT_TYPE)
+        .header("content-type", content_type)
         .header("content-length", total.to_string())
         .body(reqwest::Body::wrap_stream(progress))
         .send()
@@ -177,10 +192,11 @@ pub fn claim_url(run_id: &str, management_token: &str) -> String {
     )
 }
 
-/// Percent-encode everything outside the unreserved set. Both inputs are
+/// Percent-encode everything outside the unreserved set. The claim inputs are
 /// generated ids/tokens today, but a URL builder that assumes its inputs are
-/// safe is how query-parameter injection gets in later.
-fn urlencode(value: &str) -> String {
+/// safe is how query-parameter injection gets in later — and `crash::issue_url`
+/// puts a panic message into a query string, where it is not hypothetical.
+pub(crate) fn urlencode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.as_bytes() {
         match byte {

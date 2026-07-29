@@ -35,6 +35,17 @@ import {
   type UpscalerMode,
 } from "@heimdall/shared";
 import type { GeneratedFrameTech } from "@heimdall/shared";
+// The option tables and gap labels live in @heimdall/shared: the web upload
+// form asks for the same fields with the same values, and two copies of the
+// vocabulary had already drifted apart.
+export {
+  COMPARABILITY_FIELD_LABELS as PROFILE_FIELD_LABELS,
+  FRAME_GENERATION_OPTIONS,
+  GRAPHICS_API_OPTIONS,
+  RAY_TRACING_OPTIONS,
+  SCENE_TYPE_OPTIONS,
+  UPSCALER_OPTIONS,
+} from "@heimdall/shared";
 import type { DeclaredHardware } from "./ipc";
 
 export type TriBoolean = "" | "true" | "false";
@@ -72,58 +83,14 @@ export const VISIBILITY_OPTIONS = [
   { value: "public", label: "Public" },
 ] as const;
 
-export const SCENE_TYPE_OPTIONS = [
-  { value: "benchmark-scene", label: "Benchmark scene" },
-  { value: "gameplay", label: "Gameplay" },
-  { value: "freeform", label: "Freeform" },
-] as const;
-
-export const GRAPHICS_API_OPTIONS = [
-  { value: "d3d12", label: "DirectX 12" },
-  { value: "d3d11", label: "DirectX 11" },
-  { value: "vulkan", label: "Vulkan" },
-  { value: "opengl", label: "OpenGL" },
-] as const;
-
-export const UPSCALER_OPTIONS = [
-  { value: "none", label: "None" },
-  { value: "dlss", label: "DLSS" },
-  { value: "fsr", label: "FSR" },
-  { value: "xess", label: "XeSS" },
-  { value: "unknown", label: "Unknown" },
-] as const;
-
-export const RAY_TRACING_OPTIONS = [
-  { value: "off", label: "Off" },
-  { value: "on", label: "On" },
-  { value: "unknown", label: "Unknown" },
-] as const;
-
-export const FRAME_GENERATION_OPTIONS = [
-  { value: "none", label: "Off" },
-  { value: "fsr3", label: "FSR frame generation" },
-  { value: "dlss3", label: "DLSS frame generation" },
-  { value: "xess", label: "XeSS frame generation" },
-  { value: "unknown", label: "On, not sure which" },
-] as const;
-
+/**
+ * `vsync`/`vrr` are plain booleans on the manifest rather than an enum, so this
+ * is the form's own tri-state encoding rather than a shared vocabulary.
+ */
 export const BOOLEAN_OPTIONS = [
   { value: "true", label: "On" },
   { value: "false", label: "Off" },
 ] as const;
-
-/** Human labels for the gaps, so the UI never shows a raw field key. */
-export const PROFILE_FIELD_LABELS: Record<ComparabilityProfileField, string> = {
-  resolution: "Resolution",
-  scene: "Scene",
-  sceneType: "Scene type",
-  settingsPreset: "Settings preset",
-  graphicsApi: "Graphics API",
-  upscaler: "Upscaler",
-  rayTracing: "Ray tracing",
-  vsync: "V-Sync",
-  vrr: "VRR",
-};
 
 export const EMPTY_FORM: RunDetailsForm = {
   game: "",
@@ -160,6 +127,34 @@ export function prefillForm(
     game: gameNameFromProcess(processName),
     resolution: detected?.hardware.resolution ?? "",
   };
+}
+
+/**
+ * Re-seed the form for a NEW capture without discarding what the user typed.
+ *
+ * The client keeps one form across captures, which is what makes a second run
+ * of the same scene one click instead of nine. The trap is that "the user typed
+ * this" and "we prefilled this last time" look identical in the form state, so a
+ * naive "keep every non-empty field" merge carries the PREVIOUS capture's game
+ * name onto the next one and silently mislabels the upload — a detected field is
+ * exactly the thing that should be re-detected.
+ *
+ * So the caller tracks which keys the user actually edited, and only those
+ * survive. Everything else comes fresh from detection.
+ */
+export function applyDetection(
+  current: RunDetailsForm,
+  edited: ReadonlySet<keyof RunDetailsForm>,
+  detected: DeclaredHardware | null,
+  processName: string | undefined,
+): RunDetailsForm {
+  const next = prefillForm(detected, processName);
+  for (const key of edited) {
+    // Per-key assignment: the union member types differ, and a spread of a
+    // filtered object loses the mapping between key and value type.
+    next[key] = current[key] as never;
+  }
+  return next;
 }
 
 /**

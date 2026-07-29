@@ -38,16 +38,18 @@ export function createDesktopTransport(apiBaseUrl: string): UploadTransport {
       return tauriFetch(url as string, init);
     }) as typeof fetch,
 
-    async putWithProgress(_url, _bytes, _contentType, onProgress) {
+    async putWithProgress(url, _bytes, contentType, onProgress) {
       // `_bytes` are deliberately ignored: Rust took custody of the exact same
       // buffer in `prepare_payload` and uploads THOSE bytes, so the signature
-      // and the uploaded object cannot drift apart. `_url` is the presigned
-      // URL the engine got from create — it is passed through unchanged.
+      // and the uploaded object cannot drift apart. `url` and `contentType`
+      // come from the engine — the presigned URL and the exact type it was
+      // signed for — and are passed through unchanged, so `@heimdall/shared`
+      // stays the only place that names the Parquet content type.
       const unlisten = await on<UploadProgressEvent>(EVENTS.uploadProgress, (progress) =>
         onProgress(progress.sentBytes),
       );
       try {
-        await putPreparedPayload(_url);
+        await putPreparedPayload(url, contentType);
       } finally {
         unlisten();
       }

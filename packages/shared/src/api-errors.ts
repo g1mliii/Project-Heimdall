@@ -1,6 +1,12 @@
-/** Transport-agnostic normalization for the API's shared error envelope. */
+// Transport-agnostic normalization for the API's shared error envelope.
+//
+// Lives beside `apiErrorSchema`, its only dependency: the package that owns the
+// wire schema owns the reader for it. Reports, search and run-claiming all read
+// this envelope and none of them are ingest, so routing them through
+// @heimdall/ingest-client to parse an error body would make the ingest package
+// look like the HTTP client it is not.
 
-import { apiErrorSchema } from "@heimdall/shared";
+import { apiErrorSchema } from "./schemas";
 
 export interface ApiFailureDetails {
   code: string;

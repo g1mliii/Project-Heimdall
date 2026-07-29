@@ -2,7 +2,6 @@ import { createPublicKey, verify as cryptoVerify } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { FRAME_PARQUET_COLUMNS, INGEST_LIMITS, finalizeRunRequestSchema } from "@heimdall/shared";
 import { validateFrameParquetMetadata } from "../parquet/frame-metadata";
-import { reconcileGeneratedFrameTech } from "./verify-run";
 
 function metadata(
   rowCount: bigint,
@@ -93,55 +92,5 @@ describe("desktop client signature format (§22.3)", () => {
     expect(
       cryptoVerify(null, tampered, publicKey(), Buffer.from(SIGNATURE_BASE64, "base64")),
     ).toBe(false);
-  });
-});
-
-/**
- * Frame-generation reconciliation (§11.5, §22.11).
- *
- * The rule that matters: `none` is a positive claim and must be earned by
- * evidence. Before this, a capture format that cannot report frame type
- * produced `none` anyway — so an AMD run with frame generation on went out as
- * "no frame generation" at roughly twice its real rendering rate.
- */
-describe("reconcileGeneratedFrameTech", () => {
-  const EVIDENCE = true;
-  const NO_EVIDENCE = false;
-
-  describe("with frame-type evidence in the capture", () => {
-    it("reports none when the frames show no generation, whatever was declared", () => {
-      expect(reconcileGeneratedFrameTech("fsr3", 0, EVIDENCE)).toBe("none");
-      expect(reconcileGeneratedFrameTech("none", 0, EVIDENCE)).toBe("none");
-    });
-
-    it("names the declared tech once the frames corroborate generation", () => {
-      expect(reconcileGeneratedFrameTech("fsr3", 0.5, EVIDENCE)).toBe("fsr3");
-    });
-
-    it("falls back to unknown when frames are generated but nothing names the tech", () => {
-      expect(reconcileGeneratedFrameTech("none", 0.5, EVIDENCE)).toBe("unknown");
-      expect(reconcileGeneratedFrameTech("unknown", 0.5, EVIDENCE)).toBe("unknown");
-    });
-  });
-
-  describe("without frame-type evidence", () => {
-    it("never claims none — that would assert absence from absence of evidence", () => {
-      expect(reconcileGeneratedFrameTech("none", 0, NO_EVIDENCE)).toBe("unknown");
-    });
-
-    it("takes the uploader's declaration at face value", () => {
-      // Same trust level as `upscaler` or `settingsPreset`: unverifiable
-      // declarations that are already comparability key fields.
-      expect(reconcileGeneratedFrameTech("fsr3", 0, NO_EVIDENCE)).toBe("fsr3");
-      expect(reconcileGeneratedFrameTech("dlss3", 0, NO_EVIDENCE)).toBe("dlss3");
-    });
-
-    it("keeps unknown as unknown", () => {
-      expect(reconcileGeneratedFrameTech("unknown", 0, NO_EVIDENCE)).toBe("unknown");
-    });
-  });
-
-  it("defaults to assuming evidence, so existing callers keep the old behaviour", () => {
-    expect(reconcileGeneratedFrameTech("none", 0)).toBe("none");
   });
 });

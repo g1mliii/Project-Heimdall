@@ -65,13 +65,21 @@ pub fn get_environment(app: AppHandle) -> Environment {
 
 /// Declared hardware + methodology (§22.2). Read on demand: a user who fixes
 /// their RAM speed and reopens the window should see the new value.
+///
+/// Off the main thread (see `blocking` below): collection is a DXGI enumeration,
+/// dozens of registry reads and three WQL queries, and a cold WMI connect alone
+/// can take most of a second. On the UI thread that is a frozen window on every
+/// launch.
 #[tauri::command]
-pub fn get_hardware() -> DeclaredHardware {
-    let (hardware, methodology) = win::collect_hardware();
-    DeclaredHardware {
-        hardware,
-        methodology,
-    }
+pub async fn get_hardware() -> AppResult<DeclaredHardware> {
+    blocking("hardware collection", || {
+        let (hardware, methodology) = win::collect_hardware();
+        DeclaredHardware {
+            hardware,
+            methodology,
+        }
+    })
+    .await
 }
 
 /// The foreground process, so the "Game" row is live before capture starts.
@@ -80,14 +88,35 @@ pub fn get_foreground_game() -> AppResult<crate::presentmon::CaptureTarget> {
     win::foreground_target()
 }
 
+/// Start a capture. Off the main thread: this enumerates the game's loaded
+/// modules for the anti-cheat notice, spawns the sidecar, and waits 60 ms for
+/// the telemetry sampler to open its counters — a UI freeze at the exact moment
+/// the user is in a fullscreen game.
 #[tauri::command]
-pub fn start_capture(app: AppHandle) -> AppResult<CaptureStarted> {
-    capture::start(&app)
+pub async fn start_capture(app: AppHandle) -> AppResult<CaptureStarted> {
+    blocking("capture start", move || capture::start(&app)).await?
 }
 
+/// Stop a capture. Off the main thread: this joins the entire retained capture
+/// into one CSV string, which for a long session is tens of megabytes.
 #[tauri::command]
-pub fn stop_capture(app: AppHandle) -> AppResult<CaptureResult> {
-    capture::stop(&app)
+pub async fn stop_capture(app: AppHandle) -> AppResult<CaptureResult> {
+    blocking("capture stop", move || capture::stop(&app)).await?
+}
+
+/// Run blocking work on the blocking pool rather than on Tauri's main thread.
+///
+/// A synchronous `#[tauri::command]` executes on the main/UI thread, so any
+/// registry, WMI, PDH or large-string work inside one freezes the window for
+/// its duration.
+async fn blocking<T, F>(what: &'static str, work: F) -> AppResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|error| AppError::Internal(format!("{what} failed: {error}")))
 }
 
 #[tauri::command]
@@ -121,8 +150,12 @@ pub async fn put_prepared_payload(
     app: AppHandle,
     state: State<'_, PayloadState>,
     url: String,
+    content_type: String,
 ) -> AppResult<()> {
-    upload::put_prepared(&app, &state, &url).await
+    // The content type comes from the engine, which reads it from
+    // `@heimdall/shared` — the same value the presigned URL was signed for. A
+    // second copy of the string here would be a 403 the day shared changes.
+    upload::put_prepared(&app, &state, &url, &content_type).await
 }
 
 /// Drop a discarded capture's bytes without uploading them.

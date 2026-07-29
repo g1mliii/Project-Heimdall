@@ -16,6 +16,8 @@ use std::path::PathBuf;
 
 use tauri::{AppHandle, Manager};
 
+use crate::upload::urlencode;
+
 const CRASH_FILE: &str = "last-crash.log";
 const ISSUE_URL: &str = "https://github.com/g1mliii/Project-Heimdall/issues/new";
 
@@ -76,22 +78,9 @@ pub fn issue_url(report: &str) -> String {
     let body: String = report.chars().take(4000).collect();
     format!(
         "{ISSUE_URL}?title={}&body={}",
-        percent_encode("Desktop client crash"),
-        percent_encode(&format!("```\n{body}\n```\n\nWhat were you doing?\n"))
+        urlencode("Desktop client crash"),
+        urlencode(&format!("```\n{body}\n```\n\nWhat were you doing?\n"))
     )
-}
-
-fn percent_encode(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for byte in value.as_bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                out.push(*byte as char)
-            }
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
 }
 
 #[cfg(test)]

@@ -46,13 +46,26 @@ pub const SAMPLE_INTERVAL_MS: u64 = 200;
 
 // ── Pure aggregation ────────────────────────────────────────────────────────
 
-/// Does this PDH instance name belong to `pid`?
+/// Sum the values of every instance that belongs to `pid` and passes `keep`.
 ///
 /// Instances look like
 /// `pid_6500_luid_0x00000000_0x030c6551_phys_0_eng_0_engtype_3d`. The trailing
 /// underscore matters: without it `pid_650` would also match `pid_6500`.
-fn instance_is_pid(instance: &str, pid: u32) -> bool {
-    instance.starts_with(&format!("pid_{pid}_"))
+///
+/// `None` when nothing matched — a process that is not on the GPU has no
+/// reading, which is not the same as a reading of 0.
+fn sum_for_pid(pid: u32, items: &[(String, f64)], keep: impl Fn(&str) -> bool) -> Option<f64> {
+    let prefix = format!("pid_{pid}_");
+    let mut total = 0.0;
+    let mut matched = false;
+    for (instance, value) in items {
+        let lowered = instance.to_ascii_lowercase();
+        if lowered.starts_with(&prefix) && keep(&lowered) {
+            total += value;
+            matched = true;
+        }
+    }
+    matched.then_some(total)
 }
 
 /// Is this a 3D-engine instance?
@@ -82,16 +95,7 @@ fn is_3d_engine(instance_lower: &str) -> bool {
 /// plausibility guard drops any percentage above 100 outright, so an unclamped
 /// sum would silently discard the reading rather than report it.
 pub fn gpu_load_from_engine_instances(pid: u32, items: &[(String, f64)]) -> Option<f64> {
-    let mut total = 0.0;
-    let mut matched = false;
-    for (instance, value) in items {
-        let lowered = instance.to_ascii_lowercase();
-        if instance_is_pid(&lowered, pid) && is_3d_engine(&lowered) {
-            total += value;
-            matched = true;
-        }
-    }
-    matched.then(|| total.clamp(0.0, 100.0))
+    sum_for_pid(pid, items, is_3d_engine).map(|total| total.clamp(0.0, 100.0))
 }
 
 /// `\GPU Process Memory(*)\Local Usage` instances → the process's VRAM in MiB.
@@ -101,15 +105,9 @@ pub fn gpu_load_from_engine_instances(pid: u32, items: &[(String, f64)]) -> Opti
 /// memory is a separate counter and is deliberately not counted, because
 /// `vramUsedMb` is compared against the card's dedicated capacity.
 pub fn vram_from_process_memory_instances(pid: u32, items: &[(String, f64)]) -> Option<f64> {
-    let mut bytes = 0.0;
-    let mut matched = false;
-    for (instance, value) in items {
-        if instance_is_pid(&instance.to_ascii_lowercase(), pid) {
-            bytes += value;
-            matched = true;
-        }
-    }
-    (matched && bytes > 0.0).then(|| (bytes / 1024.0 / 1024.0).round())
+    sum_for_pid(pid, items, |_| true)
+        .filter(|bytes| *bytes > 0.0)
+        .map(|bytes| (bytes / 1024.0 / 1024.0).round())
 }
 
 // ── CSV columns ─────────────────────────────────────────────────────────────
@@ -123,18 +121,34 @@ pub fn vram_from_process_memory_instances(pid: u32, items: &[(String, f64)]) -> 
 /// parser maps these aliases explicitly (`internal/columns.ts`).
 pub const TELEMETRY_HEADERS: [&str; 2] = ["HeimdallGpuUtilization", "HeimdallGpuMemUsedMb"];
 
-/// Render a sample as trailing CSV cells. Absent readings become empty cells,
+/// Append a sample as trailing CSV cells. Absent readings become empty cells,
 /// which `parseLocaleNumber` reads as `undefined` — never as 0.
-pub fn telemetry_cells(sample: Option<GpuTelemetry>) -> String {
+///
+/// Writes in place rather than returning a `String`: this runs once per
+/// captured row, so at a few hundred frames a second the intermediate
+/// allocations are the bulk of what the stdout task does.
+pub fn append_telemetry_cells(line: &mut String, sample: Option<GpuTelemetry>) {
+    use std::fmt::Write as _;
     let sample = sample.unwrap_or_default();
-    let fmt = |value: Option<f64>| value.map(|v| format!("{v:.1}")).unwrap_or_default();
-    format!(",{},{}", fmt(sample.gpu_load_pct), fmt(sample.vram_used_mb))
+    for value in [sample.gpu_load_pct, sample.vram_used_mb] {
+        line.push(',');
+        if let Some(value) = value {
+            let _ = write!(line, "{value:.1}");
+        }
+    }
+}
+
+#[cfg(test)]
+fn telemetry_cells(sample: Option<GpuTelemetry>) -> String {
+    let mut cells = String::new();
+    append_telemetry_cells(&mut cells, sample);
+    cells
 }
 
 #[cfg(windows)]
 mod imp {
     use super::*;
-    use std::os::windows::ffi::OsStrExt;
+    use crate::win::wide;
 
     use windows::core::PCWSTR;
     use windows::Win32::System::Performance::{
@@ -145,13 +159,6 @@ mod imp {
 
     const ENGINE_COUNTER: &str = r"\GPU Engine(*)\Utilization Percentage";
     const PROCESS_MEMORY_COUNTER: &str = r"\GPU Process Memory(*)\Local Usage";
-
-    fn wide(value: &str) -> Vec<u16> {
-        std::ffi::OsStr::new(value)
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect()
-    }
 
     /// Live PDH query. Dropped on stop, which closes the underlying handle.
     pub struct TelemetrySampler {

@@ -17,11 +17,17 @@ import { Onboarding } from "./components/Onboarding";
 import { RunDetailsPanel } from "./components/RunDetailsPanel";
 import { HardwareRows, StatusHero } from "./components/StatusHero";
 import { TitleBar } from "./components/TitleBar";
-import { CircleIcon, ShieldAlertIcon, ShieldCheckIcon, SquareIcon, UploadIcon } from "./components/icons";
+import { CircleIcon, SquareIcon, UploadIcon } from "./components/icons";
 import * as ipc from "./lib/ipc";
 import { LiveFrameTimes } from "./lib/live-frames";
 import { formatElapsed, initialState, reducer, toggleIntent, type State } from "./lib/machine";
-import { missingFields, prefillForm, toMethodology, type RunDetailsForm } from "./lib/run-details";
+import {
+  applyDetection,
+  missingFields,
+  prefillForm,
+  toMethodology,
+  type RunDetailsForm,
+} from "./lib/run-details";
 import { createDesktopTransport, createSigner } from "./lib/transport";
 
 const TICK_MS = 200;
@@ -31,6 +37,11 @@ export function App() {
   const [detected, setDetected] = React.useState<ipc.DeclaredHardware | null>(null);
   const [form, setForm] = React.useState<RunDetailsForm>(prefillForm(null, undefined));
   const [crashReport, setCrashReport] = React.useState<string | null>(null);
+  // Which fields the user has actually touched. Detection re-fills everything
+  // else on the next capture, so a second run cannot inherit the first run's
+  // game name (§16c) — a ref because it is read inside a setState updater and
+  // must never itself trigger a render.
+  const editedRef = React.useRef(new Set<keyof RunDetailsForm>());
   // A ref, not state: the readout is mutated on every stdout chunk and the
   // re-render is already driven by the frame count in the reducer. Holding it
   // in state would either lose updates (same instance, so React bails) or
@@ -38,6 +49,8 @@ export function App() {
   const liveRef = React.useRef<LiveFrameTimes | null>(null);
   liveRef.current ??= new LiveFrameTimes();
   const live = liveRef.current;
+  /** Latest frame count from the row stream, drained by the elapsed tick. */
+  const pendingFramesRef = React.useRef<number | null>(null);
 
   // The reducer is pure, so event handlers registered once would close over a
   // stale state. A ref keeps the toggle decision reading the current one.
@@ -79,16 +92,16 @@ export function App() {
         });
         return;
       }
-      setForm((current) => ({
-        ...current,
-        ...prefillForm(detected, result.target.process),
-        // Anything the user already typed wins over a re-detected default.
-        ...Object.fromEntries(Object.entries(current).filter(([, value]) => value !== "")),
-      }));
+      // Re-detect everything the client can see; keep only what the user typed.
+      // A "keep every non-empty field" merge would carry the previous capture's
+      // game name onto this one — see `applyDetection`.
+      setForm((current) =>
+        applyDetection(current, editedRef.current, detected, result.target.process),
+      );
       dispatch({
         type: "analyzed",
         capture: {
-          csv: result.csv,
+          bytes,
           summary: computeRunSummary(parsed.capture.frames),
           warnings: parsed.warnings,
           frames: parsed.capture.frames.length,
@@ -108,9 +121,6 @@ export function App() {
     if (intent === "stop") void analyzeCapture();
   }, [startCapture, analyzeCapture]);
 
-  const toggleRef = React.useRef(toggleCapture);
-  toggleRef.current = toggleCapture;
-
   /* ── Boot + event wiring ────────────────────────────────────────────── */
 
   React.useEffect(() => {
@@ -126,7 +136,11 @@ export function App() {
       ),
       ipc.on<ipc.CaptureRows>(ipc.EVENTS.rows, (rows) => {
         liveRef.current?.push(rows.lines);
-        dispatch({ type: "capture-rows", frames: rows.frames });
+        // Rows arrive at the game's frame rate — hundreds a second. Dispatching
+        // each one would re-render the whole tree that often, to feed a readout
+        // that only redraws on the 200 ms tick. Hold the latest count and let
+        // the tick carry it.
+        pendingFramesRef.current = rows.frames;
       }),
       ipc.on<ipc.CaptureEnded>(ipc.EVENTS.ended, (ended) => {
         dispatch({ type: "capture-ended", ...ended });
@@ -137,13 +151,16 @@ export function App() {
       ipc.on<ipc.HotkeyState>(ipc.EVENTS.hotkeyState, (hotkey) =>
         dispatch({ type: "hotkey-state", hotkey }),
       ),
-      ipc.on(ipc.EVENTS.hotkey, () => toggleRef.current()),
-      ipc.on(ipc.EVENTS.trayToggle, () => toggleRef.current()),
+      ipc.on(ipc.EVENTS.hotkey, toggleCapture),
+      ipc.on(ipc.EVENTS.trayToggle, toggleCapture),
     ];
     return () => {
       for (const pending of unlisteners) void pending.then((unlisten) => unlisten());
     };
-  }, [analyzeCapture]);
+    // `toggleCapture` reads the live state through `stateRef`, so it does not
+    // need a ref of its own — re-subscribing when its identity changes is
+    // exactly as often as this effect already re-runs.
+  }, [analyzeCapture, toggleCapture]);
 
   // Elapsed timer. Driven off wall-clock deltas rather than a tick count so a
   // throttled background window does not under-report the capture length.
@@ -152,6 +169,11 @@ export function App() {
     let previous = performance.now();
     const id = window.setInterval(() => {
       const now = performance.now();
+      const frames = pendingFramesRef.current;
+      if (frames !== null) {
+        pendingFramesRef.current = null;
+        dispatch({ type: "capture-rows", frames });
+      }
       dispatch({ type: "tick", deltaMs: now - previous });
       previous = now;
     }, TICK_MS);
@@ -172,7 +194,7 @@ export function App() {
     } as Omit<MethodologyManifest, "version" | "frameGeneration">;
 
     dispatch({ type: "upload", phase: { status: "running", label: "Preparing" } });
-    const result = await uploadCaptureBytes(new TextEncoder().encode(state.capture.csv), {
+    const result = await uploadCaptureBytes(state.capture.bytes, {
       game: form.game.trim() || "Unknown game",
       visibility: form.visibility,
       ...(detected === null ? {} : { hardware: detected.hardware }),
@@ -356,7 +378,6 @@ export function App() {
             {state.screen === "ready" && state.antiCheat !== null && (
               <div style={{ marginBottom: 16 }}>
                 <Diagnostic severity="warn" title="Anti-cheat detected">
-                  <ShieldAlertIcon size={0} />
                   The foreground title runs {state.antiCheat}. Capture still works; keep it to
                   single-player or benchmark scenes to avoid conflicts.
                 </Diagnostic>
@@ -402,7 +423,10 @@ export function App() {
                 <RunDetailsPanel
                   form={form}
                   missing={missing}
-                  onChange={(key, value) => setForm((current) => ({ ...current, [key]: value }))}
+                  onChange={(key, value) => {
+                    editedRef.current.add(key);
+                    setForm((current) => ({ ...current, [key]: value }));
+                  }}
                 />
 
                 <Diagnostic
@@ -413,7 +437,6 @@ export function App() {
                       : "Ready to upload (this build is unsigned)"
                   }
                 >
-                  <ShieldCheckIcon size={0} />
                   The signature covers the frame data only — the hardware and settings above are
                   declared, not signed. It is recorded as evidence and never decides whether a run
                   is accepted.

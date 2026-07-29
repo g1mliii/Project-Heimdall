@@ -33,7 +33,7 @@ function run(actions: Action[], from: State = initialState): State {
 }
 
 const analyzed = {
-  csv: "Application,FrameTime\ngame.exe,10\n",
+  bytes: new TextEncoder().encode("Application,FrameTime\ngame.exe,10\n"),
   summary: {} as never,
   warnings: [],
   frames: 1200,

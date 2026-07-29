@@ -50,7 +50,10 @@ mod imp {
     };
     use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
 
-    fn wide(value: &str) -> Vec<u16> {
+    /// NUL-terminated UTF-16, for the `*W` Win32 entry points. `pub(crate)`
+    /// because this module is the one place Win32 wrapping lives — see the
+    /// module header — and `gpu_telemetry`'s PDH calls need the same encoding.
+    pub(crate) fn wide(value: &str) -> Vec<u16> {
         std::ffi::OsStr::new(value)
             .encode_wide()
             .chain(std::iter::once(0))
@@ -487,6 +490,9 @@ mod imp {
 }
 
 pub use imp::{collect_hardware, detect_anti_cheat, foreground_target, in_performance_log_users};
+
+#[cfg(windows)]
+pub(crate) use imp::wide;
 
 #[cfg(test)]
 mod tests {

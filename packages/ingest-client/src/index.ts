@@ -8,8 +8,6 @@
  */
 
 export { buildFramesParquet } from "./build-parquet";
-export { readApiFailure } from "./api-errors";
-export type { ApiFailureDetails } from "./api-errors";
 export { uploadCapture, uploadCaptureBytes } from "./upload-run";
 export type {
   UploadFailure,

@@ -34,7 +34,11 @@ import type {
   UploadSuccess,
 } from "@heimdall/ingest-client";
 import {
+  FRAME_GENERATION_OPTIONS,
   MAX_INDEXED_METADATA_TEXT_LENGTH,
+  RAY_TRACING_OPTIONS,
+  SCENE_TYPE_OPTIONS,
+  UPSCALER_OPTIONS,
   type GeneratedFrameTech,
   type MethodologyManifest,
 } from "@heimdall/shared";
@@ -293,7 +297,7 @@ export function UploadClient({ authEnabled = false }: { authEnabled?: boolean })
             game,
             visibility,
             ...(methodology === undefined ? {} : { methodology }),
-      ...(frameGeneration === "" ? {} : { frameGeneration }),
+            ...(frameGeneration === "" ? {} : { frameGeneration }),
             ...benchmarkSet,
           });
           if (result.ok) {
@@ -433,11 +437,7 @@ export function UploadClient({ authEnabled = false }: { authEnabled?: boolean })
                 label="Scene type"
                 value={sceneType}
                 onChange={(event) => setSceneType(event.target.value as MethodologyManifest["sceneType"])}
-                options={[
-                  { value: "benchmark-scene", label: "Benchmark scene" },
-                  { value: "gameplay", label: "Gameplay" },
-                  { value: "freeform", label: "Freeform" },
-                ]}
+                options={SCENE_TYPE_OPTIONS}
                 disabled={busy}
               />
               <Input
@@ -462,13 +462,7 @@ export function UploadClient({ authEnabled = false }: { authEnabled?: boolean })
                 label="Upscaler"
                 value={upscaler}
                 onChange={(event) => setUpscaler(event.target.value as MethodologyManifest["upscaler"])}
-                options={[
-                  { value: "unknown", label: "Unknown" },
-                  { value: "none", label: "Off" },
-                  { value: "dlss", label: "DLSS" },
-                  { value: "fsr", label: "FSR" },
-                  { value: "xess", label: "XeSS" },
-                ]}
+                options={UPSCALER_OPTIONS}
                 disabled={busy}
               />
               <Select
@@ -478,25 +472,17 @@ export function UploadClient({ authEnabled = false }: { authEnabled?: boolean })
                 onChange={(event) =>
                   setFrameGeneration(event.target.value as GeneratedFrameTech | "")
                 }
-                options={[
-                  { value: "", label: "Not sure" },
-                  { value: "none", label: "Off" },
-                  { value: "fsr3", label: "FSR frame generation" },
-                  { value: "dlss3", label: "DLSS frame generation" },
-                  { value: "xess", label: "XeSS frame generation" },
-                  { value: "unknown", label: "On, not sure which" },
-                ]}
+                // "Not sure" is this form's own unanswered sentinel — the web
+                // hub omits the field rather than declaring it. The values
+                // themselves come from the shared table.
+                options={[{ value: "", label: "Not sure" }, ...FRAME_GENERATION_OPTIONS]}
                 disabled={busy}
               />
               <Select
                 label="Ray tracing"
                 value={rayTracing}
                 onChange={(event) => setRayTracing(event.target.value as MethodologyManifest["rayTracing"])}
-                options={[
-                  { value: "unknown", label: "Unknown" },
-                  { value: "off", label: "Off" },
-                  { value: "on", label: "On" },
-                ]}
+                options={RAY_TRACING_OPTIONS}
                 disabled={busy}
               />
               <Input

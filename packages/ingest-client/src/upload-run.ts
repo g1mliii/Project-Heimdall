@@ -24,6 +24,7 @@ import {
   generateManagementToken,
   hashManagementToken,
   normalizeMethodologyManifest,
+  reconcileGeneratedFrameTech,
 } from "@heimdall/shared";
 import type {
   CaptureSource,
@@ -34,7 +35,7 @@ import type {
   MethodologyManifest,
   RunSummary,
 } from "@heimdall/shared";
-import { readApiFailure } from "./api-errors";
+import { readApiFailure } from "@heimdall/shared";
 import { buildFramesParquet } from "./build-parquet";
 
 export type UploadProgress =
@@ -93,10 +94,12 @@ export interface UploadOptions {
   /** Optional declared setup details for reproducibility/comparability (§16c). */
   methodology?: Omit<MethodologyManifest, "version" | "frameGeneration">;
   /**
-   * Declared frame-generation technology (§22.11). Only consulted when the
-   * capture format cannot report frame type — where it can, the frames decide
-   * and this is ignored, so a client can never assert generation the data
-   * contradicts.
+   * Declared frame-generation technology (§22.11). Omit when the uploader did
+   * not answer — absence records `unknown`, never `none`.
+   *
+   * How this is reconciled against the frames is `reconcileGeneratedFrameTech`
+   * in `@heimdall/shared`, which is the single statement of the rule and the
+   * same function the server re-applies at finalize. Do not restate it here.
    */
   frameGeneration?: GeneratedFrameTech;
   /** Optional repeatable-run group; warm-ups are retained but excluded from its stats. */
@@ -250,18 +253,16 @@ export async function uploadCaptureBytes(
       cpu: options.hardware?.cpu ?? parsedHardware?.cpu ?? UNKNOWN_HARDWARE.cpu,
     };
 
-    // Three states, not two (§22.11). A capture format that cannot report
-    // frame type tells us nothing, and saying `none` there is a claim the
-    // client cannot support — an AMD run with frame generation on presents
-    // roughly twice as many frames, every one labelled as a real present.
-    // `options.frameGeneration` lets the uploader declare what the capture
-    // cannot show; the server re-applies exactly this rule at finalize.
-    const frameGenerationEvidence = frames.some((frame) => frame.generated !== undefined);
-    const generatedFrameTech = !frameGenerationEvidence
-      ? (options.frameGeneration ?? GENERATED_FRAME_TECH.unknown)
-      : summary.generatedFramePct > 0
-        ? GENERATED_FRAME_TECH.unknown
-        : GENERATED_FRAME_TECH.none;
+    // §22.11: `options.frameGeneration` is what the uploader declared, and no
+    // capture format we parse can contradict it by staying silent — an AMD run
+    // with frame generation on presents roughly twice as many frames, every one
+    // labelled as a real present. Told nothing, declare `unknown`, never `none`.
+    // The rule itself lives in @heimdall/shared because the server re-applies
+    // the SAME function at finalize; two copies had already drifted.
+    const generatedFrameTech = reconcileGeneratedFrameTech(
+      options.frameGeneration ?? GENERATED_FRAME_TECH.unknown,
+      summary.generatedFramePct,
+    );
     const capabilityManifest = deriveCapabilityManifest(
       frames,
       parsed.source,

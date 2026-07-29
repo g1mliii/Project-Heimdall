@@ -69,10 +69,22 @@ pub struct CaptureResult {
 struct Session {
     target: CaptureTarget,
     anti_cheat: Option<String>,
-    child: Option<CommandChild>,
+    child: CommandChild,
     buffer: Arc<Mutex<CaptureBuffer>>,
     /// Cleared on stop; the sampling thread exits when it sees this go false.
     sampling: Arc<AtomicBool>,
+}
+
+impl Session {
+    /// Stop sampling first, THEN kill the child: the buffer must not be
+    /// appended to while it is being drained, or the CSV can end mid-row.
+    ///
+    /// Both teardown paths (`stop` and `abort`) go through here so that
+    /// ordering is stated once rather than depended on twice.
+    fn shut_down(self) {
+        self.sampling.store(false, Ordering::Release);
+        let _ = self.child.kill();
+    }
 }
 
 /// Managed state. One capture at a time, deliberately: two ETW sessions on the
@@ -161,7 +173,7 @@ pub fn start(app: &AppHandle) -> AppResult<CaptureStarted> {
         *guard = Some(Session {
             target: target.clone(),
             anti_cheat: anti_cheat.clone(),
-            child: Some(child),
+            child,
             buffer: Arc::clone(&buffer),
             sampling: Arc::clone(&sampling),
         });
@@ -226,44 +238,40 @@ pub fn start(app: &AppHandle) -> AppResult<CaptureStarted> {
 /// Stop the running capture and hand back the complete CSV.
 pub fn stop(app: &AppHandle) -> AppResult<CaptureResult> {
     let state = app.state::<CaptureState>();
-    let mut session = state
+    let session = state
         .session
         .lock()
         .map_err(|_| AppError::Internal("capture state is poisoned".into()))?
         .take()
         .ok_or(AppError::CaptureIdle)?;
 
-    // Stop sampling first, then kill the child: the buffer must not be
-    // appended to while it is being drained, or the CSV can end mid-row.
-    session.sampling.store(false, Ordering::Release);
-    if let Some(child) = session.child.take() {
-        let _ = child.kill();
-    }
+    let target = session.target.clone();
+    let anti_cheat = session.anti_cheat.clone();
+    let held = Arc::clone(&session.buffer);
+    session.shut_down();
 
-    let buffer = session
-        .buffer
+    let buffer = held
         .lock()
         .map_err(|_| AppError::Internal("capture buffer is poisoned".into()))?;
 
     Ok(CaptureResult {
-        target: session.target.clone(),
+        target,
         frames: buffer.frame_count(),
         csv: buffer.to_csv(),
-        anti_cheat: session.anti_cheat.clone(),
+        anti_cheat,
     })
 }
 
 /// Best-effort teardown for app exit. A surviving PresentMon would keep an ETW
 /// session open and make the next launch fail.
 pub fn abort(app: &AppHandle) {
-    if let Some(state) = app.try_state::<CaptureState>() {
-        if let Ok(mut guard) = state.session.lock() {
-            if let Some(mut session) = guard.take() {
-                session.sampling.store(false, Ordering::Release);
-                if let Some(child) = session.child.take() {
-                    let _ = child.kill();
-                }
-            }
-        }
+    let Some(state) = app.try_state::<CaptureState>() else {
+        return;
+    };
+    let Ok(mut guard) = state.session.lock() else {
+        return;
+    };
+    if let Some(session) = guard.take() {
+        session.shut_down();
     }
 }

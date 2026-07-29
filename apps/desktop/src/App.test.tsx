@@ -233,9 +233,11 @@ describe("complete screen", () => {
     await reachComplete();
     // Resolution is prefilled from detection; the rest are not guessed.
     expect(screen.getByText("8 missing")).toBeInTheDocument();
+    // Labels come from COMPARABILITY_FIELD_LABELS in @heimdall/shared, so this
+    // is the same wording the run page uses for the same gaps.
     expect(
       screen.getByText(
-        "Undeclared: Scene, Settings preset, Upscaler, Ray tracing, Graphics API, V-Sync, VRR, Scene type.",
+        "Undeclared: Scene or route, Settings preset, Upscaler, Ray tracing, Graphics API, VSync, VRR, Scene type.",
       ),
     ).toBeInTheDocument();
   });

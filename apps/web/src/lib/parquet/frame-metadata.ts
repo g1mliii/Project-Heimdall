@@ -205,17 +205,16 @@ export interface FrameParquetSummary {
   diagnosticsColumns: FrameParquetDiagnosticsColumns;
   /** Which of the 7 sensor fields carried ≥1 real value (§16a.3 manifest input). */
   presentSensors: CapabilitySensorField[];
-  /** True when any frame was marked engine-generated (§16a.3). */
-  frameGenerationObserved: boolean;
   /**
-   * True when the `generated` column carried ANY non-null value — i.e. the
-   * capture format could report frame type at all (§22.11).
+   * True when any frame was marked engine-generated (§16a.3).
    *
-   * Distinct from `frameGenerationObserved`, and the distinction is the whole
-   * point: "we looked and saw none" is evidence, "we never looked" is not.
-   * Only the former earns `generatedFrameTech: none`.
+   * Note what the FALSE case does NOT mean: not "this run has no generated
+   * frames". A `FrameType` column is only filled in where something instrumented
+   * Intel's provider, and AMD's driver does not — so an all-`Application`
+   * column is indistinguishable from no column at all (§22.11). Absence here is
+   * never evidence of absence; see `reconcileGeneratedFrameTech`.
    */
-  frameGenerationEvidence: boolean;
+  frameGenerationObserved: boolean;
 }
 
 /**
@@ -236,7 +235,6 @@ export async function computeFrameParquetSummary(
   let times: Float64Array | undefined = new Float64Array(frameCount);
   const frameTimes = new Float64Array(frameCount);
   let generatedFrameCount = 0;
-  let generatedValuesSeen = 0;
 
   // Retained diagnostics sensor columns (NaN = value absent for that frame).
   // Allocate lazily: sensor-sparse captures should not pay 12 MiB for three
@@ -270,9 +268,7 @@ export async function computeFrameParquetSummary(
           return;
         }
         if (expectedColumnName === "generated") {
-          const generated = parseOptionalFrameParquetGenerated(value, row);
-          if (generated !== undefined) generatedValuesSeen++;
-          if (generated === true) generatedFrameCount++;
+          if (parseOptionalFrameParquetGenerated(value, row) === true) generatedFrameCount++;
           return;
         }
         const parsed = parseOptionalFrameParquetNumber(expectedColumnName, value, row);
@@ -321,7 +317,6 @@ export async function computeFrameParquetSummary(
     diagnosticsColumns,
     presentSensors: [...presentSensors],
     frameGenerationObserved: generatedFrameCount > 0,
-    frameGenerationEvidence: generatedValuesSeen > 0,
   };
 }
 

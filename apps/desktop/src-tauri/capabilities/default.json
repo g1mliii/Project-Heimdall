@@ -16,6 +16,7 @@
       "identifier": "http:default",
       "allow": [
         { "url": "http://localhost:3000/*" },
+        { "url": "https://heimdall.dev/*" },
         { "url": "https://*.heimdall.dev/*" }
       ]
     }

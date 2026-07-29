@@ -21,7 +21,12 @@ export default tseslint.config(
     // process/console/fetch and none of the design-system rules apply.
     files: ["scripts/**/*.mjs"],
     languageOptions: {
-      globals: { console: "readonly", fetch: "readonly", process: "readonly" },
+      globals: {
+        console: "readonly",
+        fetch: "readonly",
+        process: "readonly",
+        URL: "readonly",
+      },
     },
   },
   {

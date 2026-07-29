@@ -17,7 +17,7 @@
 
 import * as React from "react";
 import { Button, Diagnostic } from "@heimdall/ui";
-import { readApiFailure } from "@heimdall/ingest-client";
+import { readApiFailure } from "@heimdall/shared";
 
 interface ClaimRunCardProps {
   runId: string;

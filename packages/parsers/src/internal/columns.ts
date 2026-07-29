@@ -120,6 +120,20 @@ export const PRESENTMON_V2_COLUMNS: SourceColumns = {
 };
 
 /**
+ * Every lowercased header PresentMon uses to name a frame time, v2 and v1.
+ *
+ * Exported so the desktop client's live readout reads the same alias list the
+ * parser does instead of carrying a third copy: this file documents itself as
+ * the place where a vendor rename is a one-line alias addition, and a copy in
+ * the webview would quietly blank the live chart while the upload path kept
+ * working.
+ */
+export const FRAME_TIME_COLUMN_ALIASES: readonly string[] = [
+  ...PRESENTMON_V2_COLUMNS.frameTimeMs,
+  ...PRESENTMON_V1_COLUMNS.frameTimeMs,
+];
+
+/**
  * Pinned PresentMon capture profiles (§16a.2). We recognize exactly these
  * tested generations rather than inferring a generic-version compatibility: the
  * CSV can reveal the runtime/API and (v2+) presentation semantics, but the tool

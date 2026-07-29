@@ -7,8 +7,9 @@
  * regenerate them. Skipping this silently breaks the "all numerics in tabular
  * JetBrains Mono" invariant on every user machine.
  *
- * Each file is verified against the checksum recorded in fonts.lock.json. Run
- * with --update to re-record checksums after a deliberate font refresh.
+ * Each file is verified against the checksum recorded in fonts.lock.json, and
+ * the network is skipped entirely when the committed faces already match it. Run
+ * with --update to re-fetch and re-record after a deliberate font refresh.
  *
  * All three faces are SIL Open Font License 1.1 — see LICENSES.md.
  *
@@ -61,6 +62,31 @@ function latinWoff2(css, family) {
 
 const update = process.argv.includes("--update");
 const lock = JSON.parse(await readFile(LOCK_FILE, "utf8").catch(() => "{}"));
+
+async function digestOf(file) {
+  try {
+    return createHash("sha256").update(await readFile(file)).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The committed faces are the source of truth; this script only regenerates
+ * them. Re-fetching when they already match the lock would make every CI run
+ * depend on fonts.googleapis.com serving byte-identical WOFF2 — and Google
+ * re-cuts these periodically, which would fail the desktop job on an unrelated
+ * PR with a checksum error about a file nobody touched.
+ */
+if (!update) {
+  const digests = await Promise.all(
+    FACES.map(async (face) => [`${face.file}.woff2`, await digestOf(path.join(FONT_DIR, `${face.file}.woff2`))]),
+  );
+  if (digests.every(([name, digest]) => digest !== null && lock[name] === digest)) {
+    console.log(`${FACES.length} vendored faces already match fonts.lock.json — nothing to fetch.`);
+    process.exit(0);
+  }
+}
 
 await mkdir(FONT_DIR, { recursive: true });
 for (const face of FACES) {

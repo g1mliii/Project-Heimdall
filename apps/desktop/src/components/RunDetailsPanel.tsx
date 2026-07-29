@@ -30,11 +30,89 @@ interface RunDetailsPanelProps {
 
 const SELECT_PLACEHOLDER = { value: "", label: "Select…" } as const;
 
+interface FieldSpec {
+  key: keyof RunDetailsForm;
+  label: string;
+  /** The comparability field this answers, for the "needed to compare" hint. */
+  profile?: ComparabilityProfileField;
+  /** Standing hint, shown when the field is not flagged as missing. */
+  note?: string;
+  /** Present for a picker, absent for a free-text input. */
+  options?: readonly { readonly value: string; readonly label: string }[];
+  placeholder?: string;
+  mono?: boolean;
+}
+
+/**
+ * The form, in render order, as data.
+ *
+ * A table rather than eleven near-identical JSX blocks: every field needs the
+ * same label / missing-hint / value / cast-and-dispatch wiring, and hand-copying
+ * that eleven times is where a control ends up bound to the wrong key while
+ * still typechecking.
+ */
+const FIELDS: readonly FieldSpec[] = [
+  { key: "game", label: "Game", placeholder: "Cyberpunk 2077" },
+  {
+    key: "resolution",
+    label: PROFILE_FIELD_LABELS.resolution,
+    profile: "resolution",
+    placeholder: "2560x1440",
+    mono: true,
+  },
+  {
+    key: "scene",
+    label: PROFILE_FIELD_LABELS.scene,
+    profile: "scene",
+    placeholder: "Built-in benchmark",
+  },
+  {
+    key: "sceneType",
+    label: PROFILE_FIELD_LABELS.sceneType,
+    profile: "sceneType",
+    options: SCENE_TYPE_OPTIONS,
+  },
+  {
+    key: "settingsPreset",
+    label: PROFILE_FIELD_LABELS.settingsPreset,
+    profile: "settingsPreset",
+    placeholder: "Ultra",
+  },
+  {
+    // PresentMon reports the present runtime as DXGI for both DX11 and DX12, so
+    // the parser refuses to guess and this has to be asked.
+    key: "graphicsApi",
+    label: PROFILE_FIELD_LABELS.graphicsApi,
+    profile: "graphicsApi",
+    options: GRAPHICS_API_OPTIONS,
+    note: "The capture cannot tell DX11 from DX12",
+  },
+  {
+    key: "upscaler",
+    label: PROFILE_FIELD_LABELS.upscaler,
+    profile: "upscaler",
+    options: UPSCALER_OPTIONS,
+  },
+  {
+    key: "rayTracing",
+    label: PROFILE_FIELD_LABELS.rayTracing,
+    profile: "rayTracing",
+    options: RAY_TRACING_OPTIONS,
+  },
+  { key: "vsync", label: PROFILE_FIELD_LABELS.vsync, profile: "vsync", options: BOOLEAN_OPTIONS },
+  {
+    // Not profileRequired, but a comparability key the capture cannot reveal —
+    // AMD frame generation is invisible to PresentMon (§22.11).
+    key: "frameGeneration",
+    label: "Frame generation",
+    options: FRAME_GENERATION_OPTIONS,
+    note: "The capture cannot detect this",
+  },
+  { key: "vrr", label: PROFILE_FIELD_LABELS.vrr, profile: "vrr", options: BOOLEAN_OPTIONS },
+];
+
 export function RunDetailsPanel({ form, missing, onChange }: RunDetailsPanelProps) {
   const [open, setOpen] = React.useState(false);
-  const isMissing = (field: ComparabilityProfileField) => missing.includes(field);
-  const hint = (field: ComparabilityProfileField) =>
-    isMissing(field) ? "Needed to compare this run" : undefined;
 
   return (
     <div className="panel">
@@ -79,95 +157,38 @@ export function RunDetailsPanel({ form, missing, onChange }: RunDetailsPanelProp
             one blank and the run still uploads — it just stands on its own.
           </p>
 
-          <Input
-            label="Game"
-            value={form.game}
-            placeholder="Cyberpunk 2077"
-            onChange={(event) => onChange("game", event.target.value)}
-          />
-          <Input
-            label={PROFILE_FIELD_LABELS.resolution}
-            hint={hint("resolution")}
-            mono
-            value={form.resolution}
-            placeholder="2560x1440"
-            onChange={(event) => onChange("resolution", event.target.value)}
-          />
-          <Input
-            label={PROFILE_FIELD_LABELS.scene}
-            hint={hint("scene")}
-            value={form.scene}
-            placeholder="Built-in benchmark"
-            onChange={(event) => onChange("scene", event.target.value)}
-          />
-          <Select
-            label={PROFILE_FIELD_LABELS.sceneType}
-            hint={hint("sceneType")}
-            options={[SELECT_PLACEHOLDER, ...SCENE_TYPE_OPTIONS]}
-            value={form.sceneType}
-            onChange={(event) =>
-              onChange("sceneType", event.target.value as RunDetailsForm["sceneType"])
-            }
-          />
-          <Input
-            label={PROFILE_FIELD_LABELS.settingsPreset}
-            hint={hint("settingsPreset")}
-            value={form.settingsPreset}
-            placeholder="Ultra"
-            onChange={(event) => onChange("settingsPreset", event.target.value)}
-          />
-          {/* PresentMon reports the present runtime as DXGI for both DX11 and
-              DX12, so the parser refuses to guess and this has to be asked. */}
-          <Select
-            label={PROFILE_FIELD_LABELS.graphicsApi}
-            hint={hint("graphicsApi") ?? "The capture cannot tell DX11 from DX12"}
-            options={[SELECT_PLACEHOLDER, ...GRAPHICS_API_OPTIONS]}
-            value={form.graphicsApi}
-            onChange={(event) => onChange("graphicsApi", event.target.value)}
-          />
-          <Select
-            label={PROFILE_FIELD_LABELS.upscaler}
-            hint={hint("upscaler")}
-            options={[SELECT_PLACEHOLDER, ...UPSCALER_OPTIONS]}
-            value={form.upscaler}
-            onChange={(event) =>
-              onChange("upscaler", event.target.value as RunDetailsForm["upscaler"])
-            }
-          />
-          <Select
-            label={PROFILE_FIELD_LABELS.rayTracing}
-            hint={hint("rayTracing")}
-            options={[SELECT_PLACEHOLDER, ...RAY_TRACING_OPTIONS]}
-            value={form.rayTracing}
-            onChange={(event) =>
-              onChange("rayTracing", event.target.value as RunDetailsForm["rayTracing"])
-            }
-          />
-          <Select
-            label={PROFILE_FIELD_LABELS.vsync}
-            hint={hint("vsync")}
-            options={[SELECT_PLACEHOLDER, ...BOOLEAN_OPTIONS]}
-            value={form.vsync}
-            onChange={(event) => onChange("vsync", event.target.value as RunDetailsForm["vsync"])}
-          />
-          {/* Not profileRequired, but a comparability key the capture cannot
-              reveal — AMD frame generation is invisible to PresentMon (§22.11). */}
-          <Select
-            label="Frame generation"
-            hint="The capture cannot detect this"
-            options={[SELECT_PLACEHOLDER, ...FRAME_GENERATION_OPTIONS]}
-            value={form.frameGeneration}
-            onChange={(event) =>
-              onChange("frameGeneration", event.target.value as RunDetailsForm["frameGeneration"])
-            }
-          />
-          <Select
-            label={PROFILE_FIELD_LABELS.vrr}
-            hint={hint("vrr")}
-            options={[SELECT_PLACEHOLDER, ...BOOLEAN_OPTIONS]}
-            value={form.vrr}
-            onChange={(event) => onChange("vrr", event.target.value as RunDetailsForm["vrr"])}
-          />
+          {FIELDS.map((field) => {
+            const hint =
+              field.profile !== undefined && missing.includes(field.profile)
+                ? "Needed to compare this run"
+                : field.note;
+            // `as never`: the key is a union here, so its value type is one too
+            // — the same reason `applyDetection` assigns per key.
+            const handleChange = (
+              event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>,
+            ) => onChange(field.key, event.target.value as never);
+
+            return field.options === undefined ? (
+              <Input
+                key={field.key}
+                label={field.label}
+                hint={hint}
+                mono={field.mono}
+                value={form[field.key]}
+                placeholder={field.placeholder}
+                onChange={handleChange}
+              />
+            ) : (
+              <Select
+                key={field.key}
+                label={field.label}
+                hint={hint}
+                options={[SELECT_PLACEHOLDER, ...field.options]}
+                value={form[field.key]}
+                onChange={handleChange}
+              />
+            );
+          })}
         </div>
       )}
     </div>

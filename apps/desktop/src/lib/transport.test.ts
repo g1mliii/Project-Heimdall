@@ -66,9 +66,12 @@ describe("createDesktopTransport", () => {
 
     // The bytes argument is deliberately unused: Rust uploads the exact buffer
     // it signed in prepare_payload, so the signature cannot drift from the
-    // uploaded object.
+    // uploaded object. The content type IS forwarded — the presigned URL was
+    // signed for it, and a second copy of the string in Rust would be a 403 the
+    // day @heimdall/shared changes it.
     expect(invoke).toHaveBeenCalledWith("put_prepared_payload", {
       url: "https://r2.example.test/put",
+      contentType: "application/vnd.apache.parquet",
     });
     expect(seen).toEqual([512, 1024]);
     expect(unlisten).toHaveBeenCalledTimes(1);

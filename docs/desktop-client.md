@@ -110,9 +110,9 @@ variable:
 
 1.87x. The interpolated frames ARE in the present stream — PresentMon counts
 them and labels every one `Application`. The pipeline then records
-`generatedFrameTech: none`, because §11.5 derives it from the server's
-recomputed `generatedFramePct`, which is 0. A declaration cannot override that:
-`reconcileGeneratedFrameTech` treats a recomputed 0 as decisive, by design.
+`generatedFrameTech: none`, because §11.5 derived it from the server's
+recomputed `generatedFramePct`, which is 0 — and a declaration could not
+override it, since a recomputed 0 was treated as decisive.
 
 So a frame-generated run reports roughly double its real rendering rate, and its
 1% lows and stutter counts are computed over interpolated frames.
@@ -121,23 +121,35 @@ So a frame-generated run reports roughly double its real rendering rate, and its
 genuinely in the stream and nothing distinguishes them. What was fixed is the
 false claim built on top:
 
-- The parser now records `generated: false` when a frame-type column exists and
-  reads `Application`, and leaves it `undefined` only when the format carries no
-  such column. "We looked and saw none" and "we never looked" are different
-  claims, and they used to collapse into the same all-null column.
-- `reconcileGeneratedFrameTech` no longer returns `none` without evidence. With
-  none, it takes the uploader's declaration, falling back to `unknown`.
+- `reconcileGeneratedFrameTech` (now in `@heimdall/shared`, so the client at
+  create and the verify worker at finalize apply one definition instead of two
+  that had already drifted) only lets the recompute overrule a declaration in
+  the direction the data supports. Generated frames SEEN → generation is a fact
+  and the declaration may only name the tech. None seen → nothing is proven and
+  the declaration stands, `unknown` included.
+- Told nothing, a run records `unknown`. `none` is only ever recorded because a
+  human declared it — the same trust `upscaler` and `settingsPreset` already
+  get, and all three are comparability keys.
 - The Run details form (and the web upload page) ask for frame generation, since
   the capture cannot show it.
+- The parser records `generated: false` for an `Application` row, but that is a
+  transcription of the cell and **not** evidence. Note the trap, because an
+  earlier attempt at this fix fell into it: the client passes
+  `--track_frame_type`, so an AMD capture HAS a `FrameType` column, and it is
+  full of `Application`. Keying "did we look" on the column's presence therefore
+  re-manufactured the same false `none` on the exact capture above. Only an
+  observed `true` carries information.
 
-That does not make a frame-generated run's FPS honest, but it stops the run
-claiming it was not frame-generated — so such runs no longer pool silently with
-genuine ones. Making the FPS itself meaningful under frame generation is still
-open.
+That does not make a frame-generated run's FPS honest, but a declared
+frame-generated run no longer goes out claiming it was not generated, and an
+undeclared one says `unknown` rather than `none`. Making the FPS itself
+meaningful under frame generation is still open.
 
-So a frame-generated AMD run can pool with genuine non-generated runs in
-comparability buckets. Distinguishing the two needs evidence we do not have.
-Recorded rather than papered over; see IMPLEMENTATION_PLAN §22.11.
+What remains unsolved: an AMD run whose uploader declares nothing is `unknown`,
+which is honest but still not the same bucket as a genuine non-generated run,
+and one whose uploader declares `none` while frame generation is on is
+indistinguishable from an honest one. Detecting that needs evidence we do not
+have. Recorded rather than papered over; see IMPLEMENTATION_PLAN §22.11.
 
 ### GPU utilization and VRAM come from Windows instead
 

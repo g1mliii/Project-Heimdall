@@ -83,8 +83,8 @@ export function Onboarding({ environment, onContinue, onOpenGuide, onRecheck }: 
       </div>
 
       <p style={{ font: "var(--type-body-sm)", color: "var(--fg-2)", marginBottom: 14 }}>
-        Heimdall captures with Intel {environment.captureTool.replace("PresentMon ", "PresentMon ")},
-        which runs without admin once your account is in the{" "}
+        Heimdall captures with Intel {environment.captureTool}, which runs without admin once your
+        account is in the{" "}
         <strong style={{ color: "var(--fg-1)" }}>Performance Log Users</strong> group.
       </p>
 

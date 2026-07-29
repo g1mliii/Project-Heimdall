@@ -9,7 +9,7 @@
 
 use serde::Serialize;
 
-use crate::gpu_telemetry::{telemetry_cells, GpuTelemetry, TELEMETRY_HEADERS};
+use crate::gpu_telemetry::{append_telemetry_cells, GpuTelemetry, TELEMETRY_HEADERS};
 
 /// Sidecar base name declared in tauri.conf.json `bundle.externalBin`. Tauri
 /// resolves it to `binaries/presentmon-x86_64-pc-windows-msvc.exe` at build
@@ -195,7 +195,7 @@ impl CaptureBuffer {
                         line.push_str(header);
                     }
                 } else {
-                    line.push_str(&telemetry_cells(sample));
+                    append_telemetry_cells(&mut line, sample);
                 }
             }
             self.bytes += line.len() + 1;

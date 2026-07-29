@@ -8,7 +8,9 @@
  */
 
 import { describe, expect, it } from "vitest";
+import type { DeclaredHardware } from "./ipc";
 import {
+  applyDetection,
   EMPTY_FORM,
   gameNameFromProcess,
   missingFields,
@@ -142,5 +144,63 @@ describe("visibility", () => {
     // `private` needs a signed-in owner at create time (§20.2d), which the
     // browser handoff has no way to provide.
     expect(VISIBILITY_OPTIONS.map((option) => option.value)).toEqual(["unlisted", "public"]);
+  });
+});
+
+describe("applyDetection", () => {
+  const first: DeclaredHardware = {
+    hardware: { gpu: "RX 9070 XT", cpu: "9800X3D", resolution: "2560x1440" },
+    methodology: { captureTool: "PresentMon 2.4.1" },
+  };
+
+  it("re-detects the game instead of inheriting the previous capture's", () => {
+    // The bug this exists for: the form is kept across captures, so a merge
+    // that preserved every non-empty field uploaded run two under run one's
+    // name. `game` is DETECTED, so it must be re-detected.
+    const afterFirst = prefillForm(first, "Cyberpunk2077.exe");
+    expect(afterFirst.game).toBe("Cyberpunk2077");
+
+    const afterSecond = applyDetection(afterFirst, new Set(), first, "Doom.exe");
+    expect(afterSecond.game).toBe("Doom");
+  });
+
+  it("keeps every field the user actually edited", () => {
+    const typed: RunDetailsForm = {
+      ...prefillForm(first, "Cyberpunk2077.exe"),
+      game: "Cyberpunk 2077 (RT overdrive)",
+      settingsPreset: "Ultra",
+      graphicsApi: "d3d12",
+      visibility: "public",
+    };
+    const edited = new Set<keyof RunDetailsForm>([
+      "game",
+      "settingsPreset",
+      "graphicsApi",
+      "visibility",
+    ]);
+
+    const next = applyDetection(typed, edited, first, "Doom.exe");
+    // A hand-corrected game title is a declaration, not a stale default.
+    expect(next.game).toBe("Cyberpunk 2077 (RT overdrive)");
+    expect(next.settingsPreset).toBe("Ultra");
+    expect(next.graphicsApi).toBe("d3d12");
+    expect(next.visibility).toBe("public");
+  });
+
+  it("picks up a resolution that changed between captures", () => {
+    const previous = prefillForm(first, "Cyberpunk2077.exe");
+    const moved: DeclaredHardware = {
+      ...first,
+      hardware: { ...first.hardware, resolution: "3840x2160" },
+    };
+    expect(applyDetection(previous, new Set(), moved, "Cyberpunk2077.exe").resolution).toBe(
+      "3840x2160",
+    );
+  });
+
+  it("leaves undeclared fields blank so the missing list stays truthful", () => {
+    const next = applyDetection(EMPTY_FORM, new Set(), null, undefined);
+    expect(next).toEqual(EMPTY_FORM);
+    expect(missingFields(next)).toContain("settingsPreset");
   });
 });

@@ -16,3 +16,4 @@ export * from "./metrics";
 export * from "./sensor-availability";
 export * from "./diagnostics";
 export { splitCsvLine } from "./internal/csv";
+export { FRAME_TIME_COLUMN_ALIASES } from "./internal/columns";

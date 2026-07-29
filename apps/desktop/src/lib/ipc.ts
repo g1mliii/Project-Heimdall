@@ -130,7 +130,8 @@ export async function preparePayload(parquet: Uint8Array): Promise<PreparedPaylo
   }
 }
 
-export const putPreparedPayload = (url: string) => call<void>("put_prepared_payload", { url });
+export const putPreparedPayload = (url: string, contentType: string) =>
+  call<void>("put_prepared_payload", { url, contentType });
 
 /* ── Events ─────────────────────────────────────────────────────────────── */
 

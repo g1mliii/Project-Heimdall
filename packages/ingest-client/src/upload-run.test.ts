@@ -239,7 +239,9 @@ describe("uploadCapture engine", () => {
     expect(createBody.methodologyManifest).toMatchObject({
       resolution: "2560x1440",
       captureProfile: "presentmon-2.x",
-      frameGeneration: "none",
+      // Nothing was declared and the capture observed no generated frame, which
+      // is not evidence that there was none (§22.11) — so `unknown`.
+      frameGeneration: "unknown",
       hags: "unknown",
     });
     // The fixture's Runtime is DXGI, which names the present runtime rather than
@@ -544,14 +546,37 @@ describe("uploadCaptureBytes (desktop entry point)", () => {
     expect(createRunRequestSchema.parse(log.createBody).generatedFrameTech).toBe("fsr3");
   });
 
-  it("lets the frames overrule a declaration when the format DOES report frame type", async () => {
+  it("keeps the declaration when a FrameType column reads Application throughout", async () => {
     const log: TransportLog = {};
-    // v2-basic has a FrameType column reading `Application` throughout, so
-    // "not generated" is an observation and the declaration must not win.
+    // v2-basic HAS a FrameType column, all `Application` — which is exactly
+    // what an uninstrumented driver produces (§22.11). An RX 9070 XT with FSR
+    // frame generation on wrote 14,241 such rows, so the column's presence
+    // must not be allowed to overrule the uploader and re-manufacture `none`.
     await uploadCaptureBytes(fixtureBytes("presentmon/v2-basic.csv"), {
       game: "Test Game",
       visibility: "unlisted",
       frameGeneration: "fsr3",
+      transport: mockTransport(log),
+    });
+    expect(createRunRequestSchema.parse(log.createBody).generatedFrameTech).toBe("fsr3");
+  });
+
+  it("declares unknown, never none, for an undeclared capture that saw no generated frame", async () => {
+    const log: TransportLog = {};
+    await uploadCaptureBytes(fixtureBytes("presentmon/v2-basic.csv"), {
+      game: "Test Game",
+      visibility: "unlisted",
+      transport: mockTransport(log),
+    });
+    expect(createRunRequestSchema.parse(log.createBody).generatedFrameTech).toBe("unknown");
+  });
+
+  it("records none only because the uploader declared it", async () => {
+    const log: TransportLog = {};
+    await uploadCaptureBytes(fixtureBytes("presentmon/v2-basic.csv"), {
+      game: "Test Game",
+      visibility: "unlisted",
+      frameGeneration: "none",
       transport: mockTransport(log),
     });
     expect(createRunRequestSchema.parse(log.createBody).generatedFrameTech).toBe("none");

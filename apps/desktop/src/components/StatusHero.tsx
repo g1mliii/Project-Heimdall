@@ -13,9 +13,46 @@ interface StatusHeroProps {
   captureTool: string;
 }
 
+/**
+ * The three hero variants, one row each.
+ *
+ * As a table rather than five parallel ternaries over the same condition: a
+ * colour that disagrees with its icon is invisible in review when the two are
+ * decided forty lines apart, and a fourth state would mean editing five places
+ * consistently.
+ */
+const VARIANTS = {
+  ready: {
+    background: "var(--brand-teal-dim)",
+    color: "var(--brand-teal)",
+    Icon: ActivityIcon,
+    title: "Ready to capture",
+    tone: "neutral",
+    dot: true,
+  },
+  capturing: {
+    background: "var(--bad-dim)",
+    color: "var(--bad)",
+    Icon: RadioIcon,
+    title: "Capturing…",
+    tone: "bad",
+    dot: true,
+  },
+  complete: {
+    background: "var(--good-dim)",
+    color: "var(--good)",
+    Icon: CheckIcon,
+    title: "Capture complete",
+    tone: "good",
+    dot: false,
+  },
+} as const;
+
 export function StatusHero({ screen, captureTool }: StatusHeroProps) {
-  const capturing = screen === "capturing";
-  const complete = screen === "complete";
+  // Onboarding never renders the hero, but it is part of `Screen`; it shares
+  // the ready look rather than needing a row of its own.
+  const { background, color, Icon, title, tone, dot } =
+    VARIANTS[screen === "onboarding" ? "ready" : screen];
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
@@ -26,22 +63,16 @@ export function StatusHero({ screen, captureTool }: StatusHeroProps) {
           borderRadius: "var(--radius-md)",
           display: "grid",
           placeItems: "center",
-          background: capturing
-            ? "var(--bad-dim)"
-            : complete
-              ? "var(--good-dim)"
-              : "var(--brand-teal-dim)",
-          color: capturing ? "var(--bad)" : complete ? "var(--good)" : "var(--brand-teal)",
+          background,
+          color,
         }}
       >
-        {capturing ? <RadioIcon size={22} /> : complete ? <CheckIcon size={22} /> : <ActivityIcon size={22} />}
+        <Icon size={22} />
       </span>
       <div>
-        <div style={{ font: "var(--type-subheading)", color: "var(--fg-1)" }}>
-          {capturing ? "Capturing…" : complete ? "Capture complete" : "Ready to capture"}
-        </div>
+        <div style={{ font: "var(--type-subheading)", color: "var(--fg-1)" }}>{title}</div>
         <div style={{ marginTop: 2 }}>
-          <Badge tone={capturing ? "bad" : complete ? "good" : "neutral"} dot={!complete}>
+          <Badge tone={tone} dot={dot}>
             {captureTool} · Windows
           </Badge>
         </div>
