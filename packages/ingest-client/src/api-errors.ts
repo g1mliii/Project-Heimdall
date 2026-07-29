@@ -1,4 +1,4 @@
-/** Browser-safe normalization for the API's shared error envelope. */
+/** Transport-agnostic normalization for the API's shared error envelope. */
 
 import { apiErrorSchema } from "@heimdall/shared";
 

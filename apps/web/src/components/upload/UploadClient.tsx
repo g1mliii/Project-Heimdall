@@ -4,7 +4,7 @@
  * Upload/ingest flow (§11.1–§11.4, §11.8) — production port of the
  * design/ui_kits/web/extras.jsx UploadPage reference: idle → parsing →
  * done, plus the per-file batch flow where one bad file never blocks the
- * rest. All heavy lifting lives in lib/upload/upload-run.ts; this component
+ * rest. All heavy lifting lives in @heimdall/ingest-client; this component
  * is state + tokens + @heimdall/ui primitives only.
  */
 
@@ -24,7 +24,7 @@ import {
   Stat,
   Switch,
 } from "@heimdall/ui";
-import { uploadCapture } from "@/lib/upload/upload-run";
+import { uploadCapture } from "@heimdall/ingest-client";
 import { getOrCreateBrowserBenchmarkSet } from "@/lib/upload/benchmark-set";
 import type {
   UploadFailure,
@@ -32,7 +32,7 @@ import type {
   UploadProgress,
   UploadResult,
   UploadSuccess,
-} from "@/lib/upload/upload-run";
+} from "@heimdall/ingest-client";
 import { MAX_INDEXED_METADATA_TEXT_LENGTH, type MethodologyManifest } from "@heimdall/shared";
 import {
   ArrowRightIcon,

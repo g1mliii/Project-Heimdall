@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { readApiFailure } from "./errors";
+import { readApiFailure } from "./api-errors";
 
 describe("readApiFailure", () => {
   it("returns a valid shared API error envelope", async () => {

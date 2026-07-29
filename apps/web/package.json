@@ -19,6 +19,7 @@
     "@aws-sdk/client-s3": "3.1058.0",
     "@aws-sdk/s3-request-presigner": "3.1058.0",
     "@clerk/nextjs": "7.5.7",
+    "@heimdall/ingest-client": "workspace:*",
     "@heimdall/parsers": "workspace:*",
     "@heimdall/shared": "workspace:*",
     "@heimdall/ui": "workspace:*",

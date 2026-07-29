@@ -4,8 +4,11 @@
  *
  * Raw log files never transit the API. Never throws: every outcome is a typed
  * result, so the batch loop (§11.8) gets per-file success/failure for free.
- * Client-only module (XMLHttpRequest for upload progress) — the transport is
- * injectable so tests run it in Node.
+ *
+ * Shared by the web hub and the desktop capture client (§22.1/§22.5) so both
+ * surfaces speak §11 from one implementation. Everything host-specific is an
+ * injection seam: `transport` (the browser default uses XMLHttpRequest for
+ * upload progress; desktop routes through Rust) and `signPayload` (§22.3).
  */
 
 import { computeRunSummary, deriveCapabilityManifest, parseAnyCapture } from "@heimdall/parsers";
@@ -30,7 +33,7 @@ import type {
   MethodologyManifest,
   RunSummary,
 } from "@heimdall/shared";
-import { readApiFailure } from "../api/errors";
+import { readApiFailure } from "./api-errors";
 import { buildFramesParquet } from "./build-parquet";
 
 export type UploadProgress =
@@ -95,6 +98,18 @@ export interface UploadOptions {
   isWarmup?: boolean;
   onProgress?: (progress: UploadProgress) => void;
   transport?: UploadTransport;
+  /**
+   * Optional tamper-evidence signature over the exact Parquet bytes about to be
+   * uploaded (§11.7/§22.3). Called once, after the size check and before the
+   * create request, so a signer that also caches the bytes for the PUT (the
+   * desktop `prepare_payload` command) is invoked before they are needed.
+   *
+   * Returning `undefined` sends no signature — identical to omitting this hook.
+   * The signature covers the frame Parquet ONLY: the declared hardware and
+   * methodology in POST /api/runs are not signed. `signature_valid` is recorded
+   * as evidence and never gates acceptance (§0.5).
+   */
+  signPayload?: (parquet: Uint8Array) => Promise<string | undefined>;
 }
 
 function defaultTransport(): UploadTransport {
@@ -123,7 +138,36 @@ async function failureFromResponse(response: Response, fallback: string): Promis
   return { ok: false, ...(await readApiFailure(response, fallback)) };
 }
 
+/**
+ * Browser entry point. `File` is the only DOM coupling in this module, so it
+ * lives here and the engine proper takes raw bytes — which is what the desktop
+ * client hands it straight out of the PresentMon stream (§22.1).
+ */
 export async function uploadCapture(file: File, options: UploadOptions): Promise<UploadResult> {
+  if (file.size > INGEST_LIMITS.maxCaptureBytes) {
+    return {
+      ok: false,
+      code: "capture-too-large",
+      message: `capture is ${file.size} bytes (limit ${INGEST_LIMITS.maxCaptureBytes})`,
+    };
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = new Uint8Array(await file.arrayBuffer());
+  } catch (error) {
+    return {
+      ok: false,
+      code: "upload-failed",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+  return uploadCaptureBytes(bytes, options);
+}
+
+export async function uploadCaptureBytes(
+  capture: Uint8Array,
+  options: UploadOptions,
+): Promise<UploadResult> {
   const transport = options.transport ?? defaultTransport();
   const emit = options.onProgress ?? (() => {});
   const benchmarkSetId = options.benchmarkSetId?.trim() || undefined;
@@ -138,18 +182,17 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
     };
   }
 
-  if (file.size > INGEST_LIMITS.maxCaptureBytes) {
+  if (capture.byteLength > INGEST_LIMITS.maxCaptureBytes) {
     return {
       ok: false,
       code: "capture-too-large",
-      message: `capture is ${file.size} bytes (limit ${INGEST_LIMITS.maxCaptureBytes})`,
+      message: `capture is ${capture.byteLength} bytes (limit ${INGEST_LIMITS.maxCaptureBytes})`,
     };
   }
 
   try {
     emit({ stage: "parsing" });
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    const parsed = parseAnyCapture(bytes, { maxFrames: INGEST_LIMITS.maxFramesPerRun });
+    const parsed = parseAnyCapture(capture, { maxFrames: INGEST_LIMITS.maxFramesPerRun });
     if (!parsed.ok) {
       return { ok: false, code: parsed.error.code, message: parsed.error.message };
     }
@@ -184,6 +227,10 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
         message: `frames encode to ${parquet.byteLength} bytes (limit ${INGEST_LIMITS.maxParquetBytes})`,
       };
     }
+
+    // Sign before create: a signer may also be the thing that takes custody of
+    // the bytes for the PUT (see `signPayload`).
+    const signature = await options.signPayload?.(parquet);
 
     // Spreads first, required fields last: `??` skips an explicitly-undefined
     // gpu/cpu key in the overrides, so the placeholder always survives (a
@@ -280,6 +327,7 @@ export async function uploadCapture(file: File, options: UploadOptions): Promise
       uploadObjectKey: created.uploadObjectKey,
       visibility: options.visibility,
       managementTokenHash: await hashManagementToken(managementToken),
+      ...(signature === undefined ? {} : { signature }),
     };
     finalizeRecovery = { runId: created.id, managementToken };
     const finalizeResponse = await transport.fetch(`/api/runs/${created.id}/finalize`, {
