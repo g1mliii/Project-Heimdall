@@ -42,7 +42,7 @@ jobs:
 
       # Verifies the pinned SHA-256 before installing; a swapped upstream asset
       # fails the release rather than shipping silently.
-      - run: pnpm --filter @heimdall/desktop setup
+      - run: pnpm --filter @heimdall/desktop vendor
 
       # Authenticode signing via Azure Trusted Signing: a cloud HSM, so CI needs
       # no physical EV token and the certificate never leaves Azure.

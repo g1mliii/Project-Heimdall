@@ -19,7 +19,7 @@ pnpm check:deps              # dependency minimum-age policy (must pass before a
 pnpm audit:deps              # advisory audit, moderate+
 pnpm --filter @heimdall/web test:e2e:functional   # Playwright minus @visual baselines
 
-pnpm --filter @heimdall/desktop setup   # vendor webfonts + the pinned PresentMon sidecar (once)
+pnpm --filter @heimdall/desktop vendor   # vendor webfonts + the pinned PresentMon sidecar (once)
 pnpm --filter @heimdall/desktop dev     # Tauri capture client (Windows)
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml   # the Rust half
 ```

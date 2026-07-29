@@ -10,7 +10,7 @@
     "build": "pnpm --dir ../.. --filter @heimdall/ui build && tauri build",
     "vite:dev": "vite",
     "vite:build": "vite build",
-    "setup": "node scripts/fetch-fonts.mjs && node scripts/fetch-presentmon.mjs",
+    "vendor": "node scripts/fetch-fonts.mjs && node scripts/fetch-presentmon.mjs",
     "fetch:fonts": "node scripts/fetch-fonts.mjs",
     "fetch:presentmon": "node scripts/fetch-presentmon.mjs",
     "tauri": "tauri",

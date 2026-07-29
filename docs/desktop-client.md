@@ -264,7 +264,7 @@ warn on first run.
 ```bash
 pnpm install
 pnpm --filter @heimdall/ui build
-pnpm --filter @heimdall/desktop setup   # vendors the fonts + PresentMon sidecar
+pnpm --filter @heimdall/desktop vendor   # vendors the fonts + PresentMon sidecar
 pnpm --filter @heimdall/desktop dev     # tauri dev
 pnpm --filter @heimdall/desktop build   # unsigned, non-updating local bundle
 ```

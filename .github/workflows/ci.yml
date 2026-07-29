@@ -95,7 +95,7 @@ jobs:
       # Verifies the pinned SHA-256 before installing; also vendors the fonts
       # the Vite build inlines.
       - if: steps.detect.outputs.present == 'true'
-        run: pnpm --filter @heimdall/desktop setup
+        run: pnpm --filter @heimdall/desktop vendor
 
       - if: steps.detect.outputs.present == 'true'
         uses: dtolnay/rust-toolchain@stable
