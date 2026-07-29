@@ -9,7 +9,10 @@ import type { CaptureSource } from "@heimdall/shared";
 
 export const PARSER_VERSIONS = {
   capframex: "1.0.0",
-  presentmon: "1.0.0",
+  // 1.1.0: GPU utilization/clock/power/VRAM are reported as POLLED, not
+  // frame-aligned (they always were; the parser used to claim otherwise), and
+  // the Heimdall client's own PDH-sampled columns are recognized.
+  presentmon: "1.1.0",
   mangohud: "1.0.0",
 } as const satisfies Record<CaptureSource, string>;
 
