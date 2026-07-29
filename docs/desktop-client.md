@@ -99,13 +99,23 @@ enabled** produced 14,241 rows, every single one labelled `Application`. The
 frame-time distribution was unimodal (a tight 3–6 ms cluster), so the data does
 not even reveal whether the generated frames are present in the stream.
 
-**This has a real integrity consequence, and it is not currently solved.** The
-capture above averages 244 FPS. If AMD's driver inserts its interpolated frames
-after present, that is an honest app-side rate. If they reach this swapchain, the
-run overstates real rendering by roughly 2x — and either way the pipeline records
-`generatedFrameTech: none`, because §11.5 derives it from the server's recomputed
-`generatedFramePct`, which is 0. A declaration cannot override that:
+**This has a real integrity consequence, and it is not currently solved.**
+Measured on the same scene and settings with frame generation as the only
+variable:
+
+| | frames | duration | avg FPS | min frame time |
+|---|---|---|---|---|
+| FG on | 14,241 | 58.4 s | **243.9** | 0.32 ms |
+| FG off | 7,839 | 60.0 s | **130.7** | 3.11 ms |
+
+1.87x. The interpolated frames ARE in the present stream — PresentMon counts
+them and labels every one `Application`. The pipeline then records
+`generatedFrameTech: none`, because §11.5 derives it from the server's
+recomputed `generatedFramePct`, which is 0. A declaration cannot override that:
 `reconcileGeneratedFrameTech` treats a recomputed 0 as decisive, by design.
+
+So a frame-generated run reports roughly double its real rendering rate, and its
+1% lows and stutter counts are computed over interpolated frames.
 
 So a frame-generated AMD run can pool with genuine non-generated runs in
 comparability buckets. Distinguishing the two needs evidence we do not have.

@@ -569,6 +569,28 @@ commit — local Windows renders are not valid baselines.
   key field). Needs a decision: trust a declaration for this field, find a detectable signature, or
   state the limitation on the run page. Not a Phase 9 regression — it predates the desktop client and
   affects browser uploads equally — but the desktop client is the first thing that makes it common.
+  - **MEASURED, and it is the bad case.** Same scene, same settings, frame generation the only
+    variable, on an RX 9070 XT in Cyberpunk 2077:
+
+    | | frames | duration | avg FPS | min frame time |
+    |---|---|---|---|---|
+    | FG on | 14,241 | 58.4 s | **243.9** | 0.32 ms |
+    | FG off | 7,839 | 60.0 s | **130.7** | 3.11 ms |
+
+    Ratio 1.87x. The interpolated frames ARE in the present stream: PresentMon counts them, labels
+    every one `Application`, and the pipeline then records `generatedFrameTech: none`. So such a run
+    reports ~244 FPS, pools with genuine 244 FPS runs, and has its 1% lows and stutter counts
+    computed over interpolated frames.
+  - Recommended fix, consistent with how this codebase treats every other unknowable: distinguish
+    "the format reported zero generated frames" from "the format cannot report generated frames at
+    all". `reconcileGeneratedFrameTech` currently derives `none` from a recomputed 0, which asserts
+    absence from absence of evidence — the same mistake HAGS (`unknown` when the registry value is
+    missing) and `ramRatedSpeedMtps` (omitted unless genuinely known) deliberately avoid. A capture
+    with no frame-type column should resolve to `unknown`, not `none`. That is a semantics change to
+    `@heimdall/shared` + the verify worker affecting existing rows, so it wants its own phase, not a
+    tail-end edit to Phase 9.
+  - Sub-millisecond presents (min 0.32 ms vs 3.11 ms) appear only with FG on and may be a usable
+    detection signal, but one machine and one title is not enough to calibrate a rule on.
 - [ ] 22.7 Packaging — **partially blocked on out-of-band credentials.**
   - [x] NSIS installer (per-user install), bundled sidecar + license resource; `cargo tauri build`
     runs in CI and produced a working installer locally
