@@ -520,6 +520,43 @@ describe("uploadCaptureBytes (desktop entry point)", () => {
     expect(log.finalizeBody).not.toHaveProperty("signature");
   });
 
+  it("declares unknown, not none, when the capture cannot report frame type", async () => {
+    const log: TransportLog = {};
+    // CapFrameX carries no frame-type column at all, so nothing is known.
+    // Saying `none` here would assert absence from absence of evidence — the
+    // bug that let a frame-generated run report at twice its real rate.
+    await uploadCaptureBytes(fixtureBytes("capframex/csv/nvidia-full-sensors.csv"), {
+      game: "Test Game",
+      visibility: "unlisted",
+      transport: mockTransport(log),
+    });
+    expect(createRunRequestSchema.parse(log.createBody).generatedFrameTech).toBe("unknown");
+  });
+
+  it("passes the uploader's declaration through when there is no evidence", async () => {
+    const log: TransportLog = {};
+    await uploadCaptureBytes(fixtureBytes("capframex/csv/nvidia-full-sensors.csv"), {
+      game: "Test Game",
+      visibility: "unlisted",
+      frameGeneration: "fsr3",
+      transport: mockTransport(log),
+    });
+    expect(createRunRequestSchema.parse(log.createBody).generatedFrameTech).toBe("fsr3");
+  });
+
+  it("lets the frames overrule a declaration when the format DOES report frame type", async () => {
+    const log: TransportLog = {};
+    // v2-basic has a FrameType column reading `Application` throughout, so
+    // "not generated" is an observation and the declaration must not win.
+    await uploadCaptureBytes(fixtureBytes("presentmon/v2-basic.csv"), {
+      game: "Test Game",
+      visibility: "unlisted",
+      frameGeneration: "fsr3",
+      transport: mockTransport(log),
+    });
+    expect(createRunRequestSchema.parse(log.createBody).generatedFrameTech).toBe("none");
+  });
+
   it("a signer failure is a typed failure, not a throw", async () => {
     const result = await uploadCaptureBytes(fixtureBytes("presentmon/v2-basic.csv"), {
       game: "Test Game",

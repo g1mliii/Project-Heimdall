@@ -12,7 +12,10 @@ export const PARSER_VERSIONS = {
   // 1.1.0: GPU utilization/clock/power/VRAM are reported as POLLED, not
   // frame-aligned (they always were; the parser used to claim otherwise), and
   // the Heimdall client's own PDH-sampled columns are recognized.
-  presentmon: "1.1.0",
+  // 1.2.0: a frame-type column that reads `Application` now records
+  // `generated: false` rather than leaving it undefined, so "we looked and saw
+  // none" is distinguishable from "the format cannot report it" (§22.11).
+  presentmon: "1.2.0",
   mangohud: "1.0.0",
 } as const satisfies Record<CaptureSource, string>;
 

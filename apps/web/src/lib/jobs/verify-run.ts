@@ -94,14 +94,37 @@ function verifyEd25519(publicKeyBase64: string, data: Uint8Array, signatureBase6
 
 /**
  * Reconcile the client's declared frame-generation tech with what the frames
- * actually show. The declaration is never trusted on its own: the server's
- * recomputed percentage decides whether generation happened at all, and the
- * declaration only gets to name the tech once the frames corroborate it.
+ * actually show (§11.5, §22.11).
+ *
+ * Where the capture CAN report frame type, the recomputed percentage decides
+ * whether generation happened and the declaration only gets to name the tech
+ * once the frames corroborate it — the client is not trusted to assert
+ * generation the data does not show.
+ *
+ * Where the capture CANNOT report frame type, there is nothing to corroborate
+ * against, and this used to return `none` anyway: absence asserted from absence
+ * of evidence. Measured consequence on an RX 9070 XT — Cyberpunk 2077 with
+ * frame generation on recorded 243.9 avg FPS against 130.7 with it off, every
+ * row labelled `Application`, and the run went out as "no frame generation" at
+ * roughly double its real rendering rate, pooling with genuine runs.
+ *
+ * So with no evidence the declaration is taken at face value, falling back to
+ * `unknown`. That is not a departure from "never trust the client": `upscaler`,
+ * `rayTracing`, `settingsPreset` and `scene` are already unverifiable client
+ * declarations AND comparability key fields. The rule earns its keep on frame
+ * DATA, which the server recomputes; applied to a field the server has no way
+ * to know, it produces a confident falsehood rather than safety.
  */
 export function reconcileGeneratedFrameTech(
   declared: GeneratedFrameTech,
   recomputedGeneratedFramePct: number,
+  frameGenerationEvidence = true,
 ): GeneratedFrameTech {
+  // The capture could not report frame type: believe the uploader, or admit
+  // to not knowing.
+  if (!frameGenerationEvidence) {
+    return declared === GENERATED_FRAME_TECH.none ? GENERATED_FRAME_TECH.unknown : declared;
+  }
   // No generated frames in the data: nothing to name, whatever was declared.
   if (recomputedGeneratedFramePct === 0) return GENERATED_FRAME_TECH.none;
   // Frames were generated but the declaration does not name a tech — the run is
@@ -142,6 +165,11 @@ export async function verifyRunJob(
   let signatureValid: boolean | null;
   let findings: DiagnosticFinding[];
   let capabilityManifest: CapabilityManifest;
+  // Whether the stored Parquet's `generated` column carried any non-null value
+  // — i.e. whether the capture format could report frame type at all (§22.11).
+  // Assigned on the only path that reaches the reconcile below; every other
+  // path returns first.
+  let frameGenerationEvidence: boolean;
   {
     let bytes: Uint8Array;
     try {
@@ -159,6 +187,7 @@ export async function verifyRunJob(
       // captures.
       const parquet = await computeFrameParquetSummary(bytes);
       recomputed = parquet.summary;
+      frameGenerationEvidence = parquet.frameGenerationEvidence;
 
       // Recompute the capability manifest canonically from the stored Parquet —
       // the client-derived manifest (written at insertRun) was provisional, the
@@ -223,6 +252,7 @@ export async function verifyRunJob(
   const generatedFrameTech = reconcileGeneratedFrameTech(
     run.generatedFrameTech,
     recomputed.generatedFramePct,
+    frameGenerationEvidence,
   );
   const methodologyManifest = normalizeMethodologyManifest(
     run.methodologyManifest,

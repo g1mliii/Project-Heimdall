@@ -34,6 +34,7 @@ import {
   type SceneType,
   type UpscalerMode,
 } from "@heimdall/shared";
+import type { GeneratedFrameTech } from "@heimdall/shared";
 import type { DeclaredHardware } from "./ipc";
 
 export type TriBoolean = "" | "true" | "false";
@@ -50,6 +51,14 @@ export interface RunDetailsForm {
   rayTracing: RayTracingMode | "";
   vsync: TriBoolean;
   vrr: TriBoolean;
+  /**
+   * Declared frame generation (§22.11). Not a `profileRequired` field, but it
+   * IS a comparability key, and PresentMon cannot see it: AMD's driver emits no
+   * frame-type evidence, so a run with frame generation on presents roughly
+   * twice as many frames and every one looks like a real present. Without a
+   * declaration the server can only record `unknown`.
+   */
+  frameGeneration: GeneratedFrameTech | "";
 }
 
 /**
@@ -90,6 +99,14 @@ export const RAY_TRACING_OPTIONS = [
   { value: "unknown", label: "Unknown" },
 ] as const;
 
+export const FRAME_GENERATION_OPTIONS = [
+  { value: "none", label: "Off" },
+  { value: "fsr3", label: "FSR frame generation" },
+  { value: "dlss3", label: "DLSS frame generation" },
+  { value: "xess", label: "XeSS frame generation" },
+  { value: "unknown", label: "On, not sure which" },
+] as const;
+
 export const BOOLEAN_OPTIONS = [
   { value: "true", label: "On" },
   { value: "false", label: "Off" },
@@ -120,6 +137,7 @@ export const EMPTY_FORM: RunDetailsForm = {
   rayTracing: "",
   vsync: "",
   vrr: "",
+  frameGeneration: "",
 };
 
 /** Strip the `.exe` from a process name for a first guess at the game title. */

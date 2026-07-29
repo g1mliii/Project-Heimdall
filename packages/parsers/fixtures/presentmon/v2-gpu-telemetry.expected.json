@@ -21,7 +21,8 @@
     "gpuLoadPct": 96,
     "gpuClockMhz": 2520,
     "gpuPowerW": 210,
-    "vramUsedMb": 7800
+    "vramUsedMb": 7800,
+    "generated": false
   },
   "lastFrame": {
     "timeMs": 110,
@@ -31,6 +32,7 @@
     "gpuLoadPct": 96,
     "gpuClockMhz": 2520,
     "gpuPowerW": 210,
-    "vramUsedMb": 7800
+    "vramUsedMb": 7800,
+    "generated": false
   }
 }

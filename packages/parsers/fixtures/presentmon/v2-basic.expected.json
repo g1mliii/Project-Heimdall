@@ -17,12 +17,14 @@
     "timeMs": 0,
     "frameTimeMs": 10,
     "cpuBusyMs": 6,
-    "gpuBusyMs": 9.5
+    "gpuBusyMs": 9.5,
+    "generated": false
   },
   "lastFrame": {
     "timeMs": 110,
     "frameTimeMs": 10,
     "cpuBusyMs": 6,
-    "gpuBusyMs": 9.5
+    "gpuBusyMs": 9.5,
+    "generated": false
   }
 }

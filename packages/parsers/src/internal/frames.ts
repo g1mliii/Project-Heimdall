@@ -228,7 +228,17 @@ export function parseFrameRows(input: FrameRowsInput): ParseResult<FrameSample[]
     }
     if (input.generatedColumn !== undefined) {
       const frameType = cells[input.generatedColumn]?.trim() ?? "";
-      if (frameType !== "" && frameType.toLowerCase() !== "application") frame.generated = true;
+      // `false` and `undefined` are DIFFERENT claims and both are load-bearing
+      // (§22.11). `false` means the capture carried a frame-type column and
+      // this frame was a real present; `undefined` means the format cannot
+      // report frame type at all, so nothing is known either way. Collapsing
+      // the two — which this used to do by only ever setting `true` — makes a
+      // frame-generated run indistinguishable from an ordinary one, and the
+      // server then reports it as `generatedFrameTech: none`: absence asserted
+      // from absence of evidence.
+      if (frameType !== "") {
+        frame.generated = frameType.toLowerCase() !== "application";
+      }
     }
 
     baselineMs ??= rawTimeMs;

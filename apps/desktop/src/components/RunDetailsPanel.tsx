@@ -12,6 +12,7 @@ import { Badge, Input, Select } from "@heimdall/ui";
 import type { ComparabilityProfileField } from "@heimdall/shared";
 import {
   BOOLEAN_OPTIONS,
+  FRAME_GENERATION_OPTIONS,
   GRAPHICS_API_OPTIONS,
   PROFILE_FIELD_LABELS,
   RAY_TRACING_OPTIONS,
@@ -148,6 +149,17 @@ export function RunDetailsPanel({ form, missing, onChange }: RunDetailsPanelProp
             options={[SELECT_PLACEHOLDER, ...BOOLEAN_OPTIONS]}
             value={form.vsync}
             onChange={(event) => onChange("vsync", event.target.value as RunDetailsForm["vsync"])}
+          />
+          {/* Not profileRequired, but a comparability key the capture cannot
+              reveal — AMD frame generation is invisible to PresentMon (§22.11). */}
+          <Select
+            label="Frame generation"
+            hint="The capture cannot detect this"
+            options={[SELECT_PLACEHOLDER, ...FRAME_GENERATION_OPTIONS]}
+            value={form.frameGeneration}
+            onChange={(event) =>
+              onChange("frameGeneration", event.target.value as RunDetailsForm["frameGeneration"])
+            }
           />
           <Select
             label={PROFILE_FIELD_LABELS.vrr}

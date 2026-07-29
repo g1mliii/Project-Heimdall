@@ -117,6 +117,24 @@ recomputed `generatedFramePct`, which is 0. A declaration cannot override that:
 So a frame-generated run reports roughly double its real rendering rate, and its
 1% lows and stutter counts are computed over interpolated frames.
 
+**What was done about it.** The FPS figure cannot be corrected — the frames are
+genuinely in the stream and nothing distinguishes them. What was fixed is the
+false claim built on top:
+
+- The parser now records `generated: false` when a frame-type column exists and
+  reads `Application`, and leaves it `undefined` only when the format carries no
+  such column. "We looked and saw none" and "we never looked" are different
+  claims, and they used to collapse into the same all-null column.
+- `reconcileGeneratedFrameTech` no longer returns `none` without evidence. With
+  none, it takes the uploader's declaration, falling back to `unknown`.
+- The Run details form (and the web upload page) ask for frame generation, since
+  the capture cannot show it.
+
+That does not make a frame-generated run's FPS honest, but it stops the run
+claiming it was not frame-generated — so such runs no longer pool silently with
+genuine ones. Making the FPS itself meaningful under frame generation is still
+open.
+
 So a frame-generated AMD run can pool with genuine non-generated runs in
 comparability buckets. Distinguishing the two needs evidence we do not have.
 Recorded rather than papered over; see IMPLEMENTATION_PLAN §22.11.

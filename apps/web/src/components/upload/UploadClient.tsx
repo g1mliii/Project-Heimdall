@@ -33,7 +33,11 @@ import type {
   UploadResult,
   UploadSuccess,
 } from "@heimdall/ingest-client";
-import { MAX_INDEXED_METADATA_TEXT_LENGTH, type MethodologyManifest } from "@heimdall/shared";
+import {
+  MAX_INDEXED_METADATA_TEXT_LENGTH,
+  type GeneratedFrameTech,
+  type MethodologyManifest,
+} from "@heimdall/shared";
 import {
   ArrowRightIcon,
   CheckIcon,
@@ -179,6 +183,12 @@ export function UploadClient({ authEnabled = false }: { authEnabled?: boolean })
   const [settingsPreset, setSettingsPreset] = React.useState("");
   const [graphicsApi, setGraphicsApi] = React.useState("");
   const [upscaler, setUpscaler] = React.useState<MethodologyManifest["upscaler"]>("unknown");
+  // Declared, not detected (§22.11). No capture format we parse reports frame
+  // type reliably — an AMD run with frame generation on presents roughly twice
+  // as many frames and every one looks like a real present — so without an
+  // answer here the server can only record `unknown`.
+  const [frameGeneration, setFrameGeneration] =
+    React.useState<GeneratedFrameTech | "">("");
   const [rayTracing, setRayTracing] = React.useState<MethodologyManifest["rayTracing"]>("unknown");
   const [capFps, setCapFps] = React.useState("");
   const [vsync, setVsync] = React.useState(false);
@@ -250,6 +260,7 @@ export function UploadClient({ authEnabled = false }: { authEnabled?: boolean })
       game,
       visibility,
       ...(methodology === undefined ? {} : { methodology }),
+      ...(frameGeneration === "" ? {} : { frameGeneration }),
       ...benchmarkSet,
       onProgress: (progress) =>
         setMode((prev) =>
@@ -282,6 +293,7 @@ export function UploadClient({ authEnabled = false }: { authEnabled?: boolean })
             game,
             visibility,
             ...(methodology === undefined ? {} : { methodology }),
+      ...(frameGeneration === "" ? {} : { frameGeneration }),
             ...benchmarkSet,
           });
           if (result.ok) {
@@ -456,6 +468,23 @@ export function UploadClient({ authEnabled = false }: { authEnabled?: boolean })
                   { value: "dlss", label: "DLSS" },
                   { value: "fsr", label: "FSR" },
                   { value: "xess", label: "XeSS" },
+                ]}
+                disabled={busy}
+              />
+              <Select
+                label="Frame generation"
+                hint="Capture logs cannot detect this reliably"
+                value={frameGeneration}
+                onChange={(event) =>
+                  setFrameGeneration(event.target.value as GeneratedFrameTech | "")
+                }
+                options={[
+                  { value: "", label: "Not sure" },
+                  { value: "none", label: "Off" },
+                  { value: "fsr3", label: "FSR frame generation" },
+                  { value: "dlss3", label: "DLSS frame generation" },
+                  { value: "xess", label: "XeSS frame generation" },
+                  { value: "unknown", label: "On, not sure which" },
                 ]}
                 disabled={busy}
               />

@@ -27,6 +27,7 @@ import {
 } from "@heimdall/shared";
 import type {
   CaptureSource,
+  GeneratedFrameTech,
   CreateRunRequest,
   FinalizeRunRequest,
   HardwareSnapshot,
@@ -91,6 +92,13 @@ export interface UploadOptions {
   hardware?: Partial<HardwareSnapshot>;
   /** Optional declared setup details for reproducibility/comparability (§16c). */
   methodology?: Omit<MethodologyManifest, "version" | "frameGeneration">;
+  /**
+   * Declared frame-generation technology (§22.11). Only consulted when the
+   * capture format cannot report frame type — where it can, the frames decide
+   * and this is ignored, so a client can never assert generation the data
+   * contradicts.
+   */
+  frameGeneration?: GeneratedFrameTech;
   /** Optional repeatable-run group; warm-ups are retained but excluded from its stats. */
   benchmarkSetId?: string;
   /** Browser-held capability authorizing membership of the opaque set id. */
@@ -242,8 +250,16 @@ export async function uploadCaptureBytes(
       cpu: options.hardware?.cpu ?? parsedHardware?.cpu ?? UNKNOWN_HARDWARE.cpu,
     };
 
-    const generatedFrameTech =
-      summary.generatedFramePct > 0
+    // Three states, not two (§22.11). A capture format that cannot report
+    // frame type tells us nothing, and saying `none` there is a claim the
+    // client cannot support — an AMD run with frame generation on presents
+    // roughly twice as many frames, every one labelled as a real present.
+    // `options.frameGeneration` lets the uploader declare what the capture
+    // cannot show; the server re-applies exactly this rule at finalize.
+    const frameGenerationEvidence = frames.some((frame) => frame.generated !== undefined);
+    const generatedFrameTech = !frameGenerationEvidence
+      ? (options.frameGeneration ?? GENERATED_FRAME_TECH.unknown)
+      : summary.generatedFramePct > 0
         ? GENERATED_FRAME_TECH.unknown
         : GENERATED_FRAME_TECH.none;
     const capabilityManifest = deriveCapabilityManifest(

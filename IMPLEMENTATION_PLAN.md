@@ -558,7 +558,7 @@ commit — local Windows renders are not valid baselines.
     enabled produced 14,241 rows, every one `Application`. Wanted-list item #9 now needs a title or
     driver that instruments for Intel's provider. Land the fixture + hand-computed `*.expected.json`
     via procedure 16a.1 when one is available.
-- [ ] 22.11 **Integrity gap: frame-generated runs are indistinguishable from genuine ones.** Because
+- [x] 22.11 **Integrity gap: frame-generated runs are indistinguishable from genuine ones.** Because
   `generatedFramePct` recomputes to 0 (22.6), `reconcileGeneratedFrameTech` resolves such a run to
   `generatedFrameTech: none` — and a client declaration cannot override it, by design, since the
   recomputed percentage is treated as decisive. The Cyberpunk capture above averaged 244 FPS with
@@ -609,6 +609,15 @@ commit — local Windows renders are not valid baselines.
     `scene` are already unverifiable client declarations AND comparability key fields.
     `frameGeneration` is the odd one out in being server-derived, and that special case is precisely
     what manufactures the false `none`.
+  - **DONE** — all five steps landed, `presentmon@1.2.0`. What this does and does not fix: the
+    reported FPS of a frame-generated run is still inflated, because the interpolated frames really
+    are in the present stream and nothing distinguishes them. What no longer happens is the run
+    ALSO claiming it was not frame-generated. Such runs now carry `unknown` (or a declaration) and
+    stop pooling silently with genuine ones.
+  - [ ] Still open: making the numbers themselves meaningful under frame generation — a generated
+    frame is not a rendered frame, so avg FPS, 1% lows and stutter counts all describe something
+    other than what they claim. Needs a product decision (exclude generated frames from the summary?
+    report both rates?), not just a plumbing change.
 - [ ] 22.7 Packaging — **partially blocked on out-of-band credentials.**
   - [x] NSIS installer (per-user install), bundled sidecar + license resource; `cargo tauri build`
     runs in CI and produced a working installer locally

@@ -2,7 +2,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { frameSampleSchema } from "@heimdall/shared";
 
-import { parseAnyCapture } from "./index";
+import { computeRunSummary, parseAnyCapture } from "./index";
 import { parsePresentMon } from "./presentmon";
 import { readFixture } from "./testing/fixtures";
 import { expectClose, unwrapOk } from "./testing/assertions";
@@ -13,7 +13,7 @@ describe("parsePresentMon — v1 (§8)", () => {
   it("parses MsBetweenPresents/TimeInSeconds with no sensors and no hardware", () => {
     const { value, warnings } = parseOk("presentmon/v1-basic.csv");
     expect(value.source).toBe("presentmon");
-    expect(value.parserVersion).toBe("presentmon@1.1.0");
+    expect(value.parserVersion).toBe("presentmon@1.2.0");
     expect(value.hardware).toBeUndefined();
     expect(value.frames).toHaveLength(10);
     expect(value.frames[0]).toEqual({ timeMs: 0, frameTimeMs: 10 });
@@ -36,8 +36,23 @@ describe("parsePresentMon — v2 (§8, CPU/GPU busy)", () => {
   it("captures CPUBusy/GPUBusy as bottleneck fields", () => {
     const { value, warnings } = parseOk("presentmon/v2-basic.csv");
     expect(value.frames).toHaveLength(10);
-    expectClose(value.frames[0], { timeMs: 0, frameTimeMs: 10, cpuBusyMs: 6, gpuBusyMs: 9.5 });
-    expectClose(value.frames[4], { timeMs: 40, frameTimeMs: 30, cpuBusyMs: 20, gpuBusyMs: 29 });
+    // `generated: false` — this fixture HAS a FrameType column and every row
+    // reads `Application`, so "not generated" is an observation here, not an
+    // absence of one (§22.11).
+    expectClose(value.frames[0], {
+      timeMs: 0,
+      frameTimeMs: 10,
+      cpuBusyMs: 6,
+      gpuBusyMs: 9.5,
+      generated: false,
+    });
+    expectClose(value.frames[4], {
+      timeMs: 40,
+      frameTimeMs: 30,
+      cpuBusyMs: 20,
+      gpuBusyMs: 29,
+      generated: false,
+    });
     // Telemetry columns are opt-in and absent here → warning, not error.
     const missing = warnings.find((w) => w.code === "missing-sensors");
     expect(missing?.fields).toEqual(
@@ -63,6 +78,7 @@ describe("parsePresentMon — v2 (§8, CPU/GPU busy)", () => {
       gpuClockMhz: 2520,
       gpuPowerW: 210,
       vramUsedMb: 7800,
+      generated: false,
     });
     expect(warnings.find((w) => w.code === "missing-sensors")).toBeUndefined();
     for (const frame of value.frames) {
@@ -316,5 +332,46 @@ describe("Heimdall-supplied telemetry columns (§22.2)", () => {
     // GPU and skew every average built on it.
     expect(parsed.capture.frames[0]?.gpuLoadPct).toBeUndefined();
     expect(parsed.capture.frames[1]?.gpuLoadPct).toBe(73.5);
+  });
+});
+
+/**
+ * "We looked and saw none" vs "we never looked" (§22.11).
+ *
+ * These are different claims and the parser must keep them apart: the server
+ * derives `generatedFrameTech` from this, and collapsing them made a
+ * frame-generated run report as "no frame generation" at roughly double its
+ * real rendering rate.
+ */
+describe("frame-generation evidence (§22.11)", () => {
+  it("records false when a frame-type column says the frame was a real present", () => {
+    const { value } = parseOk("presentmon/v2-basic.csv");
+    for (const frame of value.frames) {
+      expect(frame.generated).toBe(false);
+    }
+  });
+
+  it("leaves it undefined when the format carries no frame-type column at all", () => {
+    // v1 has no FrameType column, so nothing is known either way — and
+    // `undefined` is what tells the server not to assert `none`.
+    const { value } = parseOk("presentmon/v1-basic.csv");
+    for (const frame of value.frames) {
+      expect(frame.generated).toBeUndefined();
+    }
+  });
+
+  it("still records true for a genuinely generated frame", () => {
+    const csv = [
+      "Application,ProcessID,FrameType,CPUStartTime,FrameTime",
+      ...Array.from({ length: 10 }, (_, i) =>
+        `game.exe,1,${i % 2 === 0 ? "Application" : "AMD AFMF"},${i * 10},10`,
+      ),
+    ].join("\n");
+    const parsed = parseAnyCapture(new TextEncoder().encode(csv));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.capture.frames[0]?.generated).toBe(false);
+    expect(parsed.capture.frames[1]?.generated).toBe(true);
+    expect(computeRunSummary(parsed.capture.frames).generatedFramePct).toBeCloseTo(0.5, 10);
   });
 });

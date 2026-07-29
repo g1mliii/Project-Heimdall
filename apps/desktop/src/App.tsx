@@ -177,6 +177,10 @@ export function App() {
       visibility: form.visibility,
       ...(detected === null ? {} : { hardware: detected.hardware }),
       methodology,
+      // Declared, because the capture cannot show it (§22.11). Omitted when
+      // the user did not answer, so the server records `unknown` rather than
+      // an unearned `none`.
+      ...(form.frameGeneration === "" ? {} : { frameGeneration: form.frameGeneration }),
       transport: createDesktopTransport(state.environment.apiBaseUrl),
       signPayload: createSigner(),
       onProgress: (progress) => {
