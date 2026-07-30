@@ -8,6 +8,8 @@ use serde::Serialize;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
+    /// Windows only: there is no bundled sidecar on Linux to be missing.
+    #[cfg_attr(not(windows), allow(dead_code))]
     #[error("the bundled PresentMon sidecar is missing or could not start: {0}")]
     Sidecar(String),
 

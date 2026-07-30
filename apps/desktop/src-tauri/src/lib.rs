@@ -13,6 +13,12 @@ mod crash;
 mod driver;
 mod env;
 mod error;
+// Windows-only in effect: PresentMon supplies no GPU telemetry so the client
+// samples PDH counters itself (§22.2), whereas MangoHud logs its own columns.
+// Compiled everywhere for its pure aggregation tests and for `GpuTelemetry`,
+// which `stream.rs` needs on both platforms — so off Windows the sampler and its
+// PDH helpers have no caller, which is the intended state.
+#[cfg_attr(not(windows), allow(dead_code))]
 mod gpu_telemetry;
 mod hardware;
 mod hotkey;

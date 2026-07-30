@@ -9,6 +9,9 @@
 //! capture.
 
 use crate::error::{AppError, AppResult};
+// `MemoryModule` is only reachable through WMI, so the non-Windows stub has no
+// use for it.
+#[cfg_attr(not(windows), allow(unused_imports))]
 use crate::hardware::{self, HardwareSnapshot, MemoryModule, MethodologyFacts};
 use crate::presentmon::capture_tool;
 use crate::stream::CaptureTarget;

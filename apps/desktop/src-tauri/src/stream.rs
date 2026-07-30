@@ -192,12 +192,6 @@ impl CaptureBuffer {
         self.frames
     }
 
-    /// Total bytes retained so far — the watcher's progress signal.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    pub fn retained_bytes(&self) -> usize {
-        self.bytes
-    }
-
     /// The complete capture as the CSV bytes `parseAnyCapture` expects.
     ///
     /// A trailing partial line is dropped: a half-written row would fail the

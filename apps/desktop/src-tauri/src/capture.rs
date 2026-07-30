@@ -47,7 +47,12 @@ pub const EVENT_ARMED: &str = "capture://armed";
 pub const EVENT_STARTED: &str = "capture://started";
 pub const EVENT_ROWS: &str = "capture://rows";
 pub const EVENT_ENDED: &str = "capture://ended";
+// Coalescing bounds for the PresentMon sidecar's stdout, which emits one event
+// per CSV row. The Linux watcher needs neither: its own 500 ms poll is already
+// far coarser than any batch window these would impose.
+#[cfg_attr(not(windows), allow(dead_code))]
 const ROW_BATCH_INTERVAL: Duration = Duration::from_millis(50);
+#[cfg_attr(not(windows), allow(dead_code))]
 const ROW_BATCH_MAX: usize = 256;
 const STREAM_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -83,7 +88,10 @@ pub struct CaptureArmed {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum CaptureStart {
-    /// Rows are flowing.
+    /// Rows are flowing. Produced by the Windows backend, whose sidecar is up by
+    /// the time `start_capture` returns; on Linux this state is reached later,
+    /// through the `capture://started` event rather than the command's result.
+    #[cfg_attr(not(windows), allow(dead_code))]
     Started(CaptureStarted),
     /// Waiting for the user to start MangoHud's log. Only the Linux backend
     /// produces this; the variant and its payload still compile everywhere so
