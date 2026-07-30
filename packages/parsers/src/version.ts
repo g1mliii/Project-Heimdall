@@ -9,7 +9,15 @@ import type { CaptureSource } from "@heimdall/shared";
 
 export const PARSER_VERSIONS = {
   capframex: "1.0.0",
-  presentmon: "1.0.0",
+  // 1.1.0: GPU utilization/clock/power/VRAM are reported as POLLED, not
+  // frame-aligned (they always were; the parser used to claim otherwise), and
+  // the Heimdall client's own PDH-sampled columns are recognized.
+  // 1.2.0: a frame-type column that reads `Application` now records
+  // `generated: false` rather than leaving it undefined — a faithful
+  // transcription of the cell, NOT evidence that no frames were generated. An
+  // all-`Application` column is what an uninstrumented driver produces
+  // (§22.11), so only an observed `true` carries information.
+  presentmon: "1.2.0",
   mangohud: "1.0.0",
 } as const satisfies Record<CaptureSource, string>;
 

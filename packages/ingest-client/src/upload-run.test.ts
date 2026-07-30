@@ -19,6 +19,7 @@ import {
 } from "@heimdall/shared";
 import {
   uploadCapture,
+  uploadCaptureBytes,
   type UploadFailure,
   type UploadProgress,
   type UploadTransport,
@@ -26,7 +27,7 @@ import {
 
 const FIXTURES = path.resolve(
   import.meta.dirname,
-  "../../../../../packages/parsers/fixtures",
+  "../../parsers/fixtures",
 );
 const BENCHMARK_SET_ID = "57ba4bd4-8b3e-4a2b-a0d0-92fb48367d5d";
 const BENCHMARK_SET_SECRET = "a".repeat(43);
@@ -238,7 +239,9 @@ describe("uploadCapture engine", () => {
     expect(createBody.methodologyManifest).toMatchObject({
       resolution: "2560x1440",
       captureProfile: "presentmon-2.x",
-      frameGeneration: "none",
+      // Nothing was declared and the capture observed no generated frame, which
+      // is not evidence that there was none (§22.11) — so `unknown`.
+      frameGeneration: "unknown",
       hags: "unknown",
     });
     // The fixture's Runtime is DXGI, which names the present runtime rather than
@@ -441,6 +444,152 @@ describe("uploadCapture engine", () => {
       game: "Test Game",
       visibility: "unlisted",
       transport,
+    });
+    expect(result).toMatchObject({ ok: false, code: "upload-failed" });
+  });
+});
+
+/**
+ * Host-agnostic entry point (§22.1): the desktop client hands the engine raw
+ * PresentMon CSV bytes and a signer, with no `File` anywhere in the flow.
+ */
+describe("uploadCaptureBytes (desktop entry point)", () => {
+  function fixtureBytes(relative: string): Uint8Array {
+    return new Uint8Array(readFileSync(path.join(FIXTURES, relative)));
+  }
+
+  it("accepts raw bytes and produces the same create payload as uploadCapture", async () => {
+    const fromBytes: TransportLog = {};
+    const fromFile: TransportLog = {};
+    const relative = "capframex/csv/nvidia-full-sensors.csv";
+    const options = { game: "Test Game", visibility: "unlisted" } as const;
+
+    const bytesResult = await uploadCaptureBytes(fixtureBytes(relative), {
+      ...options,
+      transport: mockTransport(fromBytes),
+    });
+    const fileResult = await uploadCapture(fixtureFile(relative), {
+      ...options,
+      transport: mockTransport(fromFile),
+    });
+
+    expect(bytesResult.ok, JSON.stringify(bytesResult)).toBe(true);
+    expect(fileResult.ok).toBe(true);
+    expect(fromBytes.createBody).toEqual(fromFile.createBody);
+    expect(fromBytes.putBytes).toEqual(fromFile.putBytes);
+  });
+
+  it("signs the exact Parquet bytes it PUTs, before the create request (§22.3)", async () => {
+    const log: TransportLog = {};
+    const order: string[] = [];
+    let signed: Uint8Array | undefined;
+    const transport = mockTransport(log);
+    const fetchSpy = vi.mocked(transport.fetch);
+
+    const result = await uploadCaptureBytes(fixtureBytes("presentmon/v2-basic.csv"), {
+      game: "Test Game",
+      visibility: "unlisted",
+      hardware: { gpu: "Radeon RX 7900 XTX", cpu: "Ryzen 7 7800X3D" },
+      transport,
+      signPayload: async (parquet) => {
+        order.push("sign");
+        // Copy: the caller must not depend on the buffer staying live.
+        signed = parquet.slice();
+        return "c2lnbmF0dXJl";
+      },
+      onProgress: (p) => {
+        if (p.stage === "creating") order.push("creating");
+      },
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(order).toEqual(["sign", "creating"]);
+    expect(signed).toEqual(log.putBytes);
+    expect(finalizeRunRequestSchema.parse(log.finalizeBody).signature).toBe("c2lnbmF0dXJl");
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("omits the signature field entirely when the signer declines", async () => {
+    const log: TransportLog = {};
+    const result = await uploadCaptureBytes(fixtureBytes("presentmon/v2-basic.csv"), {
+      game: "Test Game",
+      visibility: "unlisted",
+      transport: mockTransport(log),
+      signPayload: async () => undefined,
+    });
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    expect(log.finalizeBody).not.toHaveProperty("signature");
+  });
+
+  it("declares unknown, not none, when the capture cannot report frame type", async () => {
+    const log: TransportLog = {};
+    // CapFrameX carries no frame-type column at all, so nothing is known.
+    // Saying `none` here would assert absence from absence of evidence — the
+    // bug that let a frame-generated run report at twice its real rate.
+    await uploadCaptureBytes(fixtureBytes("capframex/csv/nvidia-full-sensors.csv"), {
+      game: "Test Game",
+      visibility: "unlisted",
+      transport: mockTransport(log),
+    });
+    expect(createRunRequestSchema.parse(log.createBody).generatedFrameTech).toBe("unknown");
+  });
+
+  it("passes the uploader's declaration through when there is no evidence", async () => {
+    const log: TransportLog = {};
+    await uploadCaptureBytes(fixtureBytes("capframex/csv/nvidia-full-sensors.csv"), {
+      game: "Test Game",
+      visibility: "unlisted",
+      frameGeneration: "fsr3",
+      transport: mockTransport(log),
+    });
+    expect(createRunRequestSchema.parse(log.createBody).generatedFrameTech).toBe("fsr3");
+  });
+
+  it("keeps the declaration when a FrameType column reads Application throughout", async () => {
+    const log: TransportLog = {};
+    // v2-basic HAS a FrameType column, all `Application` — which is exactly
+    // what an uninstrumented driver produces (§22.11). An RX 9070 XT with FSR
+    // frame generation on wrote 14,241 such rows, so the column's presence
+    // must not be allowed to overrule the uploader and re-manufacture `none`.
+    await uploadCaptureBytes(fixtureBytes("presentmon/v2-basic.csv"), {
+      game: "Test Game",
+      visibility: "unlisted",
+      frameGeneration: "fsr3",
+      transport: mockTransport(log),
+    });
+    expect(createRunRequestSchema.parse(log.createBody).generatedFrameTech).toBe("fsr3");
+  });
+
+  it("declares unknown, never none, for an undeclared capture that saw no generated frame", async () => {
+    const log: TransportLog = {};
+    await uploadCaptureBytes(fixtureBytes("presentmon/v2-basic.csv"), {
+      game: "Test Game",
+      visibility: "unlisted",
+      transport: mockTransport(log),
+    });
+    expect(createRunRequestSchema.parse(log.createBody).generatedFrameTech).toBe("unknown");
+  });
+
+  it("records none only because the uploader declared it", async () => {
+    const log: TransportLog = {};
+    await uploadCaptureBytes(fixtureBytes("presentmon/v2-basic.csv"), {
+      game: "Test Game",
+      visibility: "unlisted",
+      frameGeneration: "none",
+      transport: mockTransport(log),
+    });
+    expect(createRunRequestSchema.parse(log.createBody).generatedFrameTech).toBe("none");
+  });
+
+  it("a signer failure is a typed failure, not a throw", async () => {
+    const result = await uploadCaptureBytes(fixtureBytes("presentmon/v2-basic.csv"), {
+      game: "Test Game",
+      visibility: "unlisted",
+      transport: mockTransport({}),
+      signPayload: async () => {
+        throw new Error("signing key unavailable");
+      },
     });
     expect(result).toMatchObject({ ok: false, code: "upload-failed" });
   });

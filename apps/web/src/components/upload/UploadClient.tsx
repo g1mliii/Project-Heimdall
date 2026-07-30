@@ -4,7 +4,7 @@
  * Upload/ingest flow (§11.1–§11.4, §11.8) — production port of the
  * design/ui_kits/web/extras.jsx UploadPage reference: idle → parsing →
  * done, plus the per-file batch flow where one bad file never blocks the
- * rest. All heavy lifting lives in lib/upload/upload-run.ts; this component
+ * rest. All heavy lifting lives in @heimdall/ingest-client; this component
  * is state + tokens + @heimdall/ui primitives only.
  */
 
@@ -24,7 +24,7 @@ import {
   Stat,
   Switch,
 } from "@heimdall/ui";
-import { uploadCapture } from "@/lib/upload/upload-run";
+import { uploadCapture } from "@heimdall/ingest-client";
 import { getOrCreateBrowserBenchmarkSet } from "@/lib/upload/benchmark-set";
 import type {
   UploadFailure,
@@ -32,8 +32,16 @@ import type {
   UploadProgress,
   UploadResult,
   UploadSuccess,
-} from "@/lib/upload/upload-run";
-import { MAX_INDEXED_METADATA_TEXT_LENGTH, type MethodologyManifest } from "@heimdall/shared";
+} from "@heimdall/ingest-client";
+import {
+  FRAME_GENERATION_OPTIONS,
+  MAX_INDEXED_METADATA_TEXT_LENGTH,
+  RAY_TRACING_OPTIONS,
+  SCENE_TYPE_OPTIONS,
+  UPSCALER_OPTIONS,
+  type GeneratedFrameTech,
+  type MethodologyManifest,
+} from "@heimdall/shared";
 import {
   ArrowRightIcon,
   CheckIcon,
@@ -179,6 +187,12 @@ export function UploadClient({ authEnabled = false }: { authEnabled?: boolean })
   const [settingsPreset, setSettingsPreset] = React.useState("");
   const [graphicsApi, setGraphicsApi] = React.useState("");
   const [upscaler, setUpscaler] = React.useState<MethodologyManifest["upscaler"]>("unknown");
+  // Declared, not detected (§22.11). No capture format we parse reports frame
+  // type reliably — an AMD run with frame generation on presents roughly twice
+  // as many frames and every one looks like a real present — so without an
+  // answer here the server can only record `unknown`.
+  const [frameGeneration, setFrameGeneration] =
+    React.useState<GeneratedFrameTech | "">("");
   const [rayTracing, setRayTracing] = React.useState<MethodologyManifest["rayTracing"]>("unknown");
   const [capFps, setCapFps] = React.useState("");
   const [vsync, setVsync] = React.useState(false);
@@ -250,6 +264,7 @@ export function UploadClient({ authEnabled = false }: { authEnabled?: boolean })
       game,
       visibility,
       ...(methodology === undefined ? {} : { methodology }),
+      ...(frameGeneration === "" ? {} : { frameGeneration }),
       ...benchmarkSet,
       onProgress: (progress) =>
         setMode((prev) =>
@@ -282,6 +297,7 @@ export function UploadClient({ authEnabled = false }: { authEnabled?: boolean })
             game,
             visibility,
             ...(methodology === undefined ? {} : { methodology }),
+            ...(frameGeneration === "" ? {} : { frameGeneration }),
             ...benchmarkSet,
           });
           if (result.ok) {
@@ -421,11 +437,7 @@ export function UploadClient({ authEnabled = false }: { authEnabled?: boolean })
                 label="Scene type"
                 value={sceneType}
                 onChange={(event) => setSceneType(event.target.value as MethodologyManifest["sceneType"])}
-                options={[
-                  { value: "benchmark-scene", label: "Benchmark scene" },
-                  { value: "gameplay", label: "Gameplay" },
-                  { value: "freeform", label: "Freeform" },
-                ]}
+                options={SCENE_TYPE_OPTIONS}
                 disabled={busy}
               />
               <Input
@@ -450,24 +462,27 @@ export function UploadClient({ authEnabled = false }: { authEnabled?: boolean })
                 label="Upscaler"
                 value={upscaler}
                 onChange={(event) => setUpscaler(event.target.value as MethodologyManifest["upscaler"])}
-                options={[
-                  { value: "unknown", label: "Unknown" },
-                  { value: "none", label: "Off" },
-                  { value: "dlss", label: "DLSS" },
-                  { value: "fsr", label: "FSR" },
-                  { value: "xess", label: "XeSS" },
-                ]}
+                options={UPSCALER_OPTIONS}
+                disabled={busy}
+              />
+              <Select
+                label="Frame generation"
+                hint="Capture logs cannot detect this reliably"
+                value={frameGeneration}
+                onChange={(event) =>
+                  setFrameGeneration(event.target.value as GeneratedFrameTech | "")
+                }
+                // "Not sure" is this form's own unanswered sentinel — the web
+                // hub omits the field rather than declaring it. The values
+                // themselves come from the shared table.
+                options={[{ value: "", label: "Not sure" }, ...FRAME_GENERATION_OPTIONS]}
                 disabled={busy}
               />
               <Select
                 label="Ray tracing"
                 value={rayTracing}
                 onChange={(event) => setRayTracing(event.target.value as MethodologyManifest["rayTracing"])}
-                options={[
-                  { value: "unknown", label: "Unknown" },
-                  { value: "off", label: "Off" },
-                  { value: "on", label: "On" },
-                ]}
+                options={RAY_TRACING_OPTIONS}
                 disabled={busy}
               />
               <Input

@@ -32,6 +32,8 @@ import { DiagnosticsCard } from "./DiagnosticsCard";
 import { HardwareCard } from "./HardwareCard";
 import { BenchmarkSetCard } from "./BenchmarkSetCard";
 import { IncompleteProfileCard } from "./IncompleteProfileCard";
+import { ClaimRunCard } from "./ClaimRunCard";
+import { clearClaimHandoff, consumeClaimHandoff } from "./claim-handoff";
 import styles from "./RunPageClient.module.css";
 
 export type FramesLoader = (
@@ -94,15 +96,27 @@ export function RunPageClient({
   run,
   benchmarkSet,
   loadFrames = defaultFramesLoader,
+  claimable = false,
 }: {
   run: Run;
   benchmarkSet?: BenchmarkSetStats | null;
   loadFrames?: FramesLoader;
+  /**
+   * Whether the server-side row is still unowned. The plaintext token itself
+   * stays in the browser fragment/tab and never crosses the server-component
+   * boundary.
+   */
+  claimable?: boolean;
 }) {
   const [frames, setFrames] = React.useState<FramesState>({ kind: "loading" });
   const [attempt, setAttempt] = React.useState(0);
   const [unit, setUnit] = React.useState<ChartUnit>("ms");
   const [busyOverlay, setBusyOverlay] = React.useState(false);
+  const [claimToken, setClaimToken] = React.useState<string>();
+
+  React.useEffect(() => {
+    setClaimToken(consumeClaimHandoff(run.id, claimable));
+  }, [run.id, claimable]);
 
   // The manifest verdict, derived once: it gates both the overlay control and
   // whether the busy columns are worth decoding at all.
@@ -166,6 +180,16 @@ export function RunPageClient({
   return (
     <main id="main-content" tabIndex={-1} className={styles.page}>
       <RunHeader run={run} />
+      {claimToken === undefined ? null : (
+        <ClaimRunCard
+          runId={run.id}
+          token={claimToken}
+          onConsumed={() => {
+            clearClaimHandoff(run.id);
+            setClaimToken(undefined);
+          }}
+        />
+      )}
       <RunStatTiles summary={run.summary} />
 
       <div className={styles.mainGrid}>

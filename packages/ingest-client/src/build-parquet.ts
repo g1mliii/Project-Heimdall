@@ -1,12 +1,17 @@
 /**
- * Browser-side Parquet writer (§11.1).
+ * Client-side Parquet writer (§11.1).
  *
  * DECISION (recorded per §11.1 "pick one and record it"): frames are written
  * client-side with `hyparquet-writer` — pure JS, tens of KB — instead of the
  * multi-MB `parquet-wasm`/Arrow WASM stack, and read back server-side with
- * `hyparquet` (see lib/jobs/verify-run.ts). Same DOUBLE/BOOLEAN column
+ * `hyparquet` (see apps/web lib/jobs/verify-run.ts). Same DOUBLE/BOOLEAN column
  * contract on both sides (@heimdall/shared parquet.ts), so the §11.5 server
  * recompute is bit-identical to the client's summary for honest uploads.
+ *
+ * This is also why the desktop client (§22.1) builds its Parquet in the webview
+ * with this same function rather than a Rust parquet crate: the bytes the
+ * desktop signs are then byte-identical in shape to what the verify worker
+ * reads.
  *
  * Still loaded via dynamic import so the writer stays off every non-upload
  * bundle path.

@@ -6,7 +6,7 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
-import { uploadCapture } from "../src/lib/upload/upload-run";
+import { uploadCapture } from "@heimdall/ingest-client";
 
 // Load .env BEFORE reading any env var — a base URL set there must win.
 const envFile = path.resolve(import.meta.dirname, "..", "..", "..", ".env");

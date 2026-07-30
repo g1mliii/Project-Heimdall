@@ -60,6 +60,24 @@ export default function PrivacyPage() {
         </P>
       </Section>
 
+      <Section title="Desktop capture client">
+        <P>
+          Heimdall Capture, the Windows client, reads a fuller snapshot than a browser upload can:
+          exact VRAM, the marketing driver version, your memory&apos;s configured and rated speeds,
+          the OS build, the game monitor&apos;s resolution, and whether hardware-accelerated GPU
+          scheduling is on. That is what lets it diagnose things a log file cannot show — RAM left
+          below its rated speed, for one. It is also more identifying, so it is treated exactly like
+          any other snapshot: attached to the run, deleted with the run.
+        </P>
+        <P>
+          Beyond that snapshot and the frame data, the client sends nothing. There is no telemetry
+          and no analytics. Your raw capture never leaves the machine — only the derived frame data
+          is uploaded, the same as in the browser. If the app crashes it writes one plain-text log
+          on your own disk and offers to open a pre-filled bug report in your browser; nothing is
+          sent unless you press submit.
+        </P>
+      </Section>
+
       <Section title="Account data">
         <P>
           If you sign in, your email and display handle are managed by Clerk, our auth provider.
@@ -107,9 +125,12 @@ export default function PrivacyPage() {
 
       <Section title="Signing is tamper-evidence, not proof">
         <P>
-          Our desktop client (once shipped) signs upload payloads, but Heimdall is open source — a
-          signing key can be extracted. We record signature validity as evidence only; it is never
-          used as an anti-cheat gate, and we never advertise it as one.
+          The desktop client signs the frame data it uploads, but Heimdall is open source and every
+          copy of the installer carries the same key — so anyone can extract it. A valid signature
+          means the payload came from something that looks like an unmodified client, and nothing
+          stronger. We record it as evidence only; it is never used as an anti-cheat gate, and we
+          never advertise it as one. The signature covers the frame data, not the hardware and
+          settings declared alongside it.
         </P>
       </Section>
 

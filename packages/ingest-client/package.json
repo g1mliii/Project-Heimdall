@@ -1,0 +1,32 @@
+{
+  "name": "@heimdall/ingest-client",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared §11 ingest protocol client — create → PUT → finalize. One implementation for the web hub and the desktop capture client.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@heimdall/parsers": "workspace:*",
+    "@heimdall/shared": "workspace:*",
+    "hyparquet-writer": "0.15.6"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.12.4",
+    "eslint": "10.4.0",
+    "hyparquet": "1.26.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.59.4",
+    "vitest": "4.1.7"
+  }
+}

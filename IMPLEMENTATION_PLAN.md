@@ -40,10 +40,10 @@ missing sensors; visibility × validation gates every aggregate).
 | Object storage | Cloudflare R2 | Raw per-frame Parquet (`runs/{id}/{nonce}.parquet`); `exports/` prefix reserved for Phase 11 video |
 | Analytics DB | ClickHouse (**Phase 12** — env vars stubbed, `infra/clickhouse/` empty until then) | Cross-run/population analytics too heavy for Postgres |
 | Auth | Clerk (**Phase 8** — env keys stubbed in `.env.example`) | Accounts, private runs, run management, verified-reviewer tier |
-| Desktop client | Tauri 2 (Rust) — **Phase 9+**, `apps/desktop` is empty scaffolding | Bundled Intel PresentMon (Windows), MangoHud watcher (Linux/SteamOS), global hotkey, Ed25519-signed uploads |
+| Desktop client | Tauri 2 (Rust) — Windows shipped in **Phase 9**, `apps/desktop` | Bundled Intel PresentMon (Windows), MangoHud watcher (Linux/SteamOS), global hotkey, Ed25519-signed uploads |
 | Parsing | `packages/parsers` — pure TS, runs in browser and server | Same code parses client-side (upload preview) and server-side (canonical recompute) |
 | Testing | Vitest (unit), Playwright (e2e + visual baseline), golden fixtures | Every parseable fixture has a hand-computed `*.expected.json` |
-| CI | GitHub Actions (`ci.yml`) | verify + migrations + e2e; Tauri job is a no-op until `Cargo.toml` lands (Phase 9, §0.8) |
+| CI | GitHub Actions (`ci.yml`, `release.yml`) | verify + migrations + e2e; Windows job runs cargo fmt/clippy/test and builds the Tauri bundle |
 | Monorepo | pnpm workspaces | `apps/*` + `packages/*` + `infra/*`; dependency minimum-age policy in `scripts/check-dependency-policy.mjs` |
 
 ---
@@ -52,7 +52,7 @@ missing sensors; visibility × validation gates every aggregate).
 
 ```text
 apps/web/              Next.js hub: pages (/, /upload, /runs/[id], /games/[slug]) + API routes
-apps/desktop/          Tauri 2 capture client — empty until Phase 9
+apps/desktop/          Tauri 2 Windows capture client (Phase 9) — React webview + Rust core
 apps/driver-curation/  scheduled driver-currency ingest (Phase 6.6)
 packages/shared/       zod schemas, types, visibility/integrity/comparability primitives, fixtures
 packages/parsers/      CapFrameX / PresentMon / MangoHud parsers, metrics, diagnostics rules
@@ -499,7 +499,8 @@ tokens `--chart-cpu-busy`/`--chart-gpu-busy`. API-vs-DOM spot-check of `runRespo
 every field now has a UI home except deliberate exclusions — `ownerId` (stripped at the wire,
 §20.3), `canonicalGpuId`/`canonicalCpuId` (internal linkage), `schemaVersion`/`parserVersion`/
 `framesObjectKey` (internal provenance/plumbing), `signatureValid` (deferred to Phase 9 — browser
-uploads carry no signatures, so showing "unsigned" on every run would mislead), and
+uploads carry no signatures, so showing "unsigned" on every run would mislead; **shipped in Phase 9
+as §22.8**, rendered only when a signature was actually checked), and
 `summary.frameTimeP50Ms` (functional home: the client stutter threshold). Gates: `pnpm verify`
 exit 0; functional e2e green (20/20).
 
@@ -518,40 +519,197 @@ commit — local Windows renders are not valid baselines.
 
 ## Phase 9: Desktop Capture Client — Windows (Tauri 2 + PresentMon) — §21–§22
 
-> The second product surface. `apps/desktop` is empty scaffolding; the CI Tauri job un-no-ops the
-> moment `Cargo.toml` lands (`§0.8`). Visual target: `design/ui_kits/desktop/CaptureClient.jsx`
-> (ready → capturing → complete, `§22.4`). Parser fixture work: live-client confirmation of
-> PresentMon cells per `packages/parsers/fixtures/README.md` (Phase 9 §22).
+> The second product surface. Runbook: [`docs/desktop-client.md`](docs/desktop-client.md).
+> Visual target: `design/ui_kits/desktop/CaptureClient.jsx` (onboarding → ready → capturing →
+> complete, `§22.4`). The §11 ingest protocol was extracted to `packages/ingest-client` so the web
+> hub and the desktop client speak it from one implementation.
 
-- [ ] 21.1 Tauri 2 scaffold in `apps/desktop` (Rust backend + web frontend using `@heimdall/ui`
+- [x] 21.1 Tauri 2 scaffold in `apps/desktop` (Rust backend + web frontend using `@heimdall/ui`
   tokens); wire into pnpm workspace + CI (Tauri job now real)
-- [ ] 21.2 Bundle Intel PresentMon as a sidecar binary; license/attribution; version pinned and
+- [x] 21.2 Bundle Intel PresentMon as a sidecar binary; license/attribution; version pinned and
   recorded in the capture provenance (`§2.2`)
-- [ ] 21.3 Global hotkey (default Shift+F11) start/stop; ~60 s guidance; tray presence
-- [ ] 22.1 Capture pipeline: spawn PresentMon against the foreground game process → stream CSV →
+- [x] 21.3 Global hotkey (default Shift+F11) start/stop; ~60 s guidance; tray presence
+- [x] 22.1 Capture pipeline: spawn PresentMon against the foreground game process → stream CSV →
   parse with `@heimdall/parsers` (same code as web) → live frame count + trace during capture
-- [ ] 22.2 Hardware snapshot (GPU/driver/CPU/RAM speed + rated speed/OS/resolution, HAGS state) —
+- [x] 22.2 Hardware snapshot (GPU/driver/CPU/RAM speed + rated speed/OS/resolution, HAGS state) —
   **declared by the client**, per the `§8`/`§16a` contract in `packages/parsers` (columns.ts /
   presentmon.ts say these must come from the client, never inferred)
-- [ ] 22.3 Ed25519 payload signing (key in client; server records `signature_valid` via
+- [x] 22.3 Ed25519 payload signing (key in client; server records `signature_valid` via
   `HEIMDALL_SIGNING_PUBLIC_KEY`) — tamper-evidence only, per `§0.5`; never marketed as anti-cheat
-- [ ] 22.4 Three-state UI per the kit: Ready (hardware + hotkey) → Capturing (timer, live trace,
+- [x] 22.4 Four-state UI per the kit: Ready (hardware + hotkey) → Capturing (timer, live trace,
   frame count) → Complete (smoothness tiles, "payload signed" note, upload & share / discard)
-- [ ] 22.5 Upload through the existing ingest API (presigned Parquet PUT); signed-in via Clerk
+- [x] 22.5 Upload through the existing ingest API (presigned Parquet PUT); signed-in via Clerk
   device flow or browser handoff; anonymous fallback keeps the management-token path
-- [ ] 22.6 Real-capture fixture sweep: land real PresentMon (and CapFrameX-NVIDIA launch-wedge)
-  exports and flip `SENSOR_AVAILABILITY` cells to `verified-real` via procedure 16a.1
-- [ ] 22.7 Packaging: signed Windows installer, auto-update channel, crash reporting (opt-in)
+- [ ] 22.6 Real-capture fixture sweep — **needs a real game capture on owned hardware.**
+  Scope was narrowed to AMD by decision; NVIDIA/Intel cells stay `synthetic` and are documented as
+  open contributions in `packages/parsers/fixtures/README.md`.
+  - The AMD PresentMon cell is ALREADY `verified-real` (`presentmon/v2-amd-real.csv`) for
+    `CPUBusy`/`GPUBusy`, so the original "extend it with GPU telemetry" plan is **not achievable**:
+    `GPUUtilization`/`GPUFrequency`/`GPUPower`/`GPUMemUsed` are not emitted by ANY PresentMon
+    console CLI. Tested three ways on Windows 11 / RX 9070 XT — bundled 2.4.1 alone, 2.4.1 with
+    Intel's full MSI installed and `PresentMonSharedService` running, and Intel's own 2.5.1 console
+    CLI with the service running — identical header each time, and 2.5.1's `--help` has no telemetry
+    switch. The columns belong to the PresentMon UI app, not the console tool, so shipping or
+    recommending the full install would buy nothing. Recorded in `presentmon.rs`,
+    `docs/desktop-client.md` and the fixtures README rather than left as a puzzle.
+  - Frame generation turned out to be unreachable too, on AMD at least. `--track_frame_type` needs
+    "application and/or driver instrumentation using Intel-PresentMon provider" (its own help), which
+    AMD's driver does not emit: an RX 9070 XT running Cyberpunk 2077 with FSR AND frame generation
+    enabled produced 14,241 rows, every one `Application`. Wanted-list item #9 now needs a title or
+    driver that instruments for Intel's provider. Land the fixture + hand-computed `*.expected.json`
+    via procedure 16a.1 when one is available.
+- [x] 22.11 **Integrity gap: frame-generated runs are indistinguishable from genuine ones.** Because
+  `generatedFramePct` recomputes to 0 (22.6), `reconcileGeneratedFrameTech` resolves such a run to
+  `generatedFrameTech: none` — and a client declaration cannot override it, by design, since the
+  recomputed percentage is treated as decisive. The Cyberpunk capture above averaged 244 FPS with
+  frame generation on. If the driver inserts interpolated frames after present, that figure is an
+  honest app-side rate; if they reach the swapchain, the run overstates real rendering by ~2x. The
+  capture cannot tell us which — the frame-time distribution is unimodal. Either way such a run
+  currently pools with genuine non-generated runs in comparability buckets (`frameGeneration` is a
+  key field). Needs a decision: trust a declaration for this field, find a detectable signature, or
+  state the limitation on the run page. Not a Phase 9 regression — it predates the desktop client and
+  affects browser uploads equally — but the desktop client is the first thing that makes it common.
+  - **MEASURED, and it is the bad case.** Same scene, same settings, frame generation the only
+    variable, on an RX 9070 XT in Cyberpunk 2077:
+
+    | | frames | duration | avg FPS | min frame time |
+    |---|---|---|---|---|
+    | FG on | 14,241 | 58.4 s | **243.9** | 0.32 ms |
+    | FG off | 7,839 | 60.0 s | **130.7** | 3.11 ms |
+
+    Ratio 1.87x. The interpolated frames ARE in the present stream: PresentMon counts them, labels
+    every one `Application`, and the pipeline then records `generatedFrameTech: none`. So such a run
+    reports ~244 FPS, pools with genuine 244 FPS runs, and has its 1% lows and stutter counts
+    computed over interpolated frames.
+  - Recommended fix, consistent with how this codebase treats every other unknowable: distinguish
+    "the format reported zero generated frames" from "the format cannot report generated frames at
+    all". `reconcileGeneratedFrameTech` currently derives `none` from a recomputed 0, which asserts
+    absence from absence of evidence — the same mistake HAGS (`unknown` when the registry value is
+    missing) and `ramRatedSpeedMtps` (omitted unless genuinely known) deliberately avoid. A capture
+    with no frame-type column should resolve to `unknown`, not `none`. That is a semantics change to
+    `@heimdall/shared` + the verify worker affecting existing rows, so it wants its own phase, not a
+    tail-end edit to Phase 9.
+  - Sub-millisecond presents (min 0.32 ms vs 3.11 ms) appear only with FG on and may be a usable
+    detection signal, but one machine and one title is not enough to calibrate a rule on.
+  - **Implementation path, and it is smaller than it looks.** `frame.generated` is only ever set to
+    `true` (frames.ts) — never `false` — so a capture with no `FrameType` column and one whose every
+    row reads `Application` both serialize to all-null. The evidence distinction is lost before the
+    server sees it. But `generated` is ALREADY a nullable BOOLEAN in the v1 Parquet schema, so no
+    migration is needed:
+    1. Parser: write `generated: false` when the frame-type column exists and reads `Application`;
+       leave it undefined only when the format carries no such column. Parser version bump.
+    2. `reconcileGeneratedFrameTech`: let the recompute overrule a declaration only where it
+       OBSERVED generated frames. A zero count is not evidence of absence.
+    3. Collect frame generation in the desktop Run details form and on the web upload page.
+    4. `none` is then only ever recorded because a human declared it; an undeclared run is
+       `unknown`.
+  - **The "did we look" bit does not exist, and the first attempt at this shipped a fix that did
+    not fix the measured case.** The plan above originally routed the decision through "was any
+    non-null `generated` value read". But the client passes `--track_frame_type`, so the AMD capture
+    above HAS a `FrameType` column — 14,241 rows of `Application`. Column presence therefore read as
+    evidence, the recompute overruled the uploader's `fsr3`, and the run went out as `none` again.
+    An all-`Application` column is exactly what an uninstrumented driver produces, so it can never
+    be distinguished from no column at all; only an observed `true` carries information. The rule
+    now keys on that, and lives in `@heimdall/shared` because the client applied one copy at create
+    and the verify worker another at finalize — they had already drifted (the client kept a declared
+    `none` the server rewrote).
+  - Consequence accepted: pre-existing rows carry a `none` that the OLD rule manufactured, and
+    nothing in the data distinguishes it from a declared one, so a reprocess leaves it as `none`.
+    Scrubbing those is a data decision (a targeted reprocess), not something the reconcile rule can
+    infer.
+  - Trusting the declaration here is not a departure. `upscaler`, `rayTracing`, `settingsPreset` and
+    `scene` are already unverifiable client declarations AND comparability key fields.
+    `frameGeneration` is the odd one out in being server-derived, and that special case is precisely
+    what manufactures the false `none`.
+  - **DONE** — `presentmon@1.2.0`. What this does and does not fix: the reported FPS of a
+    frame-generated run is still inflated, because the interpolated frames really are in the present
+    stream and nothing distinguishes them. What no longer happens is the pipeline MANUFACTURING the
+    claim that a run was not frame-generated. A declared run keeps its declaration; an undeclared
+    one carries `unknown`. A run whose uploader declares `none` while frame generation is on is
+    still indistinguishable from an honest one — that needs §22.13, not a frame-type column.
+  - [ ] Still open: making the numbers themselves meaningful under frame generation — a generated
+    frame is not a rendered frame, so avg FPS, 1% lows and stutter counts all describe something
+    other than what they claim. Scheduled as **Phase 9.6**, together with physics-based detection of
+    undeclared frame generation.
+- [ ] 22.7 Packaging — **partially blocked on out-of-band credentials.**
+  - [x] NSIS installer (per-user install), bundled sidecar + license resource; `cargo tauri build`
+    runs in CI and produced a working installer locally
+  - [x] Crash reporting, opt-in by construction: a panic hook writes one local plain-text log and
+    the UI offers a pre-filled GitHub issue. No SDK, no dependency, nothing sent automatically
+  - [x] Release pipeline authored: `.github/workflows/release.yml` on `desktop-v*` tags, plus the
+    `tauri.release.conf.json` overlay that keeps signing/updater config out of local builds
+  - [ ] **Authenticode signing** — needs an Azure Trusted Signing account (`signCommand` is wired,
+    credentials are not). Until then installers are unsigned and SmartScreen warns
+  - [ ] **Auto-update channel live** — signed check/install/restart flow and `latest.json`
+    publishing are wired, but `plugins.updater.pubkey` is a placeholder until the updater keypair
+    is generated
+- [x] 22.8 Surface `signature_valid` on the run report (§11.7) — a neutral badge when the payload
+  matched, a `warn` badge when it did not, and **nothing at all** when no signature was checked.
+  This closes the Phase 8.6 deferral: browser uploads carry no signature, so an "unsigned" stamp on
+  every run would have read as a defect rather than the norm
+- [x] 22.9 GPU utilization + VRAM from Windows performance counters (§22.2). PresentMon supplies
+  neither (see 22.6), so the client samples `\GPU Engine(*)\Utilization Percentage` and
+  `\GPU Process Memory(*)\Local Usage` itself — no elevation, no vendor SDK, no extra install —
+  attributes them to the captured pid, and appends them to the capture stream as
+  `HeimdallGpuUtilization`/`HeimdallGpuMemUsedMb`. Verified against live counters on an RX 9070 XT.
+  - Parser `presentmon@1.1.0`: GPU utilization/clock/power/VRAM are now reported as **polled**, not
+    frame-aligned. They always were — the parser used to claim otherwise, which would have let the
+    per-frame `cpu-bottleneck` rule draw conclusions from a ~200 ms average. `SourceColumns` gained
+    `periodicSensors` to express it.
+  - GPU **clock** and **power** stay unavailable: PDH has no counters for them; they need vendor
+    SDKs (ADLX / NVML / IGCL). Deferred, not forgotten.
+- [ ] 22.10 (optional, needs data) A periodic-sensor bottleneck rule. `cpu-bottleneck` deliberately
+  refuses polled data, so GPU load from 22.9 does not feed it. A rule that reasons over sampling
+  intervals instead of frames is legitimate but is a DIFFERENT statistic — its thresholds cannot be
+  inherited from the frame-aligned rule and need real captures to calibrate. Would land as its own
+  rule code with its own confidence label (§16b.2), never as a flag on the existing one.
 - **Verify**: hotkey capture on a real game → shareable link in <10 s after stop; run page shows
   declared hardware + `signature_valid: true`
+  - [ ] Not yet performed. Requires a signed build (for `signature_valid` to be non-null) and a real
+    game session on Windows. Hardware collection *was* verified against real silicon during
+    implementation — DXGI/WMI/registry return correct GPU, driver, VRAM, CPU, RAM speeds, OS and
+    resolution on a Ryzen 9800X3D / RX 9070 XT machine
 - **Regression**:
-  - [ ] Rust unit tests: PresentMon spawn/stream/teardown, hotkey lifecycle, signing
-  - [ ] Parser golden tests for any new real fixtures (hand-verified expected numbers)
-  - [ ] Ingest e2e: signed desktop payload accepted; tampered payload records `signature_valid: false` **but is still accepted** (evidence, not gate)
-  - [ ] CI builds the Tauri app on Windows runner
+  - [x] Rust unit tests (38): sidecar argv + CSV stream framing, hotkey state contract, driver/WMI/
+    HAGS mapping, payload custody, Ed25519 sign → verify
+  - [x] Desktop JS tests (57, must pass on ubuntu): capture state machine, live frame-time readout,
+    transport adapter against a mocked `invoke`, methodology completeness, all four kit screens
+  - [x] `packages/ingest-client` tests (20): `uploadCaptureBytes` parity with `uploadCapture`, and
+    the `signPayload` hook signing the exact bytes it PUTs
+  - [x] Ingest e2e: signed payload accepted; tampered payload records `signature_valid: false`
+    **but is still accepted** (`jobs.test.ts` "records signature_valid as evidence"). Backed by a
+    cross-language golden vector — the Rust client's exact signature + SPKI bytes are pinned in
+    `signing.rs` and re-verified by Node in `verify-run.unit.test.ts`, so an encoding drift cannot
+    silently turn every desktop run into `signature_valid: false`
+  - [ ] Parser golden tests for any new real fixtures (hand-verified expected numbers) — with 22.6
+  - [x] CI builds the Tauri app on Windows runner (`cargo tauri build`, NSIS bundle)
 
 ### Phase 9 Regression Gate
-- Desktop capture → upload → report works end-to-end on Windows; CI green including Tauri build
+- [x] `pnpm verify` exit 0 across the widened workspace (8 projects); `cargo fmt --check`,
+  `cargo clippy -D warnings -D clippy::perf` and `cargo test` clean; `pnpm check:deps` passes
+- [ ] CI green including the Tauri build — the workflow is written and the bundle builds locally,
+  but it has not yet run on a GitHub Windows runner
+- [ ] Desktop capture → upload → report works end-to-end on Windows (the **Verify** run above)
+
+**Outstanding, all needing action outside this repo:**
+1. **A capture from an FSR3 / AFMF / DLSS-FG title** (22.6). Everything else about the fixture
+   sweep is either done or established as unreachable — see 22.6 above.
+2. **An Azure Trusted Signing account** (or equivalent Authenticode certificate). Purely an
+   account-and-billing step; `signCommand` and the CI env are already wired.
+3. **The Ed25519 payload keypair.** Run
+   `pnpm --filter @heimdall/desktop exec node scripts/generate-signing-key.mjs --out <path outside the repo>`,
+   then private half → repo secret `HEIMDALL_SIGNING_PRIVATE_KEY`, public half →
+   `HEIMDALL_SIGNING_PUBLIC_KEY` on the server. The script's PKCS#8 output is pinned by a Rust test,
+   so it cannot fail at release time.
+4. **The Tauri updater keypair.** `tauri signer generate` → public key into
+   `tauri.release.conf.json`, private key + password into CI secrets.
+5. **A production hub origin** for `HEIMDALL_API_BASE_URL`, plus a real bundle identifier —
+   `dev.heimdall.capture` is a placeholder and is baked into installer upgrade paths, so it must
+   change before the first signed release, not after.
+6. Carried from Phase 8.6: `@visual` baselines. Now a one-click job — run the
+   **Regenerate visual baselines** workflow (`workflow_dispatch`), which generates the ubuntu
+   `-chromium-linux.png` set on the runner that asserts them, re-asserts against a clean run, and
+   opens a PR with the diffs to review.
 
 ---
 
@@ -570,6 +728,58 @@ commit — local Windows renders are not valid baselines.
 
 ### Phase 9.5 Regression Gate
 - Linux capture parity with Windows; both clients on the same ingest contract
+
+---
+
+## Phase 9.6: Frame Generation — honest numbers and physics-based evidence — §22.11
+
+> Phase 9 stopped a frame-generated run from *claiming* it was not generated (§22.11). It did not
+> make its numbers mean anything. A generated frame is not a rendered frame, so avg FPS, 1% lows and
+> stutter counts on such a run all describe something other than what they say — measured on an
+> RX 9070 XT, Cyberpunk 2077 reported 243.9 avg FPS with frame generation on against 130.7 with it
+> off. This phase is about the numbers, and about detecting the case where nobody declared anything.
+
+- [ ] 22.12 **Dual summary where frame-type evidence exists.** Compute a second summary over
+  non-generated frames only, and offer a toggle on the run report: "how fast did it render" vs "how
+  smooth did it feel". Both are legitimate answers to different questions, which is why this is a
+  toggle and not a replacement.
+  - Only available where the capture reports frame type. AMD frame generation carries no evidence
+    (§22.6), so the toggle is absent there — stated, not silently omitted.
+  - Presentation only, at least initially. `frameGeneration` is already a comparability key, so
+    declared-FG and declared-non-FG runs are in different buckets regardless; this does not need to
+    touch pooling.
+  - Open question to settle first: does the rendered-frame rate belong in the stored summary, or is
+    it derived at read time? Storing it changes `summaryMismatch` and the client/server recompute
+    contract, so it is not a free addition.
+
+- [ ] 22.13 **Physics-based frame-generation evidence (research first, rule second).** Detect
+  undeclared frame generation from WITHIN a run, not by comparing it to an aggregate.
+  - The signal: sub-millisecond presents. The two captures above showed a 0.32 ms minimum with
+    frame generation on versus 3.11 ms with it off. A 0.32 ms present is not a plausible rendered
+    frame at that resolution.
+  - Why within-run and not ratio-vs-average: an aggregate baseline is already contaminated by the
+    undeclared runs it is meant to find; it is inert below the §17.4/§18.2 cold-start threshold, so
+    it does nothing at current data volume; and 2x is not a clean constant (DLSS4 multi-frame
+    generation is 3–4x, and the multiplier drifts with base framerate). Comparability keys control
+    resolution/preset/upscaler/scene, but settings vary within a preset and a CPU-bound section
+    moves FPS more than frame generation does.
+  - **Research task before any rule ships:** characterise the signature across vendors, titles and
+    base framerates. One machine and one title cannot calibrate a threshold. Belongs with the
+    §18.2 telemetry-physics layer, which already exists to flag physically inconsistent runs.
+  - **Evidence, never an accusation.** Consistent with §0.5: annotate the run, surface it for
+    review. Telling an honest uploader their run looks like cheating is a worse failure than
+    missing a dishonest one, and a false positive is unfalsifiable from the uploader's side.
+
+- **Verify**: a frame-generated capture with frame-type evidence reports both rates and the toggle
+  switches between them; a run with sub-millisecond presents is annotated, not rejected
+- **Regression**:
+  - [ ] Dual-summary golden fixtures (hand-computed, both rates)
+  - [ ] Toggle absent — and said to be absent — when the capture carries no frame-type evidence
+  - [ ] Physics rule fires on a known-FG capture and stays silent on the matched non-FG one
+
+### Phase 9.6 Regression Gate
+- No run reports a number it cannot support; undeclared frame generation is visible as evidence
+  without any run being auto-rejected for it
 
 ---
 
@@ -685,5 +895,7 @@ commit — local Windows renders are not valid baselines.
 - [ ] Cloudflare in front of the web app: TLS Full (Strict), HSTS, WAF baseline, bot mitigation (Phase 8.5 §8.5.6)
 - [ ] Clerk production instance + webhook secret (Phase 8)
 - [ ] `INTERNAL_JOBS_TOKEN` generated + platform cron hitting `/api/internal/jobs/drain`
-- [ ] `HEIMDALL_SIGNING_PUBLIC_KEY` published once the desktop client ships (Phase 9)
+- [ ] `HEIMDALL_SIGNING_PUBLIC_KEY` published once the desktop client ships (Phase 9) — the value
+  is **publishable by design**; publishing it is what lets anyone verify a run's signature
+  independently. Generate the pair per `docs/desktop-client.md`.
 - [ ] ClickHouse credentials (Phase 12)

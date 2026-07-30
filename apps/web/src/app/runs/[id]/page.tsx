@@ -23,7 +23,9 @@ interface RunPageProps {
   params: Promise<{ id: string }>;
 }
 
-export async function generateMetadata({ params }: RunPageProps): Promise<Metadata> {
+export async function generateMetadata({
+  params,
+}: Pick<RunPageProps, "params">): Promise<Metadata> {
   const { id } = await params;
   const run = await getVisibleRun(id);
   return {
@@ -41,10 +43,17 @@ export default async function RunPage({ params }: RunPageProps) {
   const { id } = await params;
   const run = await getVisibleRun(id);
   if (!run) notFound();
+
   const benchmarkSet = await readVisibleBenchmarkSet(run, await getCurrentViewer());
   // §20.3: ownerId (a raw Clerk user id) never reaches the client component.
   // Same mechanism as GET /api/runs/:id — the wire schema is the one place
   // that decides which fields cross the boundary, so the two can't drift.
   const publicRun = runResponseSchema.parse(run);
-  return <RunPageClient run={publicRun} benchmarkSet={benchmarkSet} />;
+  return (
+    <RunPageClient
+      run={publicRun}
+      benchmarkSet={benchmarkSet}
+      claimable={!run.ownerId}
+    />
+  );
 }

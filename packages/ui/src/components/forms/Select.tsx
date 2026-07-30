@@ -14,7 +14,8 @@ export interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElemen
   /** Helper text below the control. */
   hint?: React.ReactNode;
   /** Options as strings or {value,label}. Ignored if children are passed. */
-  options?: (string | SelectOption)[];
+  /** `readonly` so callers can pass a shared, frozen option table directly. */
+  options?: readonly (string | SelectOption)[];
 }
 
 /** Styled native select for hardware/game/resolution filters. */

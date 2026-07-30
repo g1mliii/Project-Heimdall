@@ -228,7 +228,22 @@ export function parseFrameRows(input: FrameRowsInput): ParseResult<FrameSample[]
     }
     if (input.generatedColumn !== undefined) {
       const frameType = cells[input.generatedColumn]?.trim() ?? "";
-      if (frameType !== "" && frameType.toLowerCase() !== "application") frame.generated = true;
+      // Record what the column SAID, including `Application` → `false`, rather
+      // than only ever setting `true`. It is the faithful transcription of the
+      // cell and nothing more.
+      //
+      // Do NOT build an inference on the `false` case (§22.11). A `FrameType`
+      // column is only populated where something instrumented Intel's
+      // provider, and AMD's driver does not: an RX 9070 XT with frame
+      // generation ON produced 14,241 rows, every one `Application`. So a
+      // column of all-`false` is indistinguishable from an uninstrumented one,
+      // and "no generated frame here" is never evidence that none exist —
+      // `reconcileGeneratedFrameTech` keys on generated frames being SEEN, and
+      // an earlier attempt to key it on this column's presence manufactured
+      // exactly the false `generatedFrameTech: none` it was written to prevent.
+      if (frameType !== "") {
+        frame.generated = frameType.toLowerCase() !== "application";
+      }
     }
 
     baselineMs ??= rawTimeMs;

@@ -9,23 +9,10 @@
 
 import { Card, Diagnostic } from "@heimdall/ui";
 import {
+  COMPARABILITY_FIELD_LABELS as FIELD_LABEL,
   missingComparabilityProfileFields,
-  type ComparabilityProfileField,
   type MethodologyManifest,
 } from "@heimdall/shared";
-
-/** The upload form's own labels, so the fix names the field to fill in. */
-const FIELD_LABEL: Record<ComparabilityProfileField, string> = {
-  resolution: "Resolution",
-  scene: "Scene or route",
-  settingsPreset: "Settings preset",
-  upscaler: "Upscaler",
-  rayTracing: "Ray tracing",
-  graphicsApi: "Graphics API",
-  vsync: "VSync",
-  vrr: "VRR",
-  sceneType: "Scene type",
-};
 
 function sentenceList(labels: readonly string[]): string {
   if (labels.length <= 1) return labels[0] ?? "";

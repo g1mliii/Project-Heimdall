@@ -1,0 +1,20 @@
+{
+  "$schema": "gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Production capability set for the capture window. Localhost HTTP access is deliberately absent; release builds can contact only the Heimdall hub.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-hide",
+    "core:window:allow-start-dragging",
+    "store:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://heimdall.dev/*" }
+      ]
+    }
+  ]
+}

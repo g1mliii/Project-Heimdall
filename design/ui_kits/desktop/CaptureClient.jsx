@@ -1,4 +1,4 @@
-// Heimdall Desktop — Tauri 2 capture client. States: ready → capturing → complete.
+// Heimdall Desktop — Tauri 2 capture client. States: onboarding → ready → capturing → complete.
 const DIcon = ({ n, size, style, ...p }) => <i data-lucide={n} style={{ width: size || 18, height: size || 18, ...style }} {...p} />;
 
 function HwRow({ k, v }) {
@@ -10,9 +10,70 @@ function HwRow({ k, v }) {
   );
 }
 
+// Run details (§16c) — the nine profileRequired comparability fields. Without
+// them the run uploads fine but never pools into aggregates, so the Complete
+// screen has to collect what detection cannot. Prefilled where the client
+// knows the answer; graphicsApi is a picker because PresentMon reports the
+// present runtime as DXGI for both DX11 and DX12 and the parser refuses to guess.
+function RunDetails({ open, onToggle, values, missing, onChange }) {
+  const field = (key, label, control) => (
+    <label key={key} style={{ display: 'grid', gap: 4 }}>
+      <span style={{ font: 'var(--type-caption)', color: missing.includes(key) ? 'var(--warn)' : 'var(--fg-3)' }}>
+        {label}{missing.includes(key) ? ' · needed to compare' : ''}
+      </span>
+      {control}
+    </label>
+  );
+  const set = (key) => (event) => onChange(key, event.target.value);
+  const input = (key, placeholder) => (
+    <input className="hd-input" value={values[key] ?? ''} placeholder={placeholder} onChange={set(key)} />
+  );
+  const select = (key, options) => (
+    <select className="hd-select" value={values[key] ?? ''} onChange={set(key)}>
+      <option value="">Select…</option>
+      {options.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+    </select>
+  );
+
+  return (
+    <div className="hd-card hd-card--inset" style={{ padding: 12, marginBottom: 12 }}>
+      <button
+        onClick={onToggle}
+        aria-expanded={open}
+        style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 8, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--fg-1)', font: 'var(--type-body-sm)' }}
+      >
+        <DIcon n={open ? 'chevron-down' : 'chevron-right'} size={16} />
+        Run details
+        {missing.length > 0 && <span className="hd-badge hd-badge--warn" style={{ marginLeft: 'auto', height: 18 }}>{missing.length} missing</span>}
+      </button>
+      {open && (
+        <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
+          <p style={{ font: 'var(--type-caption)', color: 'var(--fg-3)', margin: 0 }}>
+            Runs only pool into game and hardware aggregates when every field below matches.
+            Leave one blank and the run still uploads — it just stands alone.
+          </p>
+          {field('resolution', 'Resolution', input('resolution', '2560x1440'))}
+          {field('scene', 'Scene', input('scene', 'Built-in benchmark'))}
+          {field('sceneType', 'Scene type', select('sceneType', [['benchmark-scene', 'Benchmark scene'], ['gameplay', 'Gameplay'], ['freeform', 'Freeform']]))}
+          {field('settingsPreset', 'Settings preset', input('settingsPreset', 'Ultra'))}
+          {field('graphicsApi', 'Graphics API', select('graphicsApi', [['d3d12', 'DirectX 12'], ['d3d11', 'DirectX 11'], ['vulkan', 'Vulkan'], ['opengl', 'OpenGL']]))}
+          {field('upscaler', 'Upscaler', select('upscaler', [['none', 'None'], ['dlss', 'DLSS'], ['fsr', 'FSR'], ['xess', 'XeSS'], ['unknown', 'Unknown']]))}
+          {field('rayTracing', 'Ray tracing', select('rayTracing', [['off', 'Off'], ['on', 'On'], ['unknown', 'Unknown']]))}
+          {field('vsync', 'V-Sync', select('vsync', [['true', 'On'], ['false', 'Off']]))}
+          {field('vrr', 'VRR / G-Sync / FreeSync', select('vrr', [['true', 'On'], ['false', 'Off']]))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CaptureClient() {
   const [state, setState] = React.useState('onboarding'); // onboarding | ready | capturing | complete
   const [sec, setSec] = React.useState(0);
+  const [detailsOpen, setDetailsOpen] = React.useState(false);
+  const [details, setDetails] = React.useState({ resolution: '2560x1440', sceneType: 'benchmark-scene' });
+  const missing = ['scene', 'settingsPreset', 'graphicsApi', 'upscaler', 'rayTracing', 'vsync', 'vrr']
+    .filter((key) => !details[key]);
 
   React.useEffect(() => { if (window.lucide) window.lucide.createIcons(); });
   React.useEffect(() => {
@@ -51,7 +112,7 @@ function CaptureClient() {
               </div>
             </div>
             <p style={{ font: 'var(--type-body-sm)', color: 'var(--fg-2)', marginBottom: 14 }}>
-              Heimdall captures with Intel PresentMon 2.3.1+, which runs without admin once your
+              Heimdall captures with Intel PresentMon 2.4.1, which runs without admin once your
               account is in the <strong style={{ color: 'var(--fg-1)' }}>Performance Log Users</strong> group.
             </p>
             <div className="hd-card hd-card--inset" style={{ padding: 14, marginBottom: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -152,6 +213,13 @@ function CaptureClient() {
         )}
         {state === 'complete' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <RunDetails
+              open={detailsOpen}
+              onToggle={() => setDetailsOpen((value) => !value)}
+              values={details}
+              missing={missing}
+              onChange={(key, value) => setDetails((current) => ({ ...current, [key]: value }))}
+            />
             <div className="hd-diag hd-diag--info" style={{ padding: '10px 12px' }}>
               <span className="hd-diag__icon"><DIcon n="shield-check" size={18} /></span>
               <div className="hd-diag__body"><span className="hd-diag__msg" style={{ color: 'var(--fg-2)' }}>Payload signed &amp; ready to upload.</span></div>

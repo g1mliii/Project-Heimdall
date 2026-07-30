@@ -18,12 +18,14 @@ export * from "./comparability";
 export * from "./capability";
 export * from "./graphics-api";
 export * from "./methodology";
+export * from "./methodology-options";
+export * from "./api-errors";
 export * from "./eligibility";
 export * from "./statistics";
 export * from "./assessment";
 export * from "./stream";
 
-export { PHYSICS } from "./integrity";
+export { PHYSICS, reconcileGeneratedFrameTech } from "./integrity";
 export {
   RUN_VISIBILITY,
   RUN_STATUS,

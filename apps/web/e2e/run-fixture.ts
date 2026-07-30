@@ -16,7 +16,7 @@ import {
 } from "@heimdall/parsers";
 import { makeSyntheticFrames, syntheticRunBase } from "@heimdall/shared";
 import type { Diagnostic, Run } from "@heimdall/shared";
-import { buildFramesParquet } from "../src/lib/upload/build-parquet";
+import { buildFramesParquet } from "@heimdall/ingest-client";
 
 export const E2E_RUN_ID = "run_e2e_fixture1";
 export const E2E_VRAM_RUN_ID = "run_e2e_vram_fixture";

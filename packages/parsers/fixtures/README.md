@@ -52,16 +52,52 @@ completes the §7.3 spike for that cell. Wanted, in priority order:
 4. **CapFrameX capture JSON** (NVIDIA / Intel remaining): AMD 1.8.6.2 now confirms
    `Info`, periodic `SensorData2`, and frame-aligned `CpuActive`/`GpuActive`.
 5. **CapFrameX CSV — German locale**: confirm `;` + decimal-comma export shape.
-6. **PresentMon 2.x with `--track_gpu`-style telemetry** (each vendor): AMD 2.4.1
-   now confirms millisecond `CPUStartTime` plus `CPUBusy`/`GPUBusy`; opt-in GPU
-   telemetry columns and the NVIDIA/Intel cells still need real exports.
+6. **PresentMon 2.x GPU telemetry** (`GPUUtilization`/`GPUFrequency`/`GPUPower`/
+   `GPUMemUsed`) — **not obtainable from any PresentMon console CLI.** Tested on
+   Windows 11 / RX 9070 XT three ways: bundled 2.4.1 alone, 2.4.1 with Intel's
+   full MSI installed and `PresentMonSharedService` running, and Intel's own
+   2.5.1 console CLI with the service running. Identical header every time, and
+   2.5.1's `--help` offers no telemetry switch, and Intel's own console-app
+   README documents only timing GPU metrics (`MsGPULatency`/`MsGPUTime`/
+   `MsGPUBusy`/`MsGPUWait`/`VideoBusy`). The columns belong to the PresentMon
+   *UI application*, not the console tool. `v2-gpu-telemetry.csv`
+   stays synthetic; a contributor would need an export from the UI app, whose
+   CSV shape is unverified here. The AMD cell's
+   millisecond `CPUStartTime` and frame-aligned `CPUBusy`/`GPUBusy` are already
+   confirmed; the NVIDIA/Intel cells still need real exports.
 7. **PresentMon 1.x** (any vendor): confirm header shape.
 8. **MangoHud** (NVIDIA / AMD / Intel): confirm `gpu_vram_used` unit (we
    assume GiB → ×1024 to MB), `ram` sysinfo unit (we assume MB above 256), and
    whether GPU strings can contain commas.
-9. **Any file with a frame-generation column** (DLSS3/FSR3 capture): no
-   confirmed column name exists yet, so the `generated` flag is never set and
-   `generatedFramePct` is always 0 — verifying this needs a real export.
+9. **Any file with a frame-generation column** (DLSS3/FSR3/AFMF capture) —
+   **still open, and harder than it looks.** `--track_frame_type` emits a
+   `FrameType` column, but its help states it "requires application and/or
+   driver instrumentation using Intel-PresentMon provider". AMD's driver does
+   not emit that provider: an RX 9070 XT running Cyberpunk 2077 with FSR AND
+   frame generation enabled produced 14,241 rows, every one `Application`.
+   A useful capture therefore needs a title or driver that instruments for
+   Intel's provider — realistically an Intel XeSS-FG title, or a game shipping
+   the PresentMon SDK. Until one lands, `generatedFramePct` is always 0 and
+   `generatedFrameTech` always resolves to `none`.
+
+### NVIDIA and Intel cells are open contributions
+
+Phase 9 shipped the desktop capture client, which makes producing a real
+PresentMon export a matter of pressing a hotkey — but only on the hardware you
+own. The project's own sweep was therefore **AMD only**, and the
+`presentmon.nvidia` / `presentmon.intel` cells (and the corresponding CapFrameX
+and MangoHud cells) remain `synthetic` by choice, not by oversight.
+
+This is a documented gap rather than a silent one: a `synthetic` cell means "we
+seeded this from vendor documentation and have never held the file in our
+hands", and every surface that reads the matrix says so. Nothing in the product
+claims otherwise.
+
+**If you have an NVIDIA or Intel GPU, this is the single highest-value thing you
+can contribute.** Capture a run with Heimdall Capture (or PresentMon directly),
+then follow the procedure below — it is deliberately short, and the
+flip-honesty test will tell you immediately if the evidence and the claim
+disagree.
 
 ### Provenance-flip procedure (canonical — 16a.1)
 

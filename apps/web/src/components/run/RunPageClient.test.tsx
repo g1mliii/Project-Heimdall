@@ -50,7 +50,11 @@ const failLoader =
   () =>
     Promise.resolve({ ok: false, code, message });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  window.sessionStorage.clear();
+  window.history.replaceState(null, "", "/");
+});
 
 describe("RunPageClient states", () => {
   it("shows a spinner while frames load", () => {
@@ -285,6 +289,27 @@ describe("RunHeader", () => {
     expect(screen.getByRole("button", { name: /Export video/ })).toBeDisabled();
   });
 
+  it("shows client-signature evidence only when the server actually checked one (§22.3)", () => {
+    // A desktop run whose payload matched its signature.
+    render(<RunHeader run={{ ...run, signatureValid: true }} />);
+    expect(screen.getByText("Client signature checks out")).toBeInTheDocument();
+    cleanup();
+
+    // A mismatch is evidence, not a verdict: the run is still Validated beside
+    // it, because that comes from the server recompute (§0.5).
+    render(<RunHeader run={{ ...run, signatureValid: false }} />);
+    expect(screen.getByText("Client signature mismatch")).toBeInTheDocument();
+    expect(screen.getByText("Validated")).toBeInTheDocument();
+    cleanup();
+
+    // Browser uploads carry no signature at all. Stamping "unsigned" on every
+    // one of those would read as a defect rather than the norm it is.
+    const unsigned: Run = { ...run };
+    delete unsigned.signatureValid;
+    render(<RunHeader run={unsigned} />);
+    expect(screen.queryByText(/Client signature/)).not.toBeInTheDocument();
+  });
+
   it("marks non-validated runs honestly and omits the tech badge for none", () => {
     const pending: Run = { ...run, status: "pending", generatedFrameTech: "none" };
     render(<RunHeader run={pending} />);
@@ -418,9 +443,16 @@ describe("RunHeader", () => {
   it("copies the share link and confirms", async () => {
     const writeText = vi.fn(() => Promise.resolve());
     Object.assign(navigator, { clipboard: { writeText } });
+    window.history.replaceState(
+      null,
+      "",
+      `/runs/${run.id}?view=chart&claim=query-secret#claim=fragment-secret`,
+    );
     render(<RunHeader run={run} />);
     await userEvent.click(screen.getByRole("button", { name: /Share/ }));
-    expect(writeText).toHaveBeenCalledWith(window.location.href);
+    expect(writeText).toHaveBeenCalledWith(
+      `${window.location.origin}/runs/${run.id}?view=chart`,
+    );
     expect(await screen.findByText("Link copied")).toBeInTheDocument();
   });
 });

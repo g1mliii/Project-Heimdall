@@ -18,6 +18,7 @@ import {
   graphicsApiLabel,
 } from "@/lib/format";
 import { CheckIcon, ClapperboardIcon, GitCompareIcon, ShareIcon } from "./icons";
+import { canonicalShareUrl } from "./claim-handoff";
 
 const TECH_LABELS: Record<Run["generatedFrameTech"], string | null> = {
   none: null,
@@ -66,6 +67,34 @@ function StatusBadge({ status }: { status: Run["status"] }) {
         </Badge>
       );
   }
+}
+
+/**
+ * Client-signature evidence (§0.5, §11.7, §22.3).
+ *
+ * Rendered ONLY when the server actually verified a signature — that is, when
+ * the run carried one and a public key was configured. Browser uploads carry no
+ * signature at all, and stamping "unsigned" on every one of those would read as
+ * a defect rather than as the norm it is.
+ *
+ * The copy is deliberately flat. A signature says the payload came from
+ * something that looks like an unmodified desktop client, and the key ships
+ * inside a downloadable binary, so it is extractable. It is evidence and never
+ * an acceptance gate — the run's own integrity verdict is the `Validated` badge
+ * beside this one, and it is derived from the server's recompute, not from
+ * this.
+ */
+function SignatureBadge({ signatureValid }: { signatureValid: Run["signatureValid"] }) {
+  if (signatureValid === undefined || signatureValid === null) return null;
+  return signatureValid ? (
+    <Badge tone="neutral" title="Signed by a desktop capture client. Tamper-evidence only — it is not proof the capture is genuine, and it never affects whether a run is accepted.">
+      Client signature checks out
+    </Badge>
+  ) : (
+    <Badge tone="warn" title="The payload did not match its signature. Recorded as evidence only — this run was still verified on its own merits by the server recompute.">
+      Client signature mismatch
+    </Badge>
+  );
 }
 
 const OWNER_ONLY_STATUS_NOTE: Partial<Record<Run["status"], string>> = {
@@ -127,7 +156,7 @@ export function RunHeader({ run }: { run: Run }) {
     try {
       // Throws (or is undefined) on insecure contexts, denied permission, or an
       // unfocused document — surface "Copy failed" instead of a silent no-op.
-      await navigator.clipboard.writeText(window.location.href);
+      await navigator.clipboard.writeText(canonicalShareUrl(window.location.href));
       setShareState("copied");
     } catch {
       setShareState("failed");
@@ -154,11 +183,16 @@ export function RunHeader({ run }: { run: Run }) {
             alignItems: "center",
             gap: "var(--space-2)",
             marginBottom: "var(--space-2)",
+            // A run can carry four badges (status, frame-gen tech, visibility,
+            // signature). At 375px that overflows the viewport unless the row
+            // is allowed to wrap.
+            flexWrap: "wrap",
           }}
         >
           <StatusBadge status={run.status} />
           {techLabel && <Badge tone="brand">{techLabel}</Badge>}
           <Badge tone="neutral">{VISIBILITY_LABELS[run.visibility]}</Badge>
+          <SignatureBadge signatureValid={run.signatureValid} />
         </div>
         {statusNote && (
           <p

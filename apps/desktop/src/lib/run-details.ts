@@ -1,0 +1,208 @@
+/**
+ * Run details — the declared methodology the Complete screen collects (§16c).
+ *
+ * The nine `profileRequired` comparability fields decide whether a run pools
+ * into game/hardware aggregates at all. Detection answers some of them —
+ * resolution from the display mode, HAGS and capture tool from the client — and
+ * cannot answer the rest: no amount of frame data reveals which settings preset
+ * was selected or whether VRR was on.
+ *
+ * `graphicsApi` is the one that has to be asked. PresentMon's `PresentRuntime`
+ * column names the PRESENT runtime, not the API — verified against a real
+ * PresentMon 2.4.1 capture on Windows, which writes `DXGI` for D3D titles, and
+ * DXGI is what every D3D10/11/12 title presents through. The parser therefore
+ * maps only values that name an API on their own (`d3d12`, `vulkan`, …) and
+ * degrades `DXGI` to undeclared rather than pooling DX11 and DX12 into one
+ * comparability bucket. So the picker is the only source for that distinction.
+ *
+ * Its values canonicalize to the same identities the parser emits (`d3d12` and
+ * `dx12` both collapse to `dx12`), so on the rare capture that DOES name an API
+ * the engine's detection can overwrite a declaration without splitting the run
+ * out of the bucket detection would have chosen.
+ *
+ * So the form exists, prefilled where the client genuinely knows, blank where
+ * it does not, and the gaps are named with the SAME helper the web hub's
+ * IncompleteProfileCard uses — one definition of "what is missing".
+ */
+
+import {
+  METHODOLOGY_MANIFEST_VERSION,
+  missingComparabilityProfileFields,
+  type ComparabilityProfileField,
+  type MethodologyManifest,
+  type RayTracingMode,
+  type SceneType,
+  type UpscalerMode,
+} from "@heimdall/shared";
+import type { GeneratedFrameTech } from "@heimdall/shared";
+// The option tables and gap labels live in @heimdall/shared: the web upload
+// form asks for the same fields with the same values, and two copies of the
+// vocabulary had already drifted apart.
+export {
+  COMPARABILITY_FIELD_LABELS as PROFILE_FIELD_LABELS,
+  FRAME_GENERATION_OPTIONS,
+  GRAPHICS_API_OPTIONS,
+  RAY_TRACING_OPTIONS,
+  SCENE_TYPE_OPTIONS,
+  UPSCALER_OPTIONS,
+} from "@heimdall/shared";
+import type { DeclaredHardware } from "./ipc";
+
+export type TriBoolean = "" | "true" | "false";
+
+export interface RunDetailsForm {
+  game: string;
+  visibility: "unlisted" | "public";
+  resolution: string;
+  scene: string;
+  sceneType: SceneType | "";
+  settingsPreset: string;
+  graphicsApi: string;
+  upscaler: UpscalerMode | "";
+  rayTracing: RayTracingMode | "";
+  vsync: TriBoolean;
+  vrr: TriBoolean;
+  /**
+   * Declared frame generation (§22.11). Not a `profileRequired` field, but it
+   * IS a comparability key, and PresentMon cannot see it: AMD's driver emits no
+   * frame-type evidence, so a run with frame generation on presents roughly
+   * twice as many frames and every one looks like a real present. Without a
+   * declaration the server can only record `unknown`.
+   */
+  frameGeneration: GeneratedFrameTech | "";
+}
+
+/**
+ * `private` is deliberately absent: it requires a signed-in owner at create
+ * time, which the claim handoff cannot provide (§20.2d). The owner flips it
+ * from /account after claiming, and the UI says so rather than offering a
+ * control that would fail.
+ */
+export const VISIBILITY_OPTIONS = [
+  { value: "unlisted", label: "Unlisted" },
+  { value: "public", label: "Public" },
+] as const;
+
+/**
+ * `vsync`/`vrr` are plain booleans on the manifest rather than an enum, so this
+ * is the form's own tri-state encoding rather than a shared vocabulary.
+ */
+export const BOOLEAN_OPTIONS = [
+  { value: "true", label: "On" },
+  { value: "false", label: "Off" },
+] as const;
+
+export const EMPTY_FORM: RunDetailsForm = {
+  game: "",
+  visibility: "unlisted",
+  resolution: "",
+  scene: "",
+  sceneType: "",
+  settingsPreset: "",
+  graphicsApi: "",
+  upscaler: "",
+  rayTracing: "",
+  vsync: "",
+  vrr: "",
+  frameGeneration: "",
+};
+
+/** Strip the `.exe` from a process name for a first guess at the game title. */
+export function gameNameFromProcess(process: string | undefined): string {
+  if (!process) return "";
+  return process.replace(/\.exe$/i, "").trim();
+}
+
+/**
+ * Seed the form from what the client actually detected. Only fields with real
+ * evidence behind them are filled — everything else stays blank so the missing
+ * list tells the truth.
+ */
+export function prefillForm(
+  detected: DeclaredHardware | null,
+  processName: string | undefined,
+): RunDetailsForm {
+  return {
+    ...EMPTY_FORM,
+    game: gameNameFromProcess(processName),
+    resolution: detected?.hardware.resolution ?? "",
+  };
+}
+
+/**
+ * Re-seed the form for a NEW capture without discarding what the user typed.
+ *
+ * The client keeps one form across captures, which is what makes a second run
+ * of the same scene one click instead of nine. The trap is that "the user typed
+ * this" and "we prefilled this last time" look identical in the form state, so a
+ * naive "keep every non-empty field" merge carries the PREVIOUS capture's game
+ * name onto the next one and silently mislabels the upload — a detected field is
+ * exactly the thing that should be re-detected.
+ *
+ * So the caller tracks which keys the user actually edited, and only those
+ * survive. Everything else comes fresh from detection.
+ */
+export function applyDetection(
+  current: RunDetailsForm,
+  edited: ReadonlySet<keyof RunDetailsForm>,
+  detected: DeclaredHardware | null,
+  processName: string | undefined,
+): RunDetailsForm {
+  const next = prefillForm(detected, processName);
+  for (const key of edited) {
+    // Per-key assignment: the union member types differ, and a spread of a
+    // filtered object loses the mapping between key and value type.
+    next[key] = current[key] as never;
+  }
+  return next;
+}
+
+/**
+ * Form → the methodology the ingest engine sends. Blank fields are OMITTED,
+ * never coerced to a default: a fabricated "none"/"off" would read as a
+ * declaration and pool the run with genuinely-declared runs it does not match.
+ *
+ * `framePacing` is the one exception the schema forces — `vsync`/`vrr` are
+ * required booleans on it — so the whole object is omitted until BOTH are
+ * answered.
+ */
+export function toMethodology(
+  form: RunDetailsForm,
+): Omit<MethodologyManifest, "version" | "frameGeneration"> | undefined {
+  const framePacing =
+    form.vsync === "" || form.vrr === ""
+      ? undefined
+      : { vsync: form.vsync === "true", vrr: form.vrr === "true" };
+
+  const manifest = {
+    ...(form.resolution.trim() ? { resolution: form.resolution.trim() } : {}),
+    ...(form.scene.trim() ? { scene: form.scene.trim() } : {}),
+    ...(form.sceneType ? { sceneType: form.sceneType } : {}),
+    ...(form.settingsPreset.trim() ? { settingsPreset: form.settingsPreset.trim() } : {}),
+    ...(form.graphicsApi ? { graphicsApi: form.graphicsApi } : {}),
+    ...(form.upscaler ? { upscaler: form.upscaler } : {}),
+    ...(form.rayTracing ? { rayTracing: form.rayTracing } : {}),
+    ...(framePacing ? { framePacing } : {}),
+  };
+
+  return Object.keys(manifest).length === 0
+    ? undefined
+    : (manifest as Omit<MethodologyManifest, "version" | "frameGeneration">);
+}
+
+/**
+ * Which comparability fields are still undeclared, via the shared helper — the
+ * same answer the run page will give after upload.
+ */
+export function missingFields(form: RunDetailsForm): ComparabilityProfileField[] {
+  const partial = toMethodology(form);
+  if (partial === undefined) return missingComparabilityProfileFields(undefined);
+  return missingComparabilityProfileFields({
+    version: METHODOLOGY_MANIFEST_VERSION,
+    ...partial,
+    // `framePacing` is required on the manifest type. When the form has not
+    // answered it, hand the helper a shape whose vsync/vrr are undefined so it
+    // reports them as missing rather than as a declared `false`.
+    framePacing: partial.framePacing ?? ({} as MethodologyManifest["framePacing"]),
+  } as MethodologyManifest);
+}

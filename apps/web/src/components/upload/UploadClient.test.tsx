@@ -11,7 +11,7 @@ const { uploadCapture, useUser } = vi.hoisted(() => ({
   useUser: vi.fn(() => ({ isSignedIn: false })),
 }));
 
-vi.mock("@/lib/upload/upload-run", () => ({ uploadCapture }));
+vi.mock("@heimdall/ingest-client", () => ({ uploadCapture }));
 // §20.2: the private-visibility option is Clerk-gated behind `authEnabled`.
 // Stub the hook rather than requiring a real <ClerkProvider> in tests.
 vi.mock("@clerk/nextjs", () => ({ useUser }));

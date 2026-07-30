@@ -205,7 +205,15 @@ export interface FrameParquetSummary {
   diagnosticsColumns: FrameParquetDiagnosticsColumns;
   /** Which of the 7 sensor fields carried ≥1 real value (§16a.3 manifest input). */
   presentSensors: CapabilitySensorField[];
-  /** True when any frame was marked engine-generated (§16a.3). */
+  /**
+   * True when any frame was marked engine-generated (§16a.3).
+   *
+   * Note what the FALSE case does NOT mean: not "this run has no generated
+   * frames". A `FrameType` column is only filled in where something instrumented
+   * Intel's provider, and AMD's driver does not — so an all-`Application`
+   * column is indistinguishable from no column at all (§22.11). Absence here is
+   * never evidence of absence; see `reconcileGeneratedFrameTech`.
+   */
   frameGenerationObserved: boolean;
 }
 

@@ -27,13 +27,33 @@ export interface SourceColumns {
   timeSeconds: readonly string[];
   /** Optional sensor columns; absent ones become a `missing-sensors` warning. */
   sensors: Partial<Record<SensorColumnField, readonly string[]>>;
+  /**
+   * Sensors this source POLLS on a timer rather than measuring per present
+   * (§16a.3). Being in a row does not make a reading frame-aligned: a value
+   * sampled every ~100–250 ms is simply repeated across whatever frames fall in
+   * that window, so it describes an interval, not the frame it sits beside.
+   *
+   * This matters because per-frame rules refuse polled data — `cpu-bottleneck`
+   * checks `frameAligned` before it will fire, precisely so a smoothed
+   * utilization average cannot be read as evidence about an individual frame.
+   * Listing a field here is what makes that refusal work.
+   */
+  periodicSensors?: readonly SensorColumnField[];
 }
 
-/** Row-based source columns are frame-aligned whenever they are present. */
+/**
+ * Per-source alignment verdict for every sensor column the source can carry.
+ *
+ * Row-based columns are frame-aligned by default — they are measured for the
+ * present they sit on — EXCEPT the ones the source declares as polled.
+ */
 export function frameAlignedSensorMap(
   columns: SourceColumns,
 ): Partial<Record<SensorColumnField, boolean>> {
-  return Object.fromEntries(Object.keys(columns.sensors).map((field) => [field, true]));
+  const periodic = new Set<string>(columns.periodicSensors ?? []);
+  return Object.fromEntries(
+    Object.keys(columns.sensors).map((field) => [field, !periodic.has(field)]),
+  );
 }
 
 export const CAPFRAMEX_COLUMNS: SourceColumns = {
@@ -81,12 +101,37 @@ export const PRESENTMON_V2_COLUMNS: SourceColumns = {
   sensors: {
     cpuBusyMs: ["cpubusy", "mscpubusy"],
     gpuBusyMs: ["gpubusy", "msgpubusy"],
-    gpuLoadPct: ["gpuutilization", "gpu%", "gpuusage"],
+    // `heimdall*` aliases are supplied by the Heimdall desktop client, which
+    // samples Windows GPU performance counters alongside the capture (§22.2).
+    // They are deliberately NOT spelled like PresentMon's own columns: the
+    // console application emits no GPU telemetry at all (confirmed against
+    // 2.4.1/2.5.1 and Intel's console-app README), so a `GPUUtilization` column
+    // in a file labelled PresentMon would misattribute our data to their tool.
+    gpuLoadPct: ["gpuutilization", "gpu%", "gpuusage", "heimdallgpuutilization"],
     gpuClockMhz: ["gpufrequency", "gpuclock"],
     gpuPowerW: ["gpupower"],
-    vramUsedMb: ["gpumemused", "gpumemusage"],
+    vramUsedMb: ["gpumemused", "gpumemusage", "heimdallgpumemusedmb"],
   },
+  // Every one of these is a polled sensor, whichever tool wrote it: PresentMon's
+  // own telemetry comes from its service on a timer, and the Heimdall client
+  // samples PDH counters on a timer. Only the busy/time columns above are
+  // measured per present.
+  periodicSensors: ["gpuLoadPct", "gpuClockMhz", "gpuPowerW", "vramUsedMb"],
 };
+
+/**
+ * Every lowercased header PresentMon uses to name a frame time, v2 and v1.
+ *
+ * Exported so the desktop client's live readout reads the same alias list the
+ * parser does instead of carrying a third copy: this file documents itself as
+ * the place where a vendor rename is a one-line alias addition, and a copy in
+ * the webview would quietly blank the live chart while the upload path kept
+ * working.
+ */
+export const FRAME_TIME_COLUMN_ALIASES: readonly string[] = [
+  ...PRESENTMON_V2_COLUMNS.frameTimeMs,
+  ...PRESENTMON_V1_COLUMNS.frameTimeMs,
+];
 
 /**
  * Pinned PresentMon capture profiles (§16a.2). We recognize exactly these
