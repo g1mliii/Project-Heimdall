@@ -102,7 +102,12 @@ const FIELDS: readonly FieldSpec[] = [
   { key: "vsync", label: PROFILE_FIELD_LABELS.vsync, profile: "vsync", options: BOOLEAN_OPTIONS },
   {
     // Not profileRequired, but a comparability key the capture cannot reveal —
-    // AMD frame generation is invisible to PresentMon (§22.11).
+    // and it is unreachable on BOTH backends (§22.11). PresentMon's FrameType
+    // column needs driver instrumentation AMD does not emit, and MangoHud logs
+    // no frame-type column at all, so every Linux capture carries no evidence
+    // whatsoever. FSR3 and AFMF are common on Linux, so this field does real
+    // work there. The note below is therefore unconditionally true, which is
+    // why it is not platform-branched.
     key: "frameGeneration",
     label: "Frame generation",
     options: FRAME_GENERATION_OPTIONS,

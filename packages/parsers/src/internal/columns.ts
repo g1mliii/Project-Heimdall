@@ -187,4 +187,15 @@ export const MANGOHUD_COLUMNS: SourceColumns = {
     vramUsedMb: ["gpu_vram_used"],
     cpuLoadPct: ["cpu_load"],
   },
+  // Every MangoHud sensor is polled, not measured per present. The overlay
+  // samples them on its own timer (sysfs/amdgpu, NVML, hwmon) and the logger
+  // writes whatever the last sample was next to each row — so a value describes
+  // the sampling interval it came from, not the frame it sits beside.
+  //
+  // MangoHud carries no per-present timing columns at all (no CPUBusy/GPUBusy
+  // equivalent), which is why this list is the whole sensor set rather than a
+  // subset of it. That is what makes `cpu-bottleneck` and the other per-frame
+  // rules refuse this data (§16a.3) — correctly: a smoothed utilization average
+  // is not evidence about an individual frame.
+  periodicSensors: ["gpuLoadPct", "gpuClockMhz", "gpuPowerW", "vramUsedMb", "cpuLoadPct"],
 };

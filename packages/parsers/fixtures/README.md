@@ -23,6 +23,7 @@ notes below.
 | `presentmon/v2-amd-real.csv` | PresentMon 2.4.1 | anonymized real capture | AMD v2 output; proves `CPUStartTime` is milliseconds and busy fields are frame-aligned |
 | `presentmon/v2-v1-metrics-amd-real.csv` | PresentMon 2.4.1 `--v1_metrics` | anonymized real capture | compatibility profile with `msGPUActive` and presentation semantics |
 | `mangohud/nvidia-basic.csv` | MangoHud | synthetic | sysinfo block + `elapsed` ns timestamps |
+| `mangohud/amd-mesa-basic.csv` | MangoHud | synthetic | same frame shape as `nvidia-basic`, with a Mesa `driver` sysinfo value — pins that the Linux driver-currency contract reads `Mesa <version>` verbatim (`docs/driver-currency-curation.md`) |
 | `malformed/*` | — | synthetic | each maps to one typed `ParseErrorCode` |
 
 ## Frame-time design (how the expected numbers were computed)
@@ -69,6 +70,12 @@ completes the §7.3 spike for that cell. Wanted, in priority order:
 8. **MangoHud** (NVIDIA / AMD / Intel): confirm `gpu_vram_used` unit (we
    assume GiB → ×1024 to MB), `ram` sysinfo unit (we assume MB above 256), and
    whether GPU strings can contain commas.
+   Phase 9.5 shipped the Linux capture client, so producing one of these is now
+   a matter of arming Heimdall and pressing MangoHud's log hotkey — on hardware
+   you own. **All three cells are still `synthetic`:** no real MangoHud export
+   has been landed, so the two unit assumptions above remain assumptions and are
+   still marked as such in `mangohud.ts`. Do not flip a cell on the strength of
+   the parser agreeing with itself; the flip needs the file.
 9. **Any file with a frame-generation column** (DLSS3/FSR3/AFMF capture) —
    **still open, and harder than it looks.** `--track_frame_type` emits a
    `FrameType` column, but its help states it "requires application and/or

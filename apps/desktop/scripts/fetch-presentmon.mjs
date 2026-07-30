@@ -36,6 +36,7 @@ const SHA256 = "d74183e7ae630f72cd3690be0373ecbfdc6cbb86578148aab8fa2a7166068f34
 /** Tauri resolves the sidecar by this exact name. Windows x64 is the only target. */
 const TARGET_TRIPLE = "x86_64-pc-windows-msvc";
 
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = path.join(HERE, "..", "src-tauri", "binaries");
 const OUT_FILE = path.join(OUT_DIR, `presentmon-${TARGET_TRIPLE}.exe`);
@@ -59,7 +60,31 @@ async function assertVersionPinsAgree() {
   }
 }
 
+// Runs on every platform, deliberately, and BEFORE the skip below: a drift
+// between this script and `PRESENTMON_VERSION` would mislabel every Windows
+// capture's provenance, and that is worth catching on whichever runner notices
+// it first. The check reads two files and needs no Windows.
 await assertVersionPinsAgree();
+
+/**
+ * Off Windows there is nothing to fetch, and that is not a degraded state.
+ *
+ * The Linux client bundles no capture tool: it watches the logs the user's own
+ * MangoHud writes (§23.1), and `bundle.externalBin` names the sidecar only in
+ * tauri.windows.conf.json. Downloading a Win32 executable onto a Linux runner
+ * would place a file nothing reads.
+ *
+ * This exits successfully rather than being dropped from `pnpm vendor`, because
+ * that command still has to fetch the webfonts the Vite build inlines — one
+ * vendor step that works on both platforms beats two that each work on one.
+ */
+if (process.platform !== "win32") {
+  console.log(
+    `Skipping the PresentMon sidecar on ${process.platform}: it is a Windows-only ` +
+      `capture backend and is not bundled there (§23.1, §24.1).`,
+  );
+  process.exit(0);
+}
 
 if (!process.argv.includes("--force") && (await digestOf(OUT_FILE)) === SHA256) {
   console.log(`PresentMon ${VERSION} already present and verified.`);

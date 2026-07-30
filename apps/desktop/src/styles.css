@@ -187,3 +187,18 @@ body {
   color: var(--fg-3);
   margin: var(--space-2) 0 0;
 }
+
+/* Verbatim config lines a setup check tells the user to add (§23.1).
+   Shown, never written — Heimdall does not own MangoHud.conf. Scrolls on its own
+   axis so a long output_folder path cannot widen the window. */
+.conf-lines {
+  font: var(--type-data);
+  color: var(--fg-2);
+  background: var(--bg-inset);
+  border: 1px solid var(--line-1);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  margin: var(--space-1) 0 0;
+  overflow-x: auto;
+  white-space: pre;
+}

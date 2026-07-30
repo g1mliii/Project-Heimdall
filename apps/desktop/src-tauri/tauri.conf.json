@@ -34,7 +34,6 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -44,16 +43,8 @@
     "resources": {
       "LICENSES.md": "LICENSES.md"
     },
-    "externalBin": ["binaries/presentmon"],
     "shortDescription": "Frame-time capture for Heimdall",
-    "longDescription": "Press a hotkey in-game to capture frame-time data with bundled Intel PresentMon, then upload a shareable, signed run report to the Heimdall hub.",
-    "licenseFile": "LICENSES.md",
-    "windows": {
-      "nsis": {
-        "installMode": "currentUser",
-        "displayLanguageSelector": false,
-        "languages": ["English"]
-      }
-    }
+    "longDescription": "Capture frame-time data — with bundled Intel PresentMon on Windows, or by watching your own MangoHud's logs on Linux — then upload a shareable, signed run report to the Heimdall hub.",
+    "licenseFile": "LICENSES.md"
   }
 }
