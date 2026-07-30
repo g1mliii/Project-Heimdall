@@ -1,14 +1,18 @@
 /**
- * First-run setup screen (§22.4).
+ * First-run setup screen (§22.4, §23.1).
  *
- * Every checklist item is wired to a real Rust check — no decorative ticks. The
- * two that can fail are what actually decides whether a capture will work:
- * PresentMon needs the account to be in Performance Log Users to open an ETW
- * session without elevation, and the bundled sidecar has to resolve.
+ * Every row is a check Rust actually ran — no decorative ticks. This component
+ * knows nothing about what any individual check means: labels, hints and the
+ * exact config lines to paste all arrive in the `EnvCheck` list, produced by the
+ * side that read the group membership or the MangoHud config (src-tauri/env.rs).
+ *
+ * The config lines are SHOWN, never written. Heimdall does not own
+ * `MangoHud.conf` and will not edit a file the user configured; telling them the
+ * line to add is the whole fix and leaves them holding their own overlay.
  */
 
 import { Button } from "@heimdall/ui";
-import type { Environment } from "@/lib/ipc";
+import type { EnvCheck, Environment } from "@/lib/ipc";
 import { ArrowRightIcon, CheckIcon, ExternalLinkIcon, ShieldCheckIcon, XIcon } from "./icons";
 
 interface OnboardingProps {
@@ -18,16 +22,40 @@ interface OnboardingProps {
   onRecheck: () => void;
 }
 
-type CheckState = "pass" | "fail" | "unknown";
-
-function stateOf(value: boolean | null): CheckState {
-  if (value === null) return "unknown";
-  return value ? "pass" : "fail";
+/** Platform-specific framing for what the setup is even for. */
+function intro(environment: Environment) {
+  if (environment.platform === "linux") {
+    return (
+      <>
+        Heimdall reads the logs <strong style={{ color: "var(--fg-1)" }}>your</strong> MangoHud
+        writes — it does not install or inject an overlay of its own. Start logging with MangoHud&apos;s
+        hotkey in-game and Heimdall picks the log up.
+      </>
+    );
+  }
+  if (environment.platform === "windows") {
+    return (
+      <>
+        Heimdall captures with Intel {environment.captureTool}, which runs without admin once your
+        account is in the <strong style={{ color: "var(--fg-1)" }}>Performance Log Users</strong>{" "}
+        group.
+      </>
+    );
+  }
+  return <>Heimdall Capture supports Windows and Linux.</>;
 }
 
-function CheckRow({ state, label, detail }: { state: CheckState; label: string; detail?: string }) {
+function CheckRow({ check }: { check: EnvCheck }) {
   const color =
-    state === "pass" ? "var(--good)" : state === "fail" ? "var(--bad)" : "var(--warn)";
+    check.state === "ok"
+      ? "var(--good)"
+      : check.state === "missing"
+        ? // A non-blocking gap costs diagnostics, not the capture, so it reads
+          // as a warning rather than a failure.
+          check.blocking
+          ? "var(--bad)"
+          : "var(--warn)"
+        : "var(--warn)";
   return (
     <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
       <span
@@ -41,12 +69,17 @@ function CheckRow({ state, label, detail }: { state: CheckState; label: string; 
           marginTop: 1,
         }}
       >
-        {state === "pass" ? <CheckIcon size={16} /> : <XIcon size={16} />}
+        {check.state === "ok" ? <CheckIcon size={16} /> : <XIcon size={16} />}
       </span>
-      <span style={{ display: "grid", gap: 2 }}>
-        <span style={{ font: "var(--type-body-sm)", color: "var(--fg-1)" }}>{label}</span>
-        {detail === undefined ? null : (
-          <span style={{ font: "var(--type-caption)", color: "var(--fg-3)" }}>{detail}</span>
+      <span style={{ display: "grid", gap: 2, minWidth: "0" }}>
+        <span style={{ font: "var(--type-body-sm)", color: "var(--fg-1)" }}>{check.label}</span>
+        {check.hint === undefined ? null : (
+          <span style={{ font: "var(--type-caption)", color: "var(--fg-3)" }}>{check.hint}</span>
+        )}
+        {check.lines === undefined || check.lines.length === 0 ? null : (
+          <pre data-mono className="conf-lines">
+            {check.lines.join("\n")}
+          </pre>
         )}
       </span>
     </div>
@@ -54,9 +87,8 @@ function CheckRow({ state, label, detail }: { state: CheckState; label: string; 
 }
 
 export function Onboarding({ environment, onContinue, onOpenGuide, onRecheck }: OnboardingProps) {
-  const group = stateOf(environment.performanceLogUsers);
-  const sidecar = stateOf(environment.sidecarPresent);
-  const ready = group === "pass" && sidecar === "pass";
+  // Only blocking checks decide readiness — the same rule `needsOnboarding` uses.
+  const ready = !environment.checks.some((check) => check.blocking && check.state !== "ok");
 
   return (
     <div>
@@ -83,44 +115,16 @@ export function Onboarding({ environment, onContinue, onOpenGuide, onRecheck }: 
       </div>
 
       <p style={{ font: "var(--type-body-sm)", color: "var(--fg-2)", marginBottom: 14 }}>
-        Heimdall captures with Intel {environment.captureTool}, which runs without admin once your
-        account is in the{" "}
-        <strong style={{ color: "var(--fg-1)" }}>Performance Log Users</strong> group.
+        {intro(environment)}
       </p>
 
       <div
         className="panel panel--roomy"
         style={{ marginBottom: 14, display: "flex", flexDirection: "column", gap: 12 }}
       >
-        <CheckRow
-          state={group}
-          label="This account is in Performance Log Users"
-          detail={
-            group === "pass"
-              ? undefined
-              : group === "unknown"
-                ? "Membership could not be read. Follow the setup guide, then re-check."
-                : "Add the account to the group, then sign out and back in."
-          }
-        />
-        <CheckRow
-          state={group}
-          label="Signed out and back in since joining the group"
-          detail={
-            group === "pass"
-              ? undefined
-              : "Group membership is baked into your logon token — it only applies after a new sign-in."
-          }
-        />
-        <CheckRow
-          state={sidecar}
-          label={`Bundled capture tool detected (${environment.captureTool})`}
-          detail={
-            sidecar === "pass"
-              ? undefined
-              : "The bundled sidecar is missing from this install. Reinstall Heimdall Capture."
-          }
-        />
+        {environment.checks.map((check) => (
+          <CheckRow key={check.id} check={check} />
+        ))}
       </div>
 
       <div style={{ display: "grid", gap: 8 }}>

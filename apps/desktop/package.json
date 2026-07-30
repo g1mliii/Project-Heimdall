@@ -2,7 +2,7 @@
   "name": "@heimdall/desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Heimdall desktop capture client (Windows) \u2014 Tauri 2 shell around bundled Intel PresentMon (\u00a721\u2013\u00a722).",
+  "description": "Heimdall desktop capture client \u2014 Tauri 2 shell around bundled Intel PresentMon on Windows, or a MangoHud log watcher on Linux (\u00a721\u2013\u00a724).",
   "license": "MIT",
   "type": "module",
   "scripts": {

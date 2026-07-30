@@ -11,14 +11,16 @@ import { ActivityIcon, CheckIcon, RadioIcon } from "./icons";
 interface StatusHeroProps {
   screen: Screen;
   captureTool: string;
+  /** `Windows` / `Linux` — the badge names the backend that is actually running. */
+  platformLabel: string;
 }
 
 /**
- * The three hero variants, one row each.
+ * The hero variants, one row each.
  *
- * As a table rather than five parallel ternaries over the same condition: a
- * colour that disagrees with its icon is invisible in review when the two are
- * decided forty lines apart, and a fourth state would mean editing five places
+ * As a table rather than parallel ternaries over the same condition: a colour
+ * that disagrees with its icon is invisible in review when the two are decided
+ * forty lines apart, and a new state would mean editing five places
  * consistently.
  */
 const VARIANTS = {
@@ -28,6 +30,17 @@ const VARIANTS = {
     Icon: ActivityIcon,
     title: "Ready to capture",
     tone: "neutral",
+    dot: true,
+  },
+  // Linux only (§23.1). Deliberately not the `capturing` red: nothing is being
+  // recorded yet, and dressing the wait up as a live capture would tell the user
+  // they are done when they have not started.
+  armed: {
+    background: "var(--warn-dim)",
+    color: "var(--warn)",
+    Icon: ActivityIcon,
+    title: "Waiting for MangoHud",
+    tone: "warn",
     dot: true,
   },
   capturing: {
@@ -48,7 +61,7 @@ const VARIANTS = {
   },
 } as const;
 
-export function StatusHero({ screen, captureTool }: StatusHeroProps) {
+export function StatusHero({ screen, captureTool, platformLabel }: StatusHeroProps) {
   // Onboarding never renders the hero, but it is part of `Screen`; it shares
   // the ready look rather than needing a row of its own.
   const { background, color, Icon, title, tone, dot } =
@@ -73,7 +86,7 @@ export function StatusHero({ screen, captureTool }: StatusHeroProps) {
         <div style={{ font: "var(--type-subheading)", color: "var(--fg-1)" }}>{title}</div>
         <div style={{ marginTop: 2 }}>
           <Badge tone={tone} dot={dot}>
-            {captureTool} · Windows
+            {captureTool} · {platformLabel}
           </Badge>
         </div>
       </div>

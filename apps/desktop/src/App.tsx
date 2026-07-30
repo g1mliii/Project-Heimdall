@@ -10,7 +10,11 @@
 import * as React from "react";
 import { Badge, Button, Diagnostic, Spinner, Stat } from "@heimdall/ui";
 import { computeRunSummary, parseAnyCapture } from "@heimdall/parsers";
-import { INGEST_LIMITS, type MethodologyManifest } from "@heimdall/shared";
+import {
+  INGEST_LIMITS,
+  type HardwareSnapshot,
+  type MethodologyManifest,
+} from "@heimdall/shared";
 import { uploadCaptureBytes } from "@heimdall/ingest-client";
 import { FrameTimeChart } from "./components/FrameTimeChart";
 import { Onboarding } from "./components/Onboarding";
@@ -18,6 +22,7 @@ import { RunDetailsPanel } from "./components/RunDetailsPanel";
 import { HardwareRows, StatusHero } from "./components/StatusHero";
 import { TitleBar } from "./components/TitleBar";
 import { CircleIcon, SquareIcon, UploadIcon } from "./components/icons";
+import { deferToCapture } from "./lib/hardware";
 import * as ipc from "./lib/ipc";
 import { LiveFrameTimes } from "./lib/live-frames";
 import { formatElapsed, initialState, reducer, toggleIntent, type State } from "./lib/machine";
@@ -41,6 +46,14 @@ type UpdateState =
 export function App() {
   const [state, dispatch] = React.useReducer(reducer, initialState);
   const [detected, setDetected] = React.useState<ipc.DeclaredHardware | null>(null);
+  /**
+   * Hardware the capture file itself declared — MangoHud's sysinfo row (§23.2).
+   * Held separately from `detected` so the two sources stay distinguishable at
+   * upload time; merging them on arrival would lose which one knew what.
+   */
+  const [captureHardware, setCaptureHardware] = React.useState<
+    Partial<HardwareSnapshot> | null
+  >(null);
   const [form, setForm] = React.useState<RunDetailsForm>(prefillForm(null, undefined));
   const [crashReport, setCrashReport] = React.useState<string | null>(null);
   const [update, setUpdate] = React.useState<UpdateState>({ status: "idle" });
@@ -86,27 +99,40 @@ export function App() {
     }
   }, []);
 
+  /**
+   * Collect hardware against the captured process rather than the boot-time
+   * foreground window: that can point at the desktop or adapter 0 on a hybrid
+   * laptop, both of which poison comparability metadata. On Linux the pid is 0
+   * and ignored — the watcher has no handle on the game's process.
+   */
+  const refreshCaptureHardware = React.useCallback((pid: number) => {
+    captureHardwarePromiseRef.current = ipc
+      .getHardwareForPid(pid)
+      .then((hardware) => {
+        setDetected(hardware);
+        return hardware;
+      })
+      .catch(() => {
+        // Hardware facts skip rather than fail; retain the last honest
+        // snapshot when collection becomes unavailable mid-session.
+        return null;
+      });
+  }, []);
+
   const startCapture = React.useCallback(() => {
     if (startPromiseRef.current !== null) return startPromiseRef.current;
     const task = (async () => {
       try {
         liveRef.current = new LiveFrameTimes();
-        const started = await ipc.startCapture();
-        // Refresh against the captured process's own monitor/adapter. Boot-time
-        // hardware can point at the desktop window or adapter 0 on a hybrid
-        // laptop, both of which poison comparability metadata.
-        const hardwareTask = ipc
-          .getHardwareForPid(started.pid)
-          .then((hardware) => {
-            setDetected(hardware);
-            return hardware;
-          })
-          .catch(() => {
-            // Hardware facts skip rather than fail; retain the last honest
-            // snapshot when collection becomes unavailable mid-session.
-            return null;
-          });
-        captureHardwarePromiseRef.current = hardwareTask;
+        const start = await ipc.startCapture();
+        if (start.state === "armed") {
+          // Linux (§23.1). Nothing is recording yet, and hardware collection
+          // waits for `capture://started` — asking now would read the machine
+          // before the user has even launched the game.
+          dispatch({ type: "capture-armed", armed: start });
+          return;
+        }
+        refreshCaptureHardware(start.pid);
       } catch (error) {
         dispatch({
           type: "capture-failed",
@@ -119,6 +145,29 @@ export function App() {
       if (startPromiseRef.current === task) startPromiseRef.current = null;
     });
     return task;
+  }, [refreshCaptureHardware]);
+
+  /**
+   * Stand the watcher down without recording anything (§23.1).
+   *
+   * Goes through `stop_capture` because that is what releases the native
+   * session and its activity permit, but `no-capture-log` is the EXPECTED
+   * outcome here and must not surface as an error — the user changed their mind,
+   * they did not hit a fault.
+   */
+  const disarm = React.useCallback(async () => {
+    try {
+      await ipc.stopCapture();
+    } catch (error) {
+      if (!(error instanceof ipc.IpcError) || error.code !== "no-capture-log") {
+        dispatch({
+          type: "capture-failed",
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+    }
+    dispatch({ type: "discard" });
   }, []);
 
   const analyzeCapture = React.useCallback(() => {
@@ -149,6 +198,9 @@ export function App() {
           dispatch({ type: "capture-failed", message: parsed.error.message });
           return;
         }
+        // MangoHud's sysinfo row outranks the client's own /sys reads (§23.2) —
+        // see lib/hardware.ts. A no-op for PresentMon, whose CSV carries none.
+        setCaptureHardware(parsed.capture.hardware ?? null);
         if (parsed.capture.frames.length < INGEST_LIMITS.minFramesPerRun) {
           dispatch({
             type: "capture-failed",
@@ -189,7 +241,8 @@ export function App() {
     const intent = toggleIntent(stateRef.current);
     if (intent === "start") void startCapture();
     if (intent === "stop") void analyzeCapture();
-  }, [startCapture, analyzeCapture]);
+    if (intent === "disarm") void disarm();
+  }, [startCapture, analyzeCapture, disarm]);
 
   /* ── Boot + event wiring ────────────────────────────────────────────── */
 
@@ -207,9 +260,17 @@ export function App() {
 
   React.useEffect(() => {
     const unlisteners: Array<Promise<() => void>> = [
-      ipc.on<ipc.CaptureStarted>(ipc.EVENTS.started, (started) =>
-        dispatch({ type: "capture-started", started }),
+      ipc.on<ipc.CaptureArmed>(ipc.EVENTS.armed, (armed) =>
+        dispatch({ type: "capture-armed", armed }),
       ),
+      ipc.on<ipc.CaptureStarted>(ipc.EVENTS.started, (started) => {
+        dispatch({ type: "capture-started", started });
+        // On Linux this event is the FIRST moment a capture exists, so it is
+        // also the first useful moment to read the machine. On Windows the
+        // start path has already kicked this off; re-reading is cheap next to
+        // getting a stale adapter into the run's metadata.
+        refreshCaptureHardware(started.pid);
+      }),
       ipc.on<ipc.CaptureRows>(ipc.EVENTS.rows, (rows) => {
         liveRef.current?.push(rows.lines);
         // Rust batches rows before IPC, but the batch cadence is still faster
@@ -235,7 +296,7 @@ export function App() {
     // `toggleCapture` reads the live state through `stateRef`, so it does not
     // need a ref of its own — re-subscribing when its identity changes is
     // exactly as often as this effect already re-runs.
-  }, [analyzeCapture, toggleCapture]);
+  }, [analyzeCapture, refreshCaptureHardware, toggleCapture]);
 
   // Elapsed timer. Driven off wall-clock deltas rather than a tick count so a
   // throttled background window does not under-report the capture length.
@@ -319,7 +380,11 @@ export function App() {
       result = await uploadCaptureBytes(state.capture.bytes, {
         game: form.game.trim() || "Unknown game",
         visibility: form.visibility,
-        ...(detected === null ? {} : { hardware: detected.hardware }),
+        // `options.hardware` overrides what the parser found, so anything the
+        // capture itself declared is dropped from the override first (§23.2).
+        ...(detected === null
+          ? {}
+          : { hardware: deferToCapture(detected.hardware, captureHardware ?? undefined) }),
         methodology,
         // Declared, because the capture cannot show it (§22.11). Omitted when
         // the user did not answer, so the server records `unknown` rather than
@@ -378,7 +443,7 @@ export function App() {
       return;
     }
     await handoffClaim(result.runId, result.managementToken, "confirmed");
-  }, [detected, form, handoffClaim, state.capture, state.environment]);
+  }, [captureHardware, detected, form, handoffClaim, state.capture, state.environment]);
 
   const discard = React.useCallback(() => {
     void ipc.discardPayload();
@@ -494,7 +559,46 @@ export function App() {
           />
         ) : (
           <>
-            <StatusHero screen={state.screen} captureTool={state.environment.captureTool} />
+            <StatusHero
+              screen={state.screen}
+              captureTool={state.environment.captureTool}
+              platformLabel={PLATFORM_LABELS[state.environment.platform]}
+            />
+
+            {state.screen === "armed" && state.armed !== null && (
+              <div className="panel panel--roomy" style={{ marginBottom: 16 }}>
+                <p style={{ font: "var(--type-body-sm)", color: "var(--fg-2)", margin: 0 }}>
+                  {state.armed.hint}
+                </p>
+                <span
+                  className="heimdall-overline"
+                  style={{ display: "block", marginTop: 12, marginBottom: 6 }}
+                >
+                  Watching for logs in
+                </span>
+                {state.armed.logDirs.map((dir) => (
+                  <div key={dir} className="hw-row">
+                    <span data-mono className="hw-row__value" title={dir}>
+                      {dir}
+                    </span>
+                  </div>
+                ))}
+                {state.armed.liveTraceExpected ? null : (
+                  <p
+                    style={{
+                      font: "var(--type-caption)",
+                      color: "var(--fg-3)",
+                      marginBottom: 0,
+                      marginTop: 10,
+                    }}
+                  >
+                    No log_interval is set, so MangoHud may only write the log when you stop
+                    logging. The capture still works — Heimdall just cannot draw a live chart
+                    while it runs.
+                  </p>
+                )}
+              </div>
+            )}
 
             {state.screen === "capturing" && (
               <div className="panel panel--roomy" style={{ marginBottom: 16 }}>
@@ -511,7 +615,24 @@ export function App() {
                     {formatElapsed(state.elapsedMs)}
                   </span>
                 </div>
-                <FrameTimeChart samples={live.window()} />
+                {/* An empty chart reads as broken. When no rows have been
+                    framed yet — MangoHud between flushes (§23.1) — say why
+                    instead of drawing nothing. Skip, never fail. */}
+                {state.frames === 0 && live.awaitingHeader() ? (
+                  <p
+                    style={{
+                      font: "var(--type-body-sm)",
+                      color: "var(--fg-3)",
+                      margin: "var(--space-2) 0",
+                    }}
+                  >
+                    {state.environment.watcherMode
+                      ? "MangoHud is logging — the trace appears when it flushes."
+                      : "Waiting for the first frames."}
+                  </p>
+                ) : (
+                  <FrameTimeChart samples={live.window()} />
+                )}
                 <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10 }}>
                   <span data-mono style={{ font: "var(--type-data)", color: "var(--tier-avg)" }}>
                     {averageFps === null ? "— fps" : `${averageFps.toFixed(1)} fps`}
@@ -550,7 +671,7 @@ export function App() {
               </div>
             )}
 
-            {state.screen !== "capturing" && (
+            {state.screen !== "capturing" && state.screen !== "armed" && (
               <HardwareRows
                 game={form.game || state.target?.process || ""}
                 hardware={detected?.hardware ?? null}
@@ -592,7 +713,20 @@ export function App() {
                 iconLeft={<CircleIcon size={16} />}
                 onClick={() => void startCapture()}
               >
-                Start capture
+                {state.environment.watcherMode ? "Arm capture" : "Start capture"}
+              </Button>
+            )}
+
+            {state.screen === "armed" && (
+              <Button
+                size="lg"
+                block
+                variant="secondary"
+                loading={state.analyzing}
+                iconLeft={<SquareIcon size={14} />}
+                onClick={() => void disarm()}
+              >
+                Cancel
               </Button>
             )}
 
@@ -731,6 +865,8 @@ export function App() {
                 (state.hotkey?.status === "registered"
                   ? `Press ${state.hotkey.accelerator} in-game to start hands-free.`
                   : "Set a working hotkey to capture hands-free.")}
+              {state.screen === "armed" &&
+                "Heimdall records nothing until MangoHud starts writing a log."}
               {state.screen === "capturing" && "Recommended capture length: 60 seconds."}
               {state.screen === "complete" &&
                 "Uploads are public or unlisted; claim the run to make it private."}
@@ -741,6 +877,13 @@ export function App() {
     </div>
   );
 }
+
+/** Badge copy for the running backend (§23.1). */
+const PLATFORM_LABELS: Record<ipc.Environment["platform"], string> = {
+  windows: "Windows",
+  linux: "Linux",
+  other: "Unsupported platform",
+};
 
 const LABELS: Record<string, string> = {
   parsing: "Parsing",

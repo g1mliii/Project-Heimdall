@@ -19,6 +19,21 @@ import { FRAME_TIME_COLUMN_ALIASES } from "@heimdall/parsers";
 export const LIVE_WINDOW = 600;
 
 /**
+ * How many leading rows may precede the frame-time header.
+ *
+ * PresentMon's first stdout row IS the header. A MangoHud log's is not: the file
+ * opens with a sysinfo key row and its value row (§23.1), so committing to line
+ * 0 as the header found no frame-time column and blanked the chart for every
+ * Linux capture — silently, because `unreadable()` is not an error state.
+ *
+ * Bounded rather than "scan until found" on purpose. An unbounded search over a
+ * capture whose header genuinely has no frame-time column would test every one
+ * of hundreds of thousands of data rows against the alias list, and would report
+ * `unreadable()` only once the capture ended.
+ */
+const HEADER_SCAN_LIMIT = 4;
+
+/**
  * Read the nth comma-separated cell without splitting the whole row.
  *
  * A capture row has ~24 columns and only one of them is wanted, so
@@ -39,6 +54,8 @@ function cellAt(line: string, index: number): string | undefined {
 export class LiveFrameTimes {
   private column: number | null = null;
   private headerSeen = false;
+  /** Leading rows examined without finding a frame-time column. */
+  private skipped = 0;
   /**
    * Fixed ring, not a growing array: the window is bounded, and `shift()` on a
    * full 600-entry array is an O(n) move on every frame.
@@ -49,16 +66,26 @@ export class LiveFrameTimes {
   private total = 0;
   private sum = 0;
 
-  /** Feed rows exactly as they arrive from the sidecar, header included. */
+  /** Feed rows exactly as they arrive from the backend, header included. */
   push(lines: readonly string[]): void {
     for (const line of lines) {
       if (!this.headerSeen) {
-        this.headerSeen = true;
         // Lowercased, like the parser's own header matching: PresentMon's
         // capitalization has changed between builds.
         const columns = line.split(",").map((value) => value.trim().toLowerCase());
         const index = columns.findIndex((column) => FRAME_TIME_COLUMN_ALIASES.includes(column));
-        this.column = index >= 0 ? index : null;
+        if (index >= 0) {
+          this.headerSeen = true;
+          this.column = index;
+          continue;
+        }
+        // Not the header. On MangoHud this is a sysinfo row; keep looking, but
+        // only for as long as a real preamble could last.
+        this.skipped += 1;
+        if (this.skipped >= HEADER_SCAN_LIMIT) {
+          this.headerSeen = true;
+          this.column = null;
+        }
         continue;
       }
       if (this.column === null) continue;
@@ -98,8 +125,17 @@ export class LiveFrameTimes {
     return 1000 / (this.sum / this.total);
   }
 
-  /** True when the header carried no frame-time column at all. */
+  /** True once no frame-time column was found within the preamble bound. */
   unreadable(): boolean {
     return this.headerSeen && this.column === null;
+  }
+
+  /**
+   * True while still looking for the header — the MangoHud case where only
+   * sysinfo rows have arrived. Distinct from `unreadable()`: the chart is empty
+   * because nothing has been read yet, not because nothing can be.
+   */
+  awaitingHeader(): boolean {
+    return !this.headerSeen;
   }
 }

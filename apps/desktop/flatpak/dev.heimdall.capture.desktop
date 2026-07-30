@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Heimdall Capture
+Comment=Capture frame-time data from MangoHud logs and share a signed run report
+Exec=heimdall-capture
+Icon=dev.heimdall.capture
+Terminal=false
+Categories=Utility;Game;
+StartupWMClass=heimdall-capture

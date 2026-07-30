@@ -1,14 +1,212 @@
 # Heimdall Capture — desktop client
 
-The Windows capture client (`apps/desktop`, Phase 9, §21–§22). Press a hotkey
-in-game, get a shareable run report. It is a Tauri 2 shell around bundled Intel
-PresentMon: Rust owns the sidecar, the hardware reads and the signing key; the
-webview does all parsing and UI with the **same** `@heimdall/parsers` and
-`@heimdall/ingest-client` code the web hub runs.
+The capture client (`apps/desktop`, Phases 9 and 9.5, §21–§24). Get frame-time
+data from a game, get a shareable run report. It is a Tauri 2 shell: Rust owns
+the capture backend, the hardware reads and the signing key; the webview does all
+parsing and UI with the **same** `@heimdall/parsers` and `@heimdall/ingest-client`
+code the web hub runs.
+
+There are **two capture backends**, selected by `#[cfg]`, behind one session
+contract (`src-tauri/src/capture.rs`):
+
+| | Windows (§21–§22) | Linux (§23–§24) |
+|---|---|---|
+| Row source | bundled Intel PresentMon sidecar, spawned by us | the user's own MangoHud, watched for a log |
+| Trigger | Heimdall's hotkey starts the capture | Heimdall arms; **MangoHud's** hotkey starts the log |
+| Overlay injected | none (PresentMon uses ETW) | none — see below |
+| GPU telemetry | Heimdall samples PDH counters (§22.2) | MangoHud logs its own |
+| `captureTool` | the pinned PresentMon version | whatever `mangohud --version` reports |
+
+Everything after the bytes — parse, metrics, sign, upload, claim — is byte-for-byte
+the same code on both.
 
 ---
 
-## Setup: Performance Log Users
+## Linux and SteamOS (§23–§24)
+
+### Why Heimdall watches instead of launching
+
+Heimdall injects no overlay on Linux and does not wrap the game's command line.
+MangoHud is the user's: they installed it, they configured it, and they start and
+stop its logging with its own hotkey (Shift+F2 by default). Heimdall **arms a
+watcher** and picks up the log that appears.
+
+That is a product decision, not a workaround. A second overlay injected into a
+game the user already has MangoHud in would be worse for them and less honest
+about provenance — the run would say it was captured by a tool that was not the
+one in the frame path.
+
+It has one consequence worth stating plainly: **the client cannot promise a
+capture will start.** It arms, and it reports what appears. That is why the state
+machine has an `armed` screen that Windows never enters, and why
+`start_capture` returns a tagged `CaptureStart` (`started` or `armed`) rather
+than assuming rows are already flowing.
+
+### Setup
+
+MangoHud has to be told to write logs somewhere Heimdall can find them. The
+onboarding screen runs four checks and prints the exact lines to add — it never
+writes the file, because Heimdall does not own `MangoHud.conf`.
+
+```ini
+# ~/.config/MangoHud/MangoHud.conf
+output_folder=/home/you/mangohud-logs
+log_interval=100
+gpu_stats
+cpu_stats
+vram
+```
+
+| Check | Blocking | Why |
+|---|---|---|
+| `mangohud-installed` | yes | `mangohud --version` has to answer; we bundle nothing |
+| `output-folder` | yes | without it MangoHud writes beside each game's working directory, which the client cannot know |
+| `sensor-params` | no | fewer sensors means fewer diagnostics, and every sensor rule self-suppresses on missing data — skip, never fail |
+| `log-interval` | no | only affects whether a **live** trace can be drawn; the capture is complete either way |
+
+Two config locations are read, and the second is the one people miss:
+
+1. `MANGOHUD_CONFIG` (inline) layered over the file, per-parameter
+2. `$MANGOHUD_CONFIGFILE`, else `$XDG_CONFIG_HOME/MangoHud/MangoHud.conf`, else
+   `~/.config/MangoHud/MangoHud.conf`
+3. `~/.var/app/com.valvesoftware.Steam/config/MangoHud/MangoHud.conf` — **Flatpak
+   Steam**. A game launched from Flatpak Steam reads *this* file, not the host
+   one, so a perfect `~/.config` setup can still produce nothing
+4. `/etc/MangoHud.conf`
+
+Every resolved `output_folder` is watched, not just the first: a machine with both
+a host Steam and a Flatpak Steam has two configs that can name two folders, and
+the watcher cannot know which the next game will read.
+
+**What the client cannot see.** MangoHud is very often configured per-game
+through a Steam launch option (`MANGOHUD_CONFIG=... %command%`). That environment
+belongs to the game process, not to us. A host config is evidence about the
+default and nothing more, and every config-derived check says so rather than
+asserting the user got it wrong.
+
+### How the watcher picks a log
+
+- A 500 ms directory scan while armed. Polling, not inotify: no new crate, no
+  per-user watch limits, no Flatpak portal complications, and the cost only
+  exists between arm and stop.
+- The capture is the **newest `*.csv` modified at or after the arm instant whose
+  head matches MangoHud's `fps,frametime` header shape**. Both halves matter. A
+  user who has been benchmarking all week has a folder full of valid logs, and
+  picking the wrong one would produce a run that is entirely real and entirely
+  not what they just captured.
+- Tail reads go through the same `CaptureBuffer` (`src-tauri/src/stream.rs`) as
+  PresentMon's stdout, so line framing, CRLF handling, the trailing-partial-row
+  rule and the 64 MiB cap are one implementation rather than two.
+- A log size that holds steady for 2.5 s ends the capture — but only once at
+  least one frame has been read. Without that guard, a MangoHud that creates the
+  file and writes nothing until logging stops would have its capture ended 2.5
+  seconds in with zero frames.
+- Pressing Stop before any log appears is `no-capture-log`, whose message names
+  MangoHud's hotkey. "0 frames captured" reads as a Heimdall bug when it is not
+  one.
+
+### The live-trace honesty case
+
+MangoHud writes in bursts. With `log_interval` set the file grows during the
+capture and the sparkline updates; without it the rows can arrive all at once at
+the end. Both produce a complete, uploadable capture — only the live chart
+differs.
+
+So the Capturing screen says **"MangoHud is logging — the trace appears when it
+flushes"** instead of rendering an empty chart that looks broken. Same rule the
+diagnostics follow: skip, never fail.
+
+Related, and a real bug this phase fixed: the live readout used to treat the
+first row it saw as the header. A MangoHud log's first row is a sysinfo key row,
+so the readout found no frame-time column and silently blanked the chart for
+every Linux capture. It now scans a bounded preamble
+(`apps/desktop/src/lib/live-frames.ts`).
+
+### Hardware: MangoHud first, sysfs for the gaps (§23.2)
+
+On Linux the **MangoHud log's own sysinfo row is the preferred source.** It was
+written by the tool that was inside the game, and its `driver` field carries the
+Mesa version string that `docs/driver-currency-curation.md` locks as the Linux
+driver-currency contract.
+
+`src-tauri/src/linux.rs` fills only what MangoHud omits, and
+`apps/desktop/src/lib/hardware.ts` drops any field the capture already supplied
+before it reaches `uploadCaptureBytes` — whose merge otherwise layers the
+client's values *over* the parser's. Without that, `/sys` would replace
+`Mesa 26.1.4` with a kernel module name and every Linux driver-currency rule
+would miss.
+
+| Field | Source |
+|---|---|
+| `gpu`, `cpu`, `os`, `gpuDriver`, `ramGb` | MangoHud sysinfo row, when the log has one |
+| `cpu` (fallback) | `/proc/cpuinfo` `model name` — searched to exhaustion before `model`, which on x86 is a numeric id and once reported a CPU called "68" |
+| `ramGb` (fallback) | `/proc/meminfo` `MemTotal` |
+| `os` (fallback) | `/etc/os-release` `PRETTY_NAME` + `/proc/sys/kernel/osrelease` |
+| `gpuVendor` | `/sys/class/drm/card*/device/vendor` — PCI vendor ids are the same numbers DXGI reports, so `driver.rs`'s table is reused rather than duplicated |
+| `gpuVramTotalMb` | `/sys/class/drm/card*/device/mem_info_vram_total`. The NVIDIA proprietary driver exposes nothing here, so the field is **omitted, not zero** — a VRAM total of 0 would make the saturation rule read every capture as over capacity |
+| `resolution` | first mode of the first connected connector in `/sys/class/drm`. No X or Wayland dependency, which is the only way this works in gaming mode |
+| `gpuDriver` (last resort) | the kernel module + release, e.g. `amdgpu (kernel 6.11.11-valve)` — deliberately unmistakable for a Mesa version |
+
+**Deliberately absent.** These are the invariant working, not gaps to paper over:
+
+- `ramSpeedMtps` / `ramRatedSpeedMtps` — the speeds live in DMI, and
+  `/sys/firmware/dmi/tables` is root-only. A per-user client cannot read them, so
+  the fields are omitted and the ram-below-rated rule (§15.3) self-suppresses. A
+  fabricated rating would tell a user their RAM is fine on a number nobody
+  measured.
+- `hags` — a Windows scheduling concept. Reported as unknown, never `false`;
+  methodology fields feed comparability, so declaring a setting that does not
+  exist here would silently split runs.
+- The GPU **name** is not read from sysfs at all. Naming a PCI device needs a
+  hardware database we do not ship; `Unknown GPU` that MangoHud then replaces is
+  honest where `amdgpu 0x7550` would not be.
+- No anti-cheat notice. Heimdall does not inspect the game's process on Linux, so
+  the field stays absent rather than reporting "none detected".
+
+### Frame generation
+
+MangoHud logs no frame-type column at all, so **every Linux capture carries no
+frame-type evidence** and `frameGeneration` resolves to the user's declaration or
+to `unknown` (§22.11) — never to `none` on the strength of silence. FSR3 and AFMF
+are common on Linux, so the Run details field does real work here; it is labelled
+"The capture cannot detect this" on both platforms, which on Linux is
+unconditionally true.
+
+### Packaging
+
+AppImage and deb are built by Tauri (`tauri.linux.conf.json`); rpm is absent
+because we have not tested one. `apps/desktop/flatpak/dev.heimdall.capture.yml`
+is a separate manifest where the **sandbox grants are the substance**: read-only
+access to both MangoHud config locations and to the log folder, never
+`--filesystem=host`. A Flatpak install cannot run `mangohud --version` (no host
+PATH), so it reports `MangoHud (version unknown)` — an admitted limitation of
+that packaging, not a bug.
+
+MangoHud is **not** a package dependency. Its absence is a setup check; a package
+manager pulling an overlay onto someone's machine because they installed a
+benchmark viewer would be the wrong behaviour.
+
+See `apps/desktop/src-tauri/CONFIG.md` for why the Tauri config is split by
+platform — it is what unblocked the Linux build at all.
+
+### Not verified
+
+Phase 9.5 was verified on **dual-boot desktop Linux (Ryzen 9800X3D / RX 9070 XT)**
+only. These are untested and are stated as untested:
+
+- **SteamOS gaming mode and the Steam Deck.** No Deck was available. The sysfs
+  reads are chosen to work without a display server, and the watcher needs no
+  window — but that is reasoning, not a result.
+- **The Flatpak build's sandbox grants** against a real Deck install. The
+  manifest has never been built or run.
+- **NVIDIA and Intel MangoHud sensor cells.** They remain `synthetic` in
+  `SENSOR_AVAILABILITY`, and the flip-honesty test enforces that. The
+  `gpu_vram_used` (assumed GiB) and sysinfo `ram` (assumed MB above 256) unit
+  assumptions are therefore still assumptions.
+
+---
+
+## Setup: Performance Log Users (Windows)
 
 PresentMon opens an ETW trace session. Without elevation that requires the
 account to be in the built-in **Performance Log Users** group. Heimdall Capture
@@ -209,7 +407,10 @@ off). When bumping:
 
 ---
 
-## What the client declares (§22.2)
+## What the client declares on Windows (§22.2)
+
+The Linux equivalent is in the Linux section above; on that platform MangoHud's
+sysinfo row outranks most of this table.
 
 Everything here is **declared** by the client, never inferred from frames — the
 parsers are explicit that tool version, HAGS and rated memory speed cannot come
@@ -323,9 +524,22 @@ warn on first run.
 ```bash
 pnpm install
 pnpm --filter @heimdall/ui build
-pnpm --filter @heimdall/desktop vendor   # vendors the fonts + PresentMon sidecar
+pnpm --filter @heimdall/desktop vendor   # fonts, + the PresentMon sidecar on Windows
 pnpm --filter @heimdall/desktop dev     # tauri dev
 pnpm --filter @heimdall/desktop build   # unsigned, non-updating local bundle
+```
+
+`vendor` works on both platforms. Off Windows the sidecar fetch exits without
+downloading — it is a Win32 executable that nothing on Linux reads — but it still
+asserts its version pin agrees with `PRESENTMON_VERSION` first, because a drift
+there would mislabel every Windows capture's provenance.
+
+Linux needs the webview toolchain from the distro before `tauri build`:
+
+```bash
+sudo apt-get install --no-install-recommends -y \
+  libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+  librsvg2-dev patchelf
 ```
 
 A local build needs **no secrets at all**: with no `HEIMDALL_SIGNING_PRIVATE_KEY`
@@ -415,6 +629,21 @@ mapping, HAGS tri-state, Ed25519 sign → verify against the exact SPKI base64 t
 server parses, and payload custody. The Windows syscalls themselves are
 deliberately a thin wrapper around those pure functions.
 
-The JS suite covers the capture state machine, the live frame-time readout, the
-transport adapter (against a mocked `invoke`), declared-methodology
-completeness, and all four kit screens.
+**Both platforms' rules run on both runners.** `mangohud.rs` and `linux.rs` are
+pure by design — config parsing, the candidate-directory order including Flatpak
+Steam, "newest log after arm" selection, stale-log and non-MangoHud rejection, the
+quiesce rule, and the `/proc` and `/sys` mappers over fixture strings — so the
+watcher's logic is covered on the Windows job too. `win.rs`, `presentmon.rs`,
+`linux.rs` and `mangohud.rs` each keep a "not available" stub for the other
+platform precisely so this works, which is why `lib.rs` carries a documented
+`allow(dead_code)` on them.
+
+What that does **not** cover is the platform halves themselves: `#[cfg]`-ed-out
+code is never type-checked. Compiling the MangoHud watcher thread and the sysfs
+reads at all is the `desktop-linux` CI job's real job.
+
+The JS suite covers the capture state machine (including the `armed` transitions
+and that Windows never enters them), the onboarding checks contract, the live
+frame-time readout's MangoHud preamble handling, the hardware-merge precedence
+rule, the transport adapter (against a mocked `invoke`), declared-methodology
+completeness, and the kit screens.

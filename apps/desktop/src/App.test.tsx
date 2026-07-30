@@ -58,8 +58,22 @@ vi.mock("@heimdall/ingest-client", () => ({ uploadCaptureBytes }));
 const { App } = await import("./App");
 
 const READY_ENV: Environment = {
-  performanceLogUsers: true,
-  sidecarPresent: true,
+  platform: "windows",
+  watcherMode: false,
+  checks: [
+    {
+      id: "performance-log-users",
+      label: "This account is in Performance Log Users",
+      state: "ok",
+      blocking: true,
+    },
+    {
+      id: "capture-tool",
+      label: "Bundled capture tool detected (PresentMon 2.4.1)",
+      state: "ok",
+      blocking: true,
+    },
+  ],
   captureTool: "PresentMon 2.4.1",
   hotkey: { status: "registered", accelerator: "Shift+F11" },
   apiBaseUrl: "http://localhost:3000",
@@ -143,15 +157,27 @@ async function renderReady() {
   await screen.findByText("Ready to capture");
 }
 
+/** Fail one check by id, leaving the rest of the environment intact. */
+function failing(id: string, over: Partial<Environment["checks"][number]> = {}): Environment {
+  return {
+    ...READY_ENV,
+    checks: READY_ENV.checks.map((check) =>
+      check.id === id ? { ...check, state: "missing" as const, ...over } : check,
+    ),
+  };
+}
+
 describe("onboarding screen", () => {
   it("shows the setup checklist when the account is not in Performance Log Users", async () => {
-    ipc.getEnvironment.mockResolvedValue({ ...READY_ENV, performanceLogUsers: false });
+    ipc.getEnvironment.mockResolvedValue(
+      failing("performance-log-users", {
+        hint: "Add the account to the group, then sign out and back in — group membership is baked into your logon token.",
+      }),
+    );
     render(<App />);
 
     expect(await screen.findByText("One-time setup")).toBeInTheDocument();
-    expect(
-      screen.getByText("This account is in Performance Log Users"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("This account is in Performance Log Users")).toBeInTheDocument();
     expect(
       screen.getByText(/Add the account to the group, then sign out and back in/),
     ).toBeInTheDocument();
@@ -160,7 +186,7 @@ describe("onboarding screen", () => {
   });
 
   it("reports a missing sidecar against the pinned tool version", async () => {
-    ipc.getEnvironment.mockResolvedValue({ ...READY_ENV, sidecarPresent: false });
+    ipc.getEnvironment.mockResolvedValue(failing("capture-tool"));
     render(<App />);
     expect(
       await screen.findByText("Bundled capture tool detected (PresentMon 2.4.1)"),
@@ -169,6 +195,68 @@ describe("onboarding screen", () => {
 
   it("goes straight to ready when both checks pass", async () => {
     await renderReady();
+    expect(screen.queryByText("One-time setup")).not.toBeInTheDocument();
+  });
+
+  it("renders the Linux checklist with its config lines and no overlay claim", async () => {
+    // §23.1. The copy on this screen comes from Rust; the component renders
+    // whatever the list says without knowing what a MangoHud config is.
+    ipc.getEnvironment.mockResolvedValue({
+      ...READY_ENV,
+      platform: "linux",
+      watcherMode: true,
+      captureTool: "MangoHud 0.8.1",
+      checks: [
+        {
+          id: "mangohud-installed",
+          label: "MangoHud detected (MangoHud 0.8.1)",
+          state: "ok",
+          blocking: true,
+        },
+        {
+          id: "output-folder",
+          label: "MangoHud writes its logs to a folder Heimdall can watch",
+          state: "missing",
+          blocking: true,
+          hint: "Without output_folder, MangoHud writes beside each game's working directory.",
+          lines: ["output_folder=/home/player/mangohud-logs", "log_interval=100"],
+        },
+      ],
+    } satisfies Environment);
+    render(<App />);
+
+    expect(await screen.findByText("One-time setup")).toBeInTheDocument();
+    expect(
+      screen.getByText("MangoHud writes its logs to a folder Heimdall can watch"),
+    ).toBeInTheDocument();
+    // The exact lines to paste, shown verbatim — Heimdall never writes the file.
+    expect(
+      screen.getByText(/output_folder=\/home\/player\/mangohud-logs/),
+    ).toBeInTheDocument();
+    // The overlay is the user's; the screen must not imply Heimdall supplies one.
+    expect(screen.getByText(/does not install or inject an overlay/)).toBeInTheDocument();
+  });
+
+  it("a non-blocking Linux gap never gates the app", async () => {
+    // Missing sensor parameters cost diagnostics, and diagnostics skip rather
+    // than fail. The user goes straight to the capture screen.
+    ipc.getEnvironment.mockResolvedValue({
+      ...READY_ENV,
+      platform: "linux",
+      watcherMode: true,
+      checks: [
+        ...READY_ENV.checks,
+        {
+          id: "sensor-params",
+          label: "GPU, CPU and VRAM sensors are enabled",
+          state: "missing",
+          blocking: false,
+        },
+      ],
+    } satisfies Environment);
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: /Arm capture/ })).toBeInTheDocument();
     expect(screen.queryByText("One-time setup")).not.toBeInTheDocument();
   });
 });

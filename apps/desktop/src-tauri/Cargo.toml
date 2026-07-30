@@ -1,7 +1,7 @@
 [package]
 name = "heimdall-capture"
 version = "0.1.0"
-description = "Heimdall desktop capture client — bundled Intel PresentMon, signed uploads (§21–§22)."
+description = "Heimdall desktop capture client — bundled Intel PresentMon (Windows) or a MangoHud log watcher (Linux), signed uploads (§21–§24)."
 authors = ["Heimdall contributors"]
 license = "MIT"
 edition = "2021"
@@ -9,9 +9,9 @@ rust-version = "1.82"
 publish = false
 
 # The webview does all parsing and UI (§22.1 "same code as web"); this crate
-# owns everything the webview cannot do or must not hold: the PresentMon
-# sidecar, foreground-process detection, hardware collection, the Ed25519
-# private key, and the direct-to-R2 PUT.
+# owns everything the webview cannot do or must not hold: the capture backend
+# (PresentMon sidecar on Windows, MangoHud log watcher on Linux — §23.1),
+# hardware collection, the Ed25519 private key, and the direct-to-R2 PUT.
 
 [lib]
 name = "heimdall_capture_lib"

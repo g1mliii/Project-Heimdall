@@ -10,7 +10,8 @@
 
 use crate::error::{AppError, AppResult};
 use crate::hardware::{self, HardwareSnapshot, MemoryModule, MethodologyFacts};
-use crate::presentmon::{capture_tool, CaptureTarget};
+use crate::presentmon::capture_tool;
+use crate::stream::CaptureTarget;
 
 /// Anti-cheat module base names, lowercased (§24.4). Advisory only — detection
 /// never blocks a capture, it only tells the user why PresentMon might behave
@@ -596,6 +597,9 @@ mod imp {
     }
 }
 
+// Mirror image of linux.rs: the stub half keeps a non-Windows checkout building
+// and testing, and nothing there calls into it.
+#[cfg_attr(not(windows), allow(unused_imports))]
 pub use imp::{
     collect_hardware, collect_hardware_for_pid, detect_anti_cheat, foreground_target,
     in_performance_log_users,

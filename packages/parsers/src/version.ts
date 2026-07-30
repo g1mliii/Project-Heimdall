@@ -18,7 +18,12 @@ export const PARSER_VERSIONS = {
   // all-`Application` column is what an uninstrumented driver produces
   // (§22.11), so only an observed `true` carries information.
   presentmon: "1.2.0",
-  mangohud: "1.0.0",
+  // 1.1.0: every MangoHud sensor is reported as POLLED rather than
+  // frame-aligned (they always were; the parser used to claim otherwise). Same
+  // correction the presentmon 1.1.0 bump made, applied to the source where it
+  // covers the entire sensor set — MangoHud has no per-present timing columns,
+  // so nothing it logs is frame-aligned.
+  mangohud: "1.1.0",
 } as const satisfies Record<CaptureSource, string>;
 
 /** `"capframex@1.0.0"` — the string stored as `Run.parserVersion`. */

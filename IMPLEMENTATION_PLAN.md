@@ -629,8 +629,10 @@ commit — local Windows renders are not valid baselines.
     still indistinguishable from an honest one — that needs §22.13, not a frame-type column.
   - [ ] Still open: making the numbers themselves meaningful under frame generation — a generated
     frame is not a rendered frame, so avg FPS, 1% lows and stutter counts all describe something
-    other than what they claim. Scheduled as **Phase 9.6**, together with physics-based detection of
-    undeclared frame generation.
+    other than what they claim. Scheduled as **Phase 9.6**, which reports a rendered rate alongside
+    the presented one wherever frame type is known (§22.12), and **characterises** the physics
+    signature of undeclared frame generation without shipping a rule for it (§22.13) — the only
+    evidence in hand is one GPU, one title, one resolution.
 - [ ] 22.7 Packaging — **partially blocked on out-of-band credentials.**
   - [x] NSIS installer (per-user install), bundled sidecar + license resource; `cargo tauri build`
     runs in CI and produced a working installer locally
@@ -715,16 +717,89 @@ commit — local Windows renders are not valid baselines.
 
 ## Phase 9.5: Desktop Capture — Linux / SteamOS (MangoHud watcher) — §23–§24
 
-- [ ] 23.1 MangoHud log watcher mode (no injection of our own overlay): detect/tail MangoHud CSV,
-  same parse → sign → upload pipeline (`§24.4` state parity with the Windows kit)
-- [ ] 23.2 Mesa-aware hardware snapshot: on Linux AMD/Intel the "driver" is **Mesa/RADV/ANV** +
-  kernel (per `docs/driver-currency-curation.md`) — report the Mesa version string MangoHud emits
-- [ ] 24.1 Packaging: AppImage + Flatpak; SteamOS/Steam Deck notes (gaming mode constraints)
-- [ ] 24.2 Real MangoHud fixture flips (NVIDIA/AMD/Intel cells; `gpu_vram_used` + `ram` unit
-  assumptions confirmed)
-- **Verify**: Deck/desktop-Linux capture uploads and diagnoses (driver-currency rules pick the
-  Mesa baseline)
-- **Regression**: watcher unit tests; Linux CI build; MangoHud golden fixtures
+> Phase 9 shipped a Windows client that spawns a capture tool. Linux gets the same product surface
+> through a different model: Heimdall injects no overlay (§23.1). MangoHud is the user's, driven by
+> MangoHud's own logging hotkey, so the client **watches for a log** rather than starting a tool.
+> That changes the state machine (an `armed` state before `capturing`), the onboarding contract, and
+> what the app can honestly promise about live data. Everything after the bytes — parse, sign,
+> upload, claim — is the same code on both platforms.
+
+- [x] **Rust capture-backend seam.** `CaptureBuffer` + `CaptureTarget` moved out of `presentmon.rs`
+  into a source-neutral `stream.rs` (the watcher's tail reads need exactly the framing PresentMon's
+  stdout gets). `capture.rs` keeps the session, the event contract and shutdown; two `#[cfg]`
+  backends decide only how rows arrive. New event `capture://armed { logDirs, hint,
+  liveTraceExpected }`; `capture://started` still means rows are flowing. `start_capture` returns a
+  tagged `CaptureStart` (`started` | `armed`) rather than assuming a capture began.
+  - `CaptureBuffer` gained `with_preamble_rows` so MangoHud's two sysinfo rows are not counted as
+    frames — the Complete screen's count has to match what `parseAnyCapture` finds in the same bytes.
+- [x] **23.1 MangoHud log watcher.** Pure `mangohud.rs` (config parsing in both file and
+  `MANGOHUD_CONFIG` forms, candidate-directory resolution **including Flatpak Steam's config**,
+  newest-log-after-arm selection, MangoHud header sniff mirroring `detect.ts`, quiesce rule, log-name
+  → game name, `--version` → `captureTool`) + a `#[cfg(target_os = "linux")]` 500 ms polling watcher
+  thread. Read-only config detection: we report what is missing and print the exact lines, and never
+  write a file we do not own. New `AppError::NoCaptureLog` (names MangoHud's hotkey) and
+  `AppError::NoLogFolder` (the hard gate — with no `output_folder` there is nothing to watch).
+- [x] **23.2 Mesa-aware hardware snapshot.** New `linux.rs`, `win.rs`'s sibling. MangoHud's sysinfo
+  row is the preferred source and `apps/desktop/src/lib/hardware.ts` enforces that precedence before
+  `uploadCaptureBytes`'s merge can invert it — without which `/sys` would overwrite `Mesa 26.1.4`
+  with a kernel module name and every Linux driver-currency rule would miss. Dependency-free reads
+  for `cpu`, `ramGb`, `os` + kernel, PCI `gpuVendor`, `mem_info_vram_total`, and a
+  display-server-free `resolution`. RAM speeds and HAGS come back **absent/unknown**, asserted by
+  test.
+- [x] **Environment is a checks contract.** `Environment` carries `platform` + `checks:
+  Vec<EnvCheck>` + `watcherMode` instead of two named booleans; each check carries its own label,
+  hint, config lines and `blocking` flag, produced by the side that ran it (`env.rs`).
+  `needsOnboarding` reads one contract. Non-blocking checks (sensors, `log_interval`) never gate the
+  app — diagnostics skip rather than fail.
+- [x] **Frontend.** `armed` screen between ready and capturing, with a `disarm` toggle intent so
+  cancelling is not reported as a capture failure; onboarding renders from `checks`; the
+  "MangoHud is logging — the trace appears when it flushes" copy replaces an empty chart when no
+  `log_interval` is set.
+  - **Bug fixed:** `LiveFrameTimes` treated the first row as the header. A MangoHud log's first row
+    is a sysinfo key row, so it found no frame-time column and silently blanked the live chart for
+    every Linux capture. It now scans a bounded preamble.
+- [x] **Parsers.** `MANGOHUD_COLUMNS.periodicSensors` covers the whole sensor set (MangoHud has no
+  per-present timing columns, so nothing it logs is frame-aligned); `mangohud@1.1.0`.
+  `amd-mesa-basic.csv` got its missing provenance row.
+- [x] **24.1 Packaging.** `tauri.conf.json` split into `tauri.{windows,linux}.conf.json` — required,
+  not cosmetic: `bundle.externalBin` is validated by `tauri-build` at build-script time, so
+  `cargo clippy` itself failed on Linux. AppImage + deb targets, a Flatpak manifest whose narrowly
+  enumerated read-only sandbox grants are the substantive part, `fetch-presentmon.mjs` a no-op off
+  Windows (after its version-pin check), and a `desktop-linux` CI job that compiles the
+  `#[cfg]`-ed-out halves at all.
+- [ ] **24.2 Real MangoHud fixture flip — NOT DONE.** Requires a real anonymized MangoHud export
+  landed under procedure 16a.1. All three `SENSOR_AVAILABILITY.mangohud.*` cells stay `synthetic`,
+  so the `gpu_vram_used` (assumed GiB) and sysinfo `ram` (assumed MB above 256) unit questions in the
+  fixtures README wanted-list remain **open**. The flip-honesty test enforces this; do not soften it.
+
+- **Verify** (automated): ~45 new Rust tests, all pure, so they run on the Windows job too — conf
+  parsing in both forms, candidate-dir order incl. Flatpak Steam, newest-log-after-arm selection,
+  stale-log and non-MangoHud rejection, quiesce, chunk-boundary reassembly with a MangoHud preamble,
+  and `linux.rs` mappers over `/proc` and `/sys` fixture strings. JS: armed transitions,
+  `needsOnboarding` over checks, MangoHud preamble in the live readout, hardware-merge precedence,
+  Linux onboarding render, config-split regression. Parsers: alignment `false` for all five MangoHud
+  sensors, `mangohud@1.1.0`.
+- **Verify** (manual, the real gate — **NOT YET RUN**): install MangoHud, set `output_folder` +
+  `log_interval`; arm Heimdall, press MangoHud's hotkey in-game, capture ~60 s, stop; confirm the
+  live trace updates and the Complete screen shows frames/avg/lows; upload and confirm the run page
+  shows GPU/CPU from sysinfo, `gpuDriver: Mesa <version>`, `os` carrying distro + kernel, and that
+  the driver-currency diagnostic picks the **Mesa** baseline (`DRIVER_COMPONENT_SQL → mesa`) rather
+  than a vendor package; confirm RAM-speed diagnostics stay silent rather than firing on absent data;
+  repeat with `log_interval` unset to confirm the honest fallback copy; install the deb and the
+  AppImage and confirm the watcher finds logs from both a native and a Flatpak-Steam game.
+- **Regression**: `cargo clippy`/`cargo test` on both runners; `cargo tauri build --bundles
+  appimage,deb` on ubuntu; the Windows job stays green after the `externalBin` move.
+
+### Explicitly not verified by this phase — do not imply otherwise
+- **SteamOS gaming mode and the Steam Deck.** No Deck was available. The sysfs reads are chosen to
+  need no display server and the watcher needs no window, but that is reasoning, not a result.
+- **The Flatpak build's sandbox grants** against a real Deck install. The manifest has never been
+  built or run.
+- **NVIDIA and Intel MangoHud cells.** Synthetic, open contributions — the same resolution §22.6
+  reached for PresentMon.
+- **Cross-platform compile of the Linux halves was not run locally** (a Windows dev box cannot
+  cross-compile a GTK/WebKit Tauri target). The `desktop-linux` CI job is the first thing that
+  type-checks `#[cfg(target_os = "linux")]` code.
 
 ### Phase 9.5 Regression Gate
 - Linux capture parity with Windows; both clients on the same ingest contract
@@ -739,47 +814,248 @@ commit — local Windows renders are not valid baselines.
 > RX 9070 XT, Cyberpunk 2077 reported 243.9 avg FPS with frame generation on against 130.7 with it
 > off. This phase is about the numbers, and about detecting the case where nobody declared anything.
 
+**Three decisions settled before implementation**, each of which was an open question in the §22.11
+writeup:
+
+1. **The rendered-frame summary is stored, outside `RunSummary`** — computed server-side in the
+   verify worker, persisted in a new nullable jsonb column. `RunSummary`, `summaryMismatch` and the
+   client upload contract are untouched, so the §11.5 recompute gate does not move. The alternative
+   (derive it in the browser at read time) needs no migration but strands the number on the run page,
+   out of reach of `/games`, `/compare` and any list.
+2. **§22.13 ships as characterisation only** — the statistics are computed and stored, the findings
+   are written up, and **no rule fires and no run is annotated**. The only frame-generation evidence
+   this project holds is one GPU, one title, one resolution; a threshold calibrated on n = 1 that
+   accuses honest uploaders is the failure §0.5 exists to prevent. The rule gets its own phase once
+   multi-vendor captures land.
+3. **The toggle switches the stat tiles *and* the frame-time chart.** A trace still drawn over
+   presented frames underneath rendered numbers contradicts itself — and the rendered stream has its
+   own median, so it has its own stutter threshold.
+
 - [ ] 22.12 **Dual summary where frame-type evidence exists.** Compute a second summary over
-  non-generated frames only, and offer a toggle on the run report: "how fast did it render" vs "how
+  rendered presents only, and offer a toggle on the run report: "how fast did it render" vs "how
   smooth did it feel". Both are legitimate answers to different questions, which is why this is a
   toggle and not a replacement.
   - Only available where the capture reports frame type. AMD frame generation carries no evidence
     (§22.6), so the toggle is absent there — stated, not silently omitted.
-  - Presentation only, at least initially. `frameGeneration` is already a comparability key, so
-    declared-FG and declared-non-FG runs are in different buckets regardless; this does not need to
-    touch pooling.
-  - Open question to settle first: does the rendered-frame rate belong in the stored summary, or is
-    it derived at read time? Storing it changes `summaryMismatch` and the client/server recompute
-    contract, so it is not a free addition.
+  - Presentation only. `frameGeneration` is already a comparability key, so declared-FG and
+    declared-non-FG runs are in different buckets regardless; this does not touch pooling.
 
-- [ ] 22.13 **Physics-based frame-generation evidence (research first, rule second).** Detect
+  - [ ] **The coalescing rule — the crux, and the thing that is easy to get quietly wrong.** A
+    rendered summary is **not** a filter of `generated === false` rows. `frameTimeMs` is an interval,
+    so dropping the generated rows drops their durations too and the rate is unchanged: on the
+    measured capture, 7,120 rendered rows over their own 4.10 ms mean interval recompute to
+    `1000 × 7120 / (7120 × 4.10)` = **243.9 FPS**, bit-for-bit the presented number. The rendered
+    series is the set of intervals **between consecutive rendered presents**, so a generated
+    present's time is absorbed into the interval that contains it.
+    - Arithmetic check against the measured pair: 7,120 rendered presents → 7,119 intervals over
+      ~58.4 s → **121.9 rendered FPS**, against **130.7** measured with frame generation off. The
+      −6.7% residual is the cost of running frame generation itself, which consumes base render
+      budget. That agreement is the only evidence the algorithm measures what it claims — it belongs
+      in the docs writeup.
+    - **`frameTimeMs` is forward-looking on the only profile that can carry frame type.** Verified on
+      `fixtures/presentmon/v2-amd-real.csv`: `10058.6817 + 8.6357 = 10067.3174`, exactly the next
+      row's `CPUStartTime`, on four consecutive rows of real hardware. So `d[i] = t[i+1] − t[i]`, and
+      the accumulator **starts at** a rendered present and closes when it **reaches** the next one
+      (exclusive). The backward reading is off by one row per boundary — harmless on a strictly
+      alternating stream, but it moves p95/p99, the lows and the stutter count on any irregular one.
+    - `v2-v1-metrics-amd-real.csv` proves the two PresentMon profiles genuinely disagree:
+      `2.01124880 − 2.00495280 = 6.296 ms` is row **2**'s `msBetweenPresents`, not row 1's — backward.
+      A `FrameType` column can only reach us on the v2 profile, so **gate `generatedColumn` on `isV2`**
+      in `presentmon.ts:79` (today `findColumn(header, ["frametype"])` runs for every profile). One
+      line, and it makes the convention structural instead of documentary.
+    - Do **not** rederive intervals from `time_ms` deltas to dodge the convention.
+      `computeFrameParquetSummary` drops `times` (`frame-metadata.ts:304`) to shed 4 MiB, and
+      `buildFrameSeriesFromColumns` normalizes `times` **in place**, so server and browser would be
+      working from different arrays — losing bit-identity exactly where it is needed.
+    - Edge cases, all named constants and all tested: `generated === undefined` inside an
+      evidence-bearing run is **absorbed** into the enclosing interval (the time elapsed; we just
+      don't know what bounded it); fewer than `MIN_RENDERED_INTERVALS` rendered presents yields no
+      summary; and a run with evidence but **zero** generated frames yields no rendered summary
+      either — not because it would duplicate the presented one but because it would **not**: the
+      coalescer returns `d[0..n−2]`, differing in the 3rd–4th significant figure. Two numbers claiming
+      to be the same rate and disagreeing slightly is worse than one number.
+
+  - [ ] **New `packages/parsers/src/frame-generation.ts`.** `coalesceRenderedIntervals(frameTimesMs,
+    presentTypes)` returning the intervals plus `startRows` (each interval's originating row, so the
+    browser can rebuild the chart on the real time base), the three present-type counts, and
+    `leadingMs`/`trailingMs` so the docs can show the accounting closes. Then
+    `computeRenderedFrameAnalysis(...)` feeding those intervals straight into the **existing**
+    `computeRunSummaryFromFrameTimes` — no percentile, low or stutter definition is rederived, which
+    is what makes server/browser agreement structural rather than merely tested.
+    - Result is a **discriminated union on `state`**, not a nullable summary: `available` |
+      `no-frame-type-evidence` | `no-generated-frames` | `too-few-rendered-presents`. Precedent is
+      `vramCapacitySchema` — "a discrete total, or a typed reason it is unavailable". The server
+      decides *why* once; the UI reads one field; §22.12's "stated, not silently omitted" becomes
+      structural rather than a copy convention three surfaces must remember.
+    - Tri-state present-type codec (`PRESENT_FRAME_TYPE` + `presentFrameTypeCode`) goes in
+      `packages/shared/src/parquet.ts` beside `parseOptionalFrameParquetGenerated`, because the
+      browser decoder must not import parsers. A `Uint8Array` of codes, never a boxed
+      `(boolean | null)[]` — that object graph is what the columnar path exists to avoid.
+    - The coalescer itself must live in parsers (it calls `computeRunSummaryFromFrameTimes`, and
+      shared cannot depend on parsers). That costs nothing new in the browser bundle: `stutters.ts:10`
+      already statically imports `stutterThresholdMs` from `@heimdall/parsers`. The comment at
+      `frame-metadata.ts:307-310` implies otherwise and should be tightened while we are there.
+
+  - [ ] **Compute it in the existing Parquet pass — but not inside the chunk callback.**
+    `readFrameParquetColumn`'s own doc comment records that **row groups may arrive unordered**
+    (hence its `seenRows` presence bitmap), so any accumulator in `onValue` would coalesce in
+    delivery order and produce garbage on a multi-row-group file — nondeterministically, passing every
+    single-row-group fixture we own. Fill a `Uint8Array(frameCount)` of type codes during the
+    `generated` pass, then coalesce in row order **after** it resolves.
+    `FRAME_PARQUET_COLUMN_NAMES` orders `frame_time_ms` before `generated`, so the frame times are
+    already complete when that pass ends.
+
+  - [ ] **Migration `0040_frame_analysis.sql`** — `runs.rendered_frame_analysis jsonb`,
+    `runs.present_time_profile jsonb`, `runs.frame_analysis_version integer`, plus the nulls-first
+    partial index, following `0030_diagnostics_watermark.sql`. `FRAME_ANALYSIS_VERSION = 1` in
+    `packages/shared/src/constants.ts` next to `DIAGNOSTICS_RULE_GENERATION`.
+    - **Do not copy 0030's backfill.** 0030 could honestly `set diagnostics_rule_generation = 1`
+      because those findings really had been evaluated at generation 1. No existing row has ever had
+      a frame analysis computed, so stamping would permanently hide the entire historical corpus from
+      the lane that exists to reach it. Leave the watermark null and let `nulls first` make those
+      rows highest-priority — the same reason 0030's own comment insists the predicate carry an
+      `is null` branch.
+  - [ ] **Fourth lane in `FULL_REPROCESS_ENQUEUE_SQL`**, mirroring `diagnostics_generation_candidates`
+    verbatim, with `FRAME_ANALYSIS_VERSION` as `$6`. Write paths that must stamp:
+    `applyVerificationResult` and `applyReprocessResult` (so `ReprocessResult` gains fields);
+    `failVerificationJob` never stamps, which is exactly the population the `is null` branch reaches;
+    and `insertRun` deliberately does not — there is no client contract for a rendered summary and
+    inventing one would reintroduce the trust violation this phase removes. Say so in a comment or
+    someone will "fix" it.
+    - Two traps in those CTEs. Both use `coalesce($n, runs.col)` for nullable values — **do not**
+      coalesce these: a run whose analysis becomes unavailable under a new algorithm version must
+      *lose* the value, not silently keep a stale one. And both carry hardcoded positional offsets
+      (`diagnosticInsertSql(1, 20, …)` / `(1, 18, …)`), so **append** the new parameters after the
+      diagnostics arrays rather than renumbering — that class of bug writes the wrong value into the
+      right column with no type error and no test failure.
+
+  - [ ] **Wire + UI.** `renderedFrameAnalysisSchema` as a `z.discriminatedUnion("state", …)` added to
+    `runResponseSchema`; `RUN_WITH_SUMMARY_SELECT` + `RunRow` + `rowToRun` in `db.ts` (two single-row
+    callers only, so no list-query cost).
+    - **`present_time_profile` stays off the wire.** §22.13 ships with no user-visible annotation;
+      shipping an unexposed suspicion score to every viewer is precisely what §0.5 warns against.
+      Comment the omission where the `ownerId` omission is commented, so the reasoning survives.
+    - `page.tsx:60` does `runResponseSchema.parse(run)` and zod strips unknown keys — forget the
+      schema field and the column plumbs all the way from Postgres to the page boundary and then
+      vanishes with no error. Pin it with a schema-test assertion.
+    - New `rendered-rate-readiness.ts`, a structural copy of `busy-readiness.ts`: one module owns the
+      verdict and its reason string, shared by the toggle, the caption and the tests. A `Segmented`
+      (`Presented` | `Rendered`) in a header row above `RunStatTiles` — not in the chart header, which
+      would imply chart-only scope — disabled with a **visible** reason exactly as the busy `Switch`
+      already is.
+    - Copy for the unavailable cases, in product voice: no evidence → *"Capture does not report frame
+      type — a rendered-only rate cannot be computed."* (long form naming the Intel-PresentMon
+      provider requirement and why AMD frame generation carries no label); evidence but nothing
+      generated → *"This capture reports frame type and shows no generated frames, so the presented
+      rate is already the rendered rate."*; too few → *"Only N presents were labelled as rendered —
+      too few to time a rendered rate."*; unverified → *"Rendered rate appears once verification
+      recomputes this run."*
+    - **Replace the "Generated frames %" tile in rendered mode.** Fed the rendered summary it reads
+      **0%** for a run that is 50% generated — re-manufacturing the exact false claim §22.11 removed.
+      Swap it for an "Interpolated presents" tile driven by the analysis blob's counts.
+    - Chart: `FrameDecodeOptions` gains `generatedColumn?: boolean` (default **false**, threaded only
+      when the analysis is `available`, same rationale as `busyColumns`); `decodeFrameParquetToSeries`
+      gains a lazily-allocated `readGeneratedColumn` mirroring `readBusyColumn`; `FrameSeries` gains
+      `presentTypes?: Uint8Array`; new `rendered-series.ts` gathers `times[startRows[k]]` so the x
+      axis keeps the real time base (a `0, Δ, 2Δ…` base would silently compress the run) and feeds the
+      same `buildFrameSeriesFromColumns`. `FrameTimeChart` needs no prop change — pass the rendered
+      `avgFps` so `bandThresholdMs` picks the right good-zone band. **Memoize** the coalesce and its
+      stutter indices; a 500k-frame recoalesce per toggle click is a visible hang.
+    - **Force `showBusy` off in rendered mode**, with a fourth `busyOffReason`: `cpuBusyMs`/`gpuBusyMs`
+      are per-present and do not survive coalescing, so drawing them against rendered intervals would
+      be a fabricated trace.
+    - Extend the switch to `SmoothnessBars` too — it derives from the same three FPS numbers, and
+      leaving it on presented values directly beneath a rendered chart is the inconsistency this
+      phase is about. `generateMetadata`'s share-card FPS stays on the canonical presented value;
+      record that choice in the docs.
+
+- [ ] 22.13 **Physics-based frame-generation evidence — characterisation only, no rule.** Detect
   undeclared frame generation from WITHIN a run, not by comparing it to an aggregate.
   - The signal: sub-millisecond presents. The two captures above showed a 0.32 ms minimum with
     frame generation on versus 3.11 ms with it off. A 0.32 ms present is not a plausible rendered
-    frame at that resolution.
+    frame at that resolution. `MIN_FRAME_TIME_MS` is 0.01, so these presents survive parsing — the
+    signal reaches storage intact.
   - Why within-run and not ratio-vs-average: an aggregate baseline is already contaminated by the
     undeclared runs it is meant to find; it is inert below the §17.4/§18.2 cold-start threshold, so
     it does nothing at current data volume; and 2x is not a clean constant (DLSS4 multi-frame
     generation is 3–4x, and the multiplier drifts with base framerate). Comparability keys control
     resolution/preset/upscaler/scene, but settings vary within a preset and a CPU-bound section
     moves FPS more than frame generation does.
-  - **Research task before any rule ships:** characterise the signature across vendors, titles and
-    base framerates. One machine and one title cannot calibrate a threshold. Belongs with the
-    §18.2 telemetry-physics layer, which already exists to flag physically inconsistent runs.
-  - **Evidence, never an accusation.** Consistent with §0.5: annotate the run, surface it for
-    review. Telling an honest uploader their run looks like cheating is a worse failure than
-    missing a dishonest one, and a false positive is unfalsifiable from the uploader's side.
+  - [ ] Store a `present_time_profile` from the same Parquet pass: `minFrameTimeMs`, the low-tail
+    nearest-rank percentiles (`p0_1`/`p1`/`p5` — free, `summarizeSortedFrameTimes` already sorts
+    ascending), `subMillisecondPresentCount`/`Fraction`, `adjacentSubMillisecondPairFraction`, and
+    **`medianOverMinRatio`**. Threshold as a named constant
+    `FRAME_GENERATION_EVIDENCE.subMillisecondPresentMs` in `packages/shared/src/integrity.ts`, beside
+    `PHYSICS` where the §18.2 layer already lives — never an inline number.
+    - `medianOverMinRatio` is the one to lead the writeup with, because it is **scale-free** —
+      independent of base framerate, resolution and title, which answers this section's own objection
+      that the multiplier drifts. On the measured pair it separates 5x: 4.10/0.32 = **12.8** with
+      frame generation on against 7.65/3.11 = **2.46** with it off. On n = 1 it is still worth
+      nothing, and the doc must say that in those words.
+  - [ ] **No rule, no annotation, nothing on the wire.** The statistics accumulate from real uploads
+    until they can be calibrated on more than one vendor. **Evidence, never an accusation** (§0.5):
+    telling an honest uploader their run looks like cheating is a worse failure than missing a
+    dishonest one, and a false positive is unfalsifiable from the uploader's side. A threshold fitted
+    to one GPU, one title and one resolution cannot carry that weight.
+  - [ ] `docs/frame-generation.md`: what the pipeline can and cannot see (only PresentMon v2
+    `--track_frame_type`, and why AMD cannot); the measured RX 9070 XT table with capture conditions;
+    the coalescing definition with the worked arithmetic (243.9 presented → 121.9 rendered vs 130.7
+    measured FG-off, and why −6.7% is expected); why naive filtering is wrong, with the 243.9 = 243.9
+    identity; each stored statistic labelled **n = 1, one vendor, one title, one resolution**; what
+    calibration would require and the known false-positive shapes (menus, loading screens, capped and
+    idle sections); and the explicit statement that no rule ships and no run is annotated. Cross-link
+    from wanted-list item 9 in the fixtures README.
 
-- **Verify**: a frame-generated capture with frame-type evidence reports both rates and the toggle
-  switches between them; a run with sub-millisecond presents is annotated, not rejected
+- [ ] **Housekeeping this phase must not leave behind.**
+  - [ ] `packages/parsers/fixtures/README.md:80-81` still claims "`generatedFramePct` is always 0 and
+    `generatedFrameTech` always resolves to `none`" — §22.11 already invalidated that and this phase's
+    fixtures invalidate it twice over.
+  - [ ] Settle `PHYSICS.recomputeTolerance` (`integrity.ts:30-33`), dead except for its own test.
+    **Do not** wire it into `verify-run.ts`: `floatsMatch` uses a `1e-6` relative epsilon, so adopting
+    `0.01` would loosen the integrity gate by four orders of magnitude. Either delete it with its
+    test, or comment at `floatsMatch` that `summaryMismatch` deliberately does not use it and why.
+    This phase adds a second recompute path, so a reviewer will ask.
+
+- **Verify**: a frame-generated capture with frame-type evidence reports both rates, and the toggle
+  switches the tiles, the smoothness bars and the chart together; a capture with no frame-type
+  evidence shows the toggle disabled with its reason as visible text; `present_time_profile` is
+  populated on both members of the measured RX 9070 XT pair and appears nowhere in the API response
 - **Regression**:
-  - [ ] Dual-summary golden fixtures (hand-computed, both rates)
-  - [ ] Toggle absent — and said to be absent — when the capture carries no frame-type evidence
-  - [ ] Physics rule fires on a known-FG capture and stays silent on the matched non-FG one
+  - [ ] New `frame-generation.test.ts`: forward-convention coalescing on a hand-built stream; the
+    `renderedCount − 1` invariant; `Σ intervals = t[last] − t[first]`; leading/trailing accounting;
+    `undefined` rows absorbed; each of the three unavailable states. Property test (fast-check is
+    already a parsers devDependency): an all-`false` stream yields `d[0..n−2]`, proving the
+    "it would just duplicate the presented summary" assumption false
+  - [ ] Dual-summary golden fixtures (hand-computed, both rates) — synthetic, per the `fixtures/README.md`
+    16a.1 procedure, since no real FG capture is obtainable on AMD hardware (§22.6). Suggested shape:
+    12 rows alternating rendered `d = 8 ms` / generated `d = 0.4 ms`, so presented avg = `1000×12/50.4`
+    and rendered avg = `1000×5/42.0` = 119.05 — both checkable by hand. Plus an
+    application-only fixture for the `no-generated-frames` branch
+  - [ ] Toggle absent — and said to be absent, as visible text — when the capture carries no
+    frame-type evidence; busy overlay forced off with its reason in rendered mode
+  - [ ] `verify-run.unit.test.ts`: **`summaryMismatch` is unchanged by a frame-generated run**, and the
+    rendered analysis never influences the validated/flagged verdict. This is decision 1's guarantee
+    and the one a future reader is most likely to "fix"
+  - [ ] Reprocess: the fourth lane enqueues a null-watermark run and skips a current-version one
+    (mirroring the §17.8.0 case), both write paths stamp, and the new lane is proven index-backed by
+    the existing EXPLAIN assertion
+  - [ ] Functional e2e (non-`@visual`): `makeSyntheticFrames` already emits three-state `generated`
+    (40% true / 60% false) in a non-alternating 3-of-5 pattern, so the fixture run gets a real toggle
+    and exercises the off-by-one — but `global-setup.ts` must seed the new columns directly
+  - [ ] `@visual` baselines will churn: the toggle changes the run-page header region. Use the
+    one-click **Regenerate visual baselines** `workflow_dispatch`, planned rather than discovered in CI
+  - [ ] Physics rule fires on a known-FG capture and stays silent on the matched non-FG one —
+    **deferred with the rule** (decision 2). No rule ships this phase, so there is nothing to assert
 
 ### Phase 9.6 Regression Gate
-- No run reports a number it cannot support; undeclared frame generation is visible as evidence
-  without any run being auto-rejected for it
+- No run reports a number it cannot support: a frame-generated run with frame-type evidence reports
+  its rendered rate as well as its presented one, and a run without that evidence says so rather than
+  implying either
+- `RunSummary`, `summaryMismatch` and the client upload contract are byte-for-byte unchanged — the
+  §11.5 recompute gate did not move to accommodate this phase
+- The frame-generation signature is characterised, stored and documented, and **no run is annotated
+  or auto-rejected for it**; the calibration gap is written down rather than papered over with a
+  threshold fitted to one machine
 
 ---
 

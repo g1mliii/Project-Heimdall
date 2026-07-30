@@ -20,6 +20,26 @@ pub enum AppError {
     #[error("no capture is running")]
     CaptureIdle,
 
+    /// Linux (§23.1). The watcher was armed and stopped without MangoHud ever
+    /// writing a log. The message names the thing the user has to press,
+    /// because "0 frames captured" reads as a Heimdall bug when it is not one.
+    #[error(
+        "MangoHud never wrote a log. Start logging with MangoHud's own hotkey \
+         (Shift+F2 by default) while the game is running, then stop the capture."
+    )]
+    NoCaptureLog,
+
+    /// Linux (§23.1). MangoHud has no `output_folder`, so it writes beside the
+    /// game's working directory — a location the client cannot know. Refusing
+    /// with the line to add beats arming a watcher that can never fire.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[error(
+        "MangoHud has no output_folder set, so its logs go to each game's own \
+         directory and Heimdall cannot find them. Add an output_folder line to \
+         MangoHud.conf — the setup screen shows the exact text."
+    )]
+    NoLogFolder,
+
     #[error("another exclusive operation is active: {0}")]
     OperationBusy(&'static str),
 
@@ -58,6 +78,8 @@ impl AppError {
             Self::Foreground(_) => "no-foreground-game",
             Self::CaptureBusy => "capture-busy",
             Self::CaptureIdle => "capture-idle",
+            Self::NoCaptureLog => "no-capture-log",
+            Self::NoLogFolder => "no-log-folder",
             Self::OperationBusy(_) => "operation-busy",
             Self::Hotkey(_) => "hotkey-unavailable",
             Self::NoSigningKey => "no-signing-key",
@@ -108,6 +130,8 @@ mod tests {
             AppError::Foreground(String::new()).code(),
             AppError::CaptureBusy.code(),
             AppError::CaptureIdle.code(),
+            AppError::NoCaptureLog.code(),
+            AppError::NoLogFolder.code(),
             AppError::OperationBusy("capture").code(),
             AppError::Hotkey(String::new()).code(),
             AppError::NoSigningKey.code(),
