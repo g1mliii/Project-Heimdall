@@ -25,6 +25,7 @@ export interface Environment {
   apiBaseUrl: string;
   appVersion: string;
   signingAvailable: boolean;
+  updatesEnabled: boolean;
 }
 
 export interface MethodologyFacts {
@@ -68,6 +69,11 @@ export interface PreparedPayload {
   byteLength: number;
 }
 
+export interface UpdateInfo {
+  currentVersion: string;
+  version: string;
+}
+
 /** Error carrying the Rust command's stable `code` discriminant. */
 export class IpcError extends Error {
   constructor(
@@ -97,11 +103,17 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 
 export const getEnvironment = () => call<Environment>("get_environment");
 export const getHardware = () => call<DeclaredHardware>("get_hardware");
+export const getHardwareForPid = (pid: number) =>
+  call<DeclaredHardware>("get_hardware_for_pid", { pid });
+export const checkForUpdate = () => call<UpdateInfo | null>("check_for_update");
+export const installUpdate = () => call<void>("install_update");
 export const getForegroundGame = () => call<CaptureTarget>("get_foreground_game");
 export const startCapture = () => call<CaptureStarted>("start_capture");
 export const stopCapture = () => call<CaptureResult>("stop_capture");
 export const captureRunning = () => call<boolean>("capture_running");
 export const setHotkey = (accelerator: string) => call<HotkeyState>("set_hotkey", { accelerator });
+export const beginUpload = () => call<void>("begin_upload");
+export const endUpload = () => call<void>("end_upload");
 export const discardPayload = () => call<void>("discard_payload");
 export const openSetupGuide = () => call<void>("open_setup_guide");
 export const openClaim = (runId: string, managementToken: string) =>

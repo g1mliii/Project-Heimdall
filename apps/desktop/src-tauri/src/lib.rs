@@ -6,6 +6,7 @@
 //! must not hold — the PresentMon sidecar, foreground-process detection,
 //! hardware collection, the Ed25519 private key, and the direct-to-R2 PUT.
 
+mod activity;
 mod capture;
 mod commands;
 mod crash;
@@ -39,16 +40,22 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(capture::CaptureState::default())
+        .manage(activity::ActivityState::default())
         .manage(upload::PayloadState::default())
         .manage(hotkey::HotkeyManager::default())
         .invoke_handler(tauri::generate_handler![
             commands::get_environment,
             commands::get_hardware,
+            commands::get_hardware_for_pid,
+            commands::check_for_update,
+            commands::install_update,
             commands::get_foreground_game,
             commands::start_capture,
             commands::stop_capture,
             commands::capture_running,
             commands::set_hotkey,
+            commands::begin_upload,
+            commands::end_upload,
             commands::prepare_payload,
             commands::put_prepared_payload,
             commands::discard_payload,

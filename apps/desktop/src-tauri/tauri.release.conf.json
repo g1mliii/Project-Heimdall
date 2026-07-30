@@ -19,7 +19,7 @@
   "bundle": {
     "createUpdaterArtifacts": true,
     "windows": {
-      "signCommand": "trusted-signing-cli -e %AZURE_SIGN_ENDPOINT% -a %AZURE_SIGN_ACCOUNT% -c %AZURE_SIGN_PROFILE% %1"
+      "signCommand": "artifact-signing-cli -e %AZURE_SIGN_ENDPOINT% -a %AZURE_SIGN_ACCOUNT% -c %AZURE_SIGN_PROFILE% %1"
     }
   },
   "plugins": {
@@ -27,7 +27,7 @@
       "endpoints": [
         "https://github.com/g1mliii/Project-Heimdall/releases/latest/download/latest.json"
       ],
-      "pubkey": "REPLACE_WITH_TAURI_UPDATER_PUBLIC_KEY",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc4OEE5MDc3MkYyMTUwNEEKUldSS1VDRXZkNUNLZUpCSVMyWEVlWk1oQVhuZDRBV2dJb2kyaFQ3SVM0N0lYNjg2WGIwMEJPeHcK",
       "windows": {
         "installMode": "passive"
       }

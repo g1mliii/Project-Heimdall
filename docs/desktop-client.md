@@ -218,7 +218,7 @@ reach.
 
 | Field | Source |
 |---|---|
-| `gpu`, `gpuVendor`, `gpuVramTotalMb` | DXGI `IDXGIAdapter1::GetDesc1` — description, vendor id, exact `DedicatedVideoMemory` bytes |
+| `gpu`, `gpuVendor`, `gpuVramTotalMb` | DXGI `IDXGIAdapter1::GetDesc1` — adapter matched to the captured pid's PDH LUID, then its monitor, with adapter 0 only as a last fallback; description, vendor id, exact `DedicatedVideoMemory` bytes |
 | `gpuDriver` | Registry `DriverVersion` (+ `RadeonSoftwareVersion`), normalized to the marketing string the driver-currency feed uses |
 | `cpu` | WMI `Win32_Processor.Name` |
 | `ramGb`, `ramSpeedMtps` | WMI `Win32_PhysicalMemory` — summed `Capacity`, minimum `ConfiguredClockSpeed` |
@@ -334,10 +334,22 @@ which is a valid outcome.
 
 `HEIMDALL_API_BASE_URL` defaults to `http://localhost:3000`. It is baked in at
 build time so a shipped client cannot be redirected by editing a config file.
+Local contributor builds use the development Tauri capability that admits that
+origin. The release workflow replaces it with `release-capability.json` before
+bundling; that production capability admits only `https://heimdall.dev` and
+contains no localhost HTTP scope.
+`HEIMDALL_R2_ACCOUNT_ID` and `HEIMDALL_R2_BUCKET` are baked in as the only
+native upload destination. This is a second enforcement layer: even compromised
+webview code cannot turn the privileged Rust PUT command into SSRF or send a
+capture to another R2 account. Local R2 development must set the same two
+variables before compiling the desktop client.
 
-Releasing: push a `desktop-v*` tag. `.github/workflows/release.yml` builds,
-signs with all three keys, and publishes the installer plus `latest.json` to a
-GitHub release.
+Releasing: push a `desktop-v*` tag. `.github/workflows/release.yml` builds with
+the `release-updates` feature, checks the signed channel at startup, offers an
+explicit verified install/restart, signs with all three keys, and publishes the
+installer plus `latest.json` to a GitHub release. The Artifact Signing helper is
+exact-pinned (`artifact-signing-cli 0.11.0`) so a new crates.io release cannot
+silently gain access to the Azure credentials in the signing step.
 
 > **Rate limits:** the server keys uploads on client IP, and `clientIp()`
 > returns `"unknown"` unless `RATE_LIMIT_TRUSTED_PROXY` is set. Behind
@@ -349,16 +361,25 @@ GitHub release.
 ## Claim handoff (§22.5)
 
 After a successful upload the client opens
-`/runs/<id>?claim=<plaintext management token>` in the default browser. If the
+`/runs/<id>#claim=<plaintext management token>` in the default browser. URL
+fragments are not sent to the hub, reverse proxy, request logs, or Referer
+headers. The web client moves the token into tab-scoped storage and scrubs the
+address bar on its first render. If the
 visitor is signed in, the run page offers "Claim this run", which calls the
 existing `POST /api/runs/:id/claim`. Single-use, atomic, no new auth surface.
+If finalization has an ambiguous response, or opening the default browser
+fails, the desktop window retains the one-time credential and offers the same
+claim handoff again. Capture, upload, and updater installation also share one
+native activity gate, so installation cannot restart the process during an ETW
+session or the create → PUT → finalize transaction.
 
 The desktop client cannot create a **private** run: that needs a signed-in
 owner at create time, which the handoff has no way to provide. Runs are created
 public or unlisted, and the owner flips visibility from `/account` after
 claiming. The UI states this rather than offering a control that would fail.
 
-The plaintext token is dropped from the address bar once the claim succeeds.
+The plaintext token is dropped from the address bar before any claim attempt
+and cleared from tab-scoped storage once the claim succeeds.
 
 ---
 

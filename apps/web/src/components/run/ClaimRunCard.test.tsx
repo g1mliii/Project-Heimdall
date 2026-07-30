@@ -12,15 +12,22 @@ import { ClaimRunCard } from "./ClaimRunCard";
 
 afterEach(cleanup);
 
-function renderCard(fetcher: typeof fetch) {
-  render(<ClaimRunCard runId="run_abc" token="plaintext-token" fetcher={fetcher} />);
+function renderCard(fetcher: typeof fetch, onConsumed?: () => void) {
+  render(
+    <ClaimRunCard
+      runId="run_abc"
+      token="plaintext-token"
+      fetcher={fetcher}
+      onConsumed={onConsumed}
+    />,
+  );
 }
 
 describe("ClaimRunCard", () => {
   it("sends the handoff token as a bearer credential, never in the body", async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
-    const replaceState = vi.spyOn(window.history, "replaceState").mockImplementation(() => {});
-    renderCard(fetcher as unknown as typeof fetch);
+    const onConsumed = vi.fn();
+    renderCard(fetcher as unknown as typeof fetch, onConsumed);
 
     await userEvent.click(screen.getByRole("button", { name: "Claim this run" }));
 
@@ -33,10 +40,7 @@ describe("ClaimRunCard", () => {
     });
     expect(init.body).toBeUndefined();
 
-    // The spent token must not be left in the address bar for a screenshot or
-    // a copied URL to carry.
-    expect(replaceState).toHaveBeenCalledWith(null, "", "/runs/run_abc");
-    replaceState.mockRestore();
+    expect(onConsumed).toHaveBeenCalledOnce();
   });
 
   it("asks the user to sign in on a 401 instead of guessing at auth state", async () => {
@@ -45,7 +49,7 @@ describe("ClaimRunCard", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Claim this run" }));
     expect(await screen.findByText(/Sign in first, then claim/)).toBeInTheDocument();
-    // The card stays, so the link is still usable after signing in.
+    // The card stays, so the tab-scoped token is still usable after signing in.
     expect(screen.getByRole("button", { name: "Claim this run" })).toBeInTheDocument();
   });
 

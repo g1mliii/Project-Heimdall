@@ -32,11 +32,18 @@ import { createDesktopTransport, createSigner } from "./lib/transport";
 
 const TICK_MS = 200;
 
+type UpdateState =
+  | { status: "idle" | "checking" | "current" }
+  | { status: "available"; info: ipc.UpdateInfo }
+  | { status: "installing"; info: ipc.UpdateInfo }
+  | { status: "failed"; message: string };
+
 export function App() {
   const [state, dispatch] = React.useReducer(reducer, initialState);
   const [detected, setDetected] = React.useState<ipc.DeclaredHardware | null>(null);
   const [form, setForm] = React.useState<RunDetailsForm>(prefillForm(null, undefined));
   const [crashReport, setCrashReport] = React.useState<string | null>(null);
+  const [update, setUpdate] = React.useState<UpdateState>({ status: "idle" });
   // Which fields the user has actually touched. Detection re-fills everything
   // else on the next capture, so a second run cannot inherit the first run's
   // game name (§16c) — a ref because it is read inside a setState updater and
@@ -51,6 +58,11 @@ export function App() {
   const live = liveRef.current;
   /** Latest frame count from the row stream, drained by the elapsed tick. */
   const pendingFramesRef = React.useRef<number | null>(null);
+  const startPromiseRef = React.useRef<Promise<void> | null>(null);
+  const analyzePromiseRef = React.useRef<Promise<void> | null>(null);
+  const captureHardwarePromiseRef = React.useRef<Promise<ipc.DeclaredHardware | null> | null>(
+    null,
+  );
 
   // The reducer is pure, so event handlers registered once would close over a
   // stale state. A ref keeps the toggle decision reading the current one.
@@ -61,58 +73,116 @@ export function App() {
     dispatch({ type: "environment", environment: await ipc.getEnvironment() });
   }, []);
 
-  const startCapture = React.useCallback(async () => {
+  const checkForUpdate = React.useCallback(async () => {
+    setUpdate({ status: "checking" });
     try {
-      liveRef.current = new LiveFrameTimes();
-      const started = await ipc.startCapture();
-      dispatch({ type: "capture-started", started });
+      const info = await ipc.checkForUpdate();
+      setUpdate(info === null ? { status: "current" } : { status: "available", info });
     } catch (error) {
-      dispatch({
-        type: "capture-failed",
+      setUpdate({
+        status: "failed",
         message: error instanceof Error ? error.message : String(error),
       });
     }
   }, []);
 
-  const analyzeCapture = React.useCallback(async () => {
-    dispatch({ type: "analyzing" });
-    try {
-      const result = await ipc.stopCapture();
-      const bytes = new TextEncoder().encode(result.csv);
-      // Same parser, same limits as the browser upload path (§22.1).
-      const parsed = parseAnyCapture(bytes, { maxFrames: INGEST_LIMITS.maxFramesPerRun });
-      if (!parsed.ok) {
-        dispatch({ type: "capture-failed", message: parsed.error.message });
-        return;
-      }
-      if (parsed.capture.frames.length < INGEST_LIMITS.minFramesPerRun) {
+  const startCapture = React.useCallback(() => {
+    if (startPromiseRef.current !== null) return startPromiseRef.current;
+    const task = (async () => {
+      try {
+        liveRef.current = new LiveFrameTimes();
+        const started = await ipc.startCapture();
+        // Refresh against the captured process's own monitor/adapter. Boot-time
+        // hardware can point at the desktop window or adapter 0 on a hybrid
+        // laptop, both of which poison comparability metadata.
+        const hardwareTask = ipc
+          .getHardwareForPid(started.pid)
+          .then((hardware) => {
+            setDetected(hardware);
+            return hardware;
+          })
+          .catch(() => {
+            // Hardware facts skip rather than fail; retain the last honest
+            // snapshot when collection becomes unavailable mid-session.
+            return null;
+          });
+        captureHardwarePromiseRef.current = hardwareTask;
+      } catch (error) {
         dispatch({
           type: "capture-failed",
-          message: `Only ${parsed.capture.frames.length} frames were captured (minimum ${INGEST_LIMITS.minFramesPerRun}). Capture for longer.`,
+          message: error instanceof Error ? error.message : String(error),
         });
-        return;
       }
-      // Re-detect everything the client can see; keep only what the user typed.
-      // A "keep every non-empty field" merge would carry the previous capture's
-      // game name onto this one — see `applyDetection`.
-      setForm((current) =>
-        applyDetection(current, editedRef.current, detected, result.target.process),
-      );
-      dispatch({
-        type: "analyzed",
-        capture: {
-          bytes,
-          summary: computeRunSummary(parsed.capture.frames),
-          warnings: parsed.warnings,
-          frames: parsed.capture.frames.length,
-        },
-      });
-    } catch (error) {
-      dispatch({
-        type: "capture-failed",
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
+    })();
+    startPromiseRef.current = task;
+    void task.finally(() => {
+      if (startPromiseRef.current === task) startPromiseRef.current = null;
+    });
+    return task;
+  }, []);
+
+  const analyzeCapture = React.useCallback(() => {
+    if (analyzePromiseRef.current !== null) return analyzePromiseRef.current;
+    const task = (async () => {
+      dispatch({ type: "analyzing" });
+      try {
+        const result = await ipc.stopCapture();
+        // Collection starts as soon as PresentMon identifies the pid. Await it
+        // here so a short capture cannot upload the boot-time foreground
+        // window's monitor/adapter merely because WMI/DXGI finished late.
+        const hardwareTask = captureHardwarePromiseRef.current;
+        const captureHardware = (hardwareTask === null ? null : await hardwareTask) ?? detected;
+        if (captureHardwarePromiseRef.current === hardwareTask) {
+          captureHardwarePromiseRef.current = null;
+        }
+        const bytes = new TextEncoder().encode(result.csv);
+        if (bytes.byteLength > INGEST_LIMITS.maxCaptureBytes) {
+          dispatch({
+            type: "capture-failed",
+            message: `Capture is ${(bytes.byteLength / (1024 * 1024)).toFixed(1)} MiB; maximum is ${INGEST_LIMITS.maxCaptureBytes / (1024 * 1024)} MiB.`,
+          });
+          return;
+        }
+        // Same parser, same limits as the browser upload path (§22.1).
+        const parsed = parseAnyCapture(bytes, { maxFrames: INGEST_LIMITS.maxFramesPerRun });
+        if (!parsed.ok) {
+          dispatch({ type: "capture-failed", message: parsed.error.message });
+          return;
+        }
+        if (parsed.capture.frames.length < INGEST_LIMITS.minFramesPerRun) {
+          dispatch({
+            type: "capture-failed",
+            message: `Only ${parsed.capture.frames.length} frames were captured (minimum ${INGEST_LIMITS.minFramesPerRun}). Capture for longer.`,
+          });
+          return;
+        }
+        // Re-detect everything the client can see; keep only what the user typed.
+        // A "keep every non-empty field" merge would carry the previous capture's
+        // game name onto this one — see `applyDetection`.
+        setForm((current) =>
+          applyDetection(current, editedRef.current, captureHardware, result.target.process),
+        );
+        dispatch({
+          type: "analyzed",
+          capture: {
+            bytes,
+            summary: computeRunSummary(parsed.capture.frames),
+            warnings: parsed.warnings,
+            frames: parsed.capture.frames.length,
+          },
+        });
+      } catch (error) {
+        dispatch({
+          type: "capture-failed",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    })();
+    analyzePromiseRef.current = task;
+    void task.finally(() => {
+      if (analyzePromiseRef.current === task) analyzePromiseRef.current = null;
+    });
+    return task;
   }, [detected]);
 
   const toggleCapture = React.useCallback(() => {
@@ -130,16 +200,21 @@ export function App() {
   }, [refreshEnvironment]);
 
   React.useEffect(() => {
+    if (state.environment?.updatesEnabled === true && update.status === "idle") {
+      void checkForUpdate();
+    }
+  }, [state.environment?.updatesEnabled, update.status, checkForUpdate]);
+
+  React.useEffect(() => {
     const unlisteners: Array<Promise<() => void>> = [
       ipc.on<ipc.CaptureStarted>(ipc.EVENTS.started, (started) =>
         dispatch({ type: "capture-started", started }),
       ),
       ipc.on<ipc.CaptureRows>(ipc.EVENTS.rows, (rows) => {
         liveRef.current?.push(rows.lines);
-        // Rows arrive at the game's frame rate — hundreds a second. Dispatching
-        // each one would re-render the whole tree that often, to feed a readout
-        // that only redraws on the 200 ms tick. Hold the latest count and let
-        // the tick carry it.
+        // Rust batches rows before IPC, but the batch cadence is still faster
+        // than this readout needs. Hold the latest count and let the 200 ms tick
+        // carry it without coupling renders to transport frequency.
         pendingFramesRef.current = rows.frames;
       }),
       ipc.on<ipc.CaptureEnded>(ipc.EVENTS.ended, (ended) => {
@@ -182,6 +257,48 @@ export function App() {
 
   /* ── Upload ─────────────────────────────────────────────────────────── */
 
+  const handoffClaim = React.useCallback(
+    async (
+      runId: string,
+      managementToken: string,
+      context: "confirmed" | "recovery",
+      message?: string,
+    ) => {
+      dispatch({
+        type: "upload",
+        phase: {
+          status: "claim",
+          runId,
+          managementToken,
+          context,
+          handoff: "opening",
+          ...(message === undefined ? {} : { message }),
+        },
+      });
+      try {
+        await ipc.openClaim(runId, managementToken);
+        // Once the opener accepts the URL, the only plaintext token has moved
+        // into the browser fragment and no longer needs to stay in webview
+        // state. A failed opener keeps it in the `claim` phase for retry.
+        dispatch({ type: "upload", phase: { status: "done", runId, context } });
+      } catch (error) {
+        dispatch({
+          type: "upload",
+          phase: {
+            status: "claim",
+            runId,
+            managementToken,
+            context,
+            handoff: "failed",
+            ...(message === undefined ? {} : { message }),
+            handoffMessage: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
+    },
+    [],
+  );
+
   const upload = React.useCallback(async () => {
     if (state.capture === null || state.environment === null) return;
     const hags = detected?.methodology.hags;
@@ -194,49 +311,74 @@ export function App() {
     } as Omit<MethodologyManifest, "version" | "frameGeneration">;
 
     dispatch({ type: "upload", phase: { status: "running", label: "Preparing" } });
-    const result = await uploadCaptureBytes(state.capture.bytes, {
-      game: form.game.trim() || "Unknown game",
-      visibility: form.visibility,
-      ...(detected === null ? {} : { hardware: detected.hardware }),
-      methodology,
-      // Declared, because the capture cannot show it (§22.11). Omitted when
-      // the user did not answer, so the server records `unknown` rather than
-      // an unearned `none`.
-      ...(form.frameGeneration === "" ? {} : { frameGeneration: form.frameGeneration }),
-      transport: createDesktopTransport(state.environment.apiBaseUrl),
-      signPayload: createSigner(),
-      onProgress: (progress) => {
-        dispatch({
-          type: "upload",
-          phase:
-            progress.stage === "uploading"
-              ? {
-                  status: "running",
-                  label: "Uploading",
-                  sentBytes: progress.sentBytes,
-                  totalBytes: progress.totalBytes,
-                }
-              : { status: "running", label: LABELS[progress.stage] ?? "Working" },
-        });
-      },
-    });
+    let result: Awaited<ReturnType<typeof uploadCaptureBytes>>;
+    let uploadReserved = false;
+    try {
+      await ipc.beginUpload();
+      uploadReserved = true;
+      result = await uploadCaptureBytes(state.capture.bytes, {
+        game: form.game.trim() || "Unknown game",
+        visibility: form.visibility,
+        ...(detected === null ? {} : { hardware: detected.hardware }),
+        methodology,
+        // Declared, because the capture cannot show it (§22.11). Omitted when
+        // the user did not answer, so the server records `unknown` rather than
+        // an unearned `none`.
+        ...(form.frameGeneration === "" ? {} : { frameGeneration: form.frameGeneration }),
+        transport: createDesktopTransport(state.environment.apiBaseUrl),
+        signPayload: createSigner(),
+        onProgress: (progress) => {
+          dispatch({
+            type: "upload",
+            phase:
+              progress.stage === "uploading"
+                ? {
+                    status: "running",
+                    label: "Uploading",
+                    sentBytes: progress.sentBytes,
+                    totalBytes: progress.totalBytes,
+                  }
+                : { status: "running", label: LABELS[progress.stage] ?? "Working" },
+          });
+        },
+      });
+    } catch (error) {
+      dispatch({
+        type: "upload",
+        phase: {
+          status: "failed",
+          code: "upload-failed",
+          message: error instanceof Error ? error.message : String(error),
+        },
+      });
+      return;
+    } finally {
+      if (uploadReserved) {
+        try {
+          await ipc.endUpload();
+        } catch (error) {
+          // The shared engine has settled, so this is a local state failure,
+          // not grounds to discard a recovery token returned below.
+          console.error("failed to release native upload activity", error);
+        }
+      }
+    }
 
     if (!result.ok) {
+      if (result.recovery !== undefined) {
+        await handoffClaim(
+          result.recovery.runId,
+          result.recovery.managementToken,
+          "recovery",
+          result.message,
+        );
+        return;
+      }
       dispatch({ type: "upload", phase: { status: "failed", ...result } });
       return;
     }
-    dispatch({
-      type: "upload",
-      phase: {
-        status: "done",
-        runId: result.runId,
-        managementToken: result.managementToken,
-      },
-    });
-    // Claim handoff (§22.5): the plaintext token goes to the browser and
-    // nowhere else.
-    await ipc.openClaim(result.runId, result.managementToken);
-  }, [detected, form, state.capture, state.environment]);
+    await handoffClaim(result.runId, result.managementToken, "confirmed");
+  }, [detected, form, handoffClaim, state.capture, state.environment]);
 
   const discard = React.useCallback(() => {
     void ipc.discardPayload();
@@ -258,6 +400,8 @@ export function App() {
 
   const missing = missingFields(form);
   const averageFps = live.averageFps();
+  const claimCapabilityHeld = state.upload.status === "claim";
+  const uploadActive = state.upload.status === "running";
 
   return (
     <div className="win">
@@ -293,6 +437,53 @@ export function App() {
             </Diagnostic>
           </div>
         )}
+
+        {update.status === "available" || update.status === "installing" ? (
+          <div style={{ marginBottom: "var(--space-4)" }}>
+            <Diagnostic
+              severity="info"
+              title={`Heimdall Capture ${update.info.version} is available`}
+            >
+              The update manifest and package signature will be verified before installation.
+              <div
+                style={{
+                  display: "flex",
+                  gap: "var(--space-2)",
+                  marginTop: "var(--space-3)",
+                }}
+              >
+                <Button
+                  size="sm"
+                  loading={update.status === "installing"}
+                  disabled={state.screen === "capturing" || uploadActive || claimCapabilityHeld}
+                  onClick={() => {
+                    const info = update.info;
+                    setUpdate({ status: "installing", info });
+                    void ipc.installUpdate().catch((error: unknown) => {
+                      setUpdate({
+                        status: "failed",
+                        message: error instanceof Error ? error.message : String(error),
+                      });
+                    });
+                  }}
+                >
+                  Install and restart
+                </Button>
+              </div>
+            </Diagnostic>
+          </div>
+        ) : update.status === "failed" ? (
+          <div style={{ marginBottom: "var(--space-4)" }}>
+            <Diagnostic severity="warn" title="Could not check for updates">
+              {update.message}
+              <div style={{ marginTop: "var(--space-3)" }}>
+                <Button size="sm" variant="secondary" onClick={() => void checkForUpdate()}>
+                  Retry
+                </Button>
+              </div>
+            </Diagnostic>
+          </div>
+        ) : null}
 
         {state.screen === "onboarding" ? (
           <Onboarding
@@ -448,11 +639,55 @@ export function App() {
                   </Diagnostic>
                 )}
 
-                {state.upload.status === "done" ? (
+                {state.upload.status === "claim" ? (
+                  <Diagnostic
+                    severity="warn"
+                    title={
+                      state.upload.context === "recovery"
+                        ? "Upload status needs recovery"
+                        : "Run uploaded — browser handoff failed"
+                    }
+                  >
+                    {state.upload.message === undefined ? null : (
+                      <div style={{ marginBottom: "var(--space-2)" }}>
+                        {state.upload.message}
+                      </div>
+                    )}
+                    {state.upload.handoff === "failed" ? (
+                      <div style={{ marginBottom: "var(--space-2)" }}>
+                        The claim page could not be opened: {state.upload.handoffMessage}. The
+                        one-time management credential is still held in this window.
+                      </div>
+                    ) : (
+                      <div style={{ marginBottom: "var(--space-2)" }}>
+                        Opening the claim page while this window retains the one-time management
+                        credential.
+                      </div>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      loading={state.upload.handoff === "opening"}
+                      onClick={() => {
+                        const phase = stateRef.current.upload;
+                        if (phase.status !== "claim") return;
+                        void handoffClaim(
+                          phase.runId,
+                          phase.managementToken,
+                          phase.context,
+                          phase.message,
+                        );
+                      }}
+                    >
+                      Open claim page
+                    </Button>
+                  </Diagnostic>
+                ) : state.upload.status === "done" ? (
                   <>
                     <Diagnostic severity="good" title="Uploaded">
-                      The run report is opening in your browser. Sign in there to claim it — the
-                      claim link works once.
+                      {state.upload.context === "recovery"
+                        ? "The recovery page opened in your browser. Keep it open until the run is confirmed or claimed."
+                        : "The run report opened in your browser. Sign in there to claim it — the claim link works once."}
                     </Diagnostic>
                     <Badge tone="neutral">Run {state.upload.runId}</Badge>
                     <Button variant="secondary" block onClick={discard}>

@@ -47,10 +47,15 @@ jobs:
       # Authenticode signing via Azure Trusted Signing: a cloud HSM, so CI needs
       # no physical EV token and the certificate never leaves Azure.
       - name: Install the signing CLI
-        run: cargo install trusted-signing-cli --locked
+        run: cargo install artifact-signing-cli --version 0.11.0 --locked
+
+      - name: Select the production capability
+        run: node apps/desktop/scripts/select-release-capability.mjs
+        env:
+          HEIMDALL_RELEASE_BUILD: "true"
 
       - name: Build, sign and bundle
-        run: pnpm --filter @heimdall/desktop exec tauri build --config src-tauri/tauri.release.conf.json
+        run: pnpm --filter @heimdall/desktop exec tauri build --features release-updates --config src-tauri/tauri.release.conf.json
         env:
           # ── 1. Ed25519 payload key (§22.3) ──────────────────────────────
           # Signs the uploaded frame Parquet. Tamper-evidence only: the server
@@ -60,6 +65,11 @@ jobs:
           # Hub origin baked into the binary, so a shipped client cannot be
           # redirected by editing a config file.
           HEIMDALL_API_BASE_URL: ${{ vars.HEIMDALL_API_BASE_URL }}
+          # The native PUT command accepts only this exact account + bucket;
+          # webview input cannot redirect a capture to another network target.
+          HEIMDALL_R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          HEIMDALL_R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          HEIMDALL_RELEASE_BUILD: "true"
 
           # ── 2. Tauri updater keypair ────────────────────────────────────
           # Signs latest.json / the update artifact. Entirely unrelated to (1):

@@ -22,13 +22,29 @@ const ANTI_CHEAT_MODULES: &[(&str, &str)] = &[
     ("beservice", "BattlEye"),
 ];
 
+type AdapterDriverEntry = (String, Option<String>, Option<String>);
+
+fn matching_adapter_driver(
+    description: &str,
+    entries: impl IntoIterator<Item = AdapterDriverEntry>,
+) -> (Option<String>, Option<String>) {
+    let wanted = description.trim().to_ascii_lowercase();
+    entries
+        .into_iter()
+        .find(|(candidate, _, _)| candidate.trim().to_ascii_lowercase() == wanted)
+        .map(|(_, driver, radeon)| (driver, radeon))
+        // Driver facts are diagnostics inputs. An unknown match must stay
+        // unknown rather than borrowing a plausible value from another GPU.
+        .unwrap_or((None, None))
+}
+
 #[cfg(windows)]
 mod imp {
     use super::*;
     use std::os::windows::ffi::OsStrExt;
 
-    use windows::core::PCWSTR;
-    use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, MAX_PATH};
+    use windows::core::{BOOL, PCWSTR};
+    use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, MAX_PATH};
     use windows::Win32::Graphics::Dxgi::{
         CreateDXGIFactory1, IDXGIAdapter1, IDXGIFactory1, DXGI_ADAPTER_DESC1,
     };
@@ -48,7 +64,9 @@ mod imp {
     use windows::Win32::System::Threading::{
         OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetForegroundWindow, GetWindowThreadProcessId, IsWindowVisible,
+    };
 
     /// NUL-terminated UTF-16, for the `*W` Win32 entry points. `pub(crate)`
     /// because this module is the one place Win32 wrapping lives — see the
@@ -117,6 +135,44 @@ mod imp {
         }
         .ok()?;
         (!handle.is_invalid()).then_some(OwnedHandle(handle))
+    }
+
+    struct WindowSearch {
+        pid: u32,
+        hwnd: HWND,
+    }
+
+    unsafe extern "system" fn find_process_window(hwnd: HWND, state: LPARAM) -> BOOL {
+        // SAFETY: `window_for_pid` passes a live WindowSearch pointer for the
+        // synchronous duration of EnumWindows.
+        let search = unsafe { &mut *(state.0 as *mut WindowSearch) };
+        let mut pid = 0u32;
+        // SAFETY: pid is live and hwnd was supplied by EnumWindows.
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+        // SAFETY: hwnd was supplied by EnumWindows and remains live here.
+        if pid == search.pid && unsafe { IsWindowVisible(hwnd) }.as_bool() {
+            search.hwnd = hwnd;
+            return BOOL(0);
+        }
+        BOOL(1)
+    }
+
+    fn window_for_pid(pid: u32) -> Option<HWND> {
+        let mut search = WindowSearch {
+            pid,
+            hwnd: HWND::default(),
+        };
+        // SAFETY: the callback is synchronous and receives the live search
+        // pointer as LPARAM. Returning FALSE after a match is expected and may
+        // make EnumWindows report an error, so its Result is intentionally
+        // ignored; the output handle decides success.
+        let _ = unsafe {
+            EnumWindows(
+                Some(find_process_window),
+                LPARAM((&mut search as *mut WindowSearch) as isize),
+            )
+        };
+        (!search.hwnd.is_invalid()).then_some(search.hwnd)
     }
 
     fn process_name(pid: u32) -> Option<String> {
@@ -275,47 +331,78 @@ mod imp {
     fn adapter_driver(description: &str) -> (Option<String>, Option<String>) {
         const CLASS: &str =
             r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
-        let wanted = description.trim().to_ascii_lowercase();
-        let mut fallback = (None, None);
+        let mut entries = Vec::new();
         for index in 0..16 {
             let subkey = format!("{CLASS}\\{index:04}");
             let Some(desc) = reg_string(HKEY_LOCAL_MACHINE, &subkey, "DriverDesc") else {
                 continue;
             };
-            let entry = (
+            entries.push((
+                desc,
                 reg_string(HKEY_LOCAL_MACHINE, &subkey, "DriverVersion"),
                 reg_string(HKEY_LOCAL_MACHINE, &subkey, "RadeonSoftwareVersion"),
-            );
-            if desc.trim().to_ascii_lowercase() == wanted {
-                return entry;
-            }
-            if fallback.0.is_none() {
-                fallback = entry;
-            }
+            ));
         }
-        fallback
+        matching_adapter_driver(description, entries)
     }
 
     // ── DXGI ────────────────────────────────────────────────────────────────
 
-    /// `(description, vendor id, dedicated video memory bytes)` for adapter 0.
+    /// `(description, vendor id, dedicated video memory bytes)` for the adapter
+    /// driving the captured process's monitor. Adapter 0 is only a fallback for
+    /// headless/indirect-display cases.
     ///
     /// `DedicatedVideoMemory` is exact bytes straight from the adapter, which
     /// is why VRAM is declared here rather than inferred from a sensor column.
-    fn primary_adapter() -> Option<(String, u32, u64)> {
+    fn adapter_for_window(
+        hwnd: HWND,
+        process_luid: Option<(i32, u32)>,
+    ) -> Option<(String, u32, u64)> {
         // SAFETY: CreateDXGIFactory1 returns a checked COM result; the
         // interface is dropped at the end of scope.
         let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.ok()?;
-        // SAFETY: index 0 always exists on a machine with a display adapter;
-        // the error case is handled.
-        let adapter: IDXGIAdapter1 = unsafe { factory.EnumAdapters1(0) }.ok()?;
-        // SAFETY: the adapter interface is live for the length of this scope.
-        let desc: DXGI_ADAPTER_DESC1 = unsafe { adapter.GetDesc1() }.ok()?;
-        Some((
-            from_wide_nul(&desc.Description),
-            desc.VendorId,
-            desc.DedicatedVideoMemory as u64,
-        ))
+        // SAFETY: hwnd is a live top-level window when possible; the API has a
+        // documented primary-monitor fallback.
+        let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY) };
+        let mut fallback = None;
+        for adapter_index in 0.. {
+            // SAFETY: enumeration ends on the first checked DXGI error.
+            let Ok(adapter): Result<IDXGIAdapter1, _> =
+                (unsafe { factory.EnumAdapters1(adapter_index) })
+            else {
+                break;
+            };
+            // SAFETY: the adapter interface is live for this scope.
+            let Ok(desc): Result<DXGI_ADAPTER_DESC1, _> = (unsafe { adapter.GetDesc1() }) else {
+                continue;
+            };
+            let details = (
+                from_wide_nul(&desc.Description),
+                desc.VendorId,
+                desc.DedicatedVideoMemory as u64,
+            );
+            fallback.get_or_insert_with(|| details.clone());
+            if process_luid.is_some_and(|(high, low)| {
+                desc.AdapterLuid.HighPart == high && desc.AdapterLuid.LowPart == low
+            }) {
+                return Some(details);
+            }
+
+            for output_index in 0.. {
+                // SAFETY: enumeration ends on the first checked DXGI error.
+                let Ok(output) = (unsafe { adapter.EnumOutputs(output_index) }) else {
+                    break;
+                };
+                // SAFETY: the output interface is live for this scope.
+                let Ok(output_desc) = (unsafe { output.GetDesc() }) else {
+                    continue;
+                };
+                if output_desc.Monitor == monitor {
+                    return Some(details);
+                }
+            }
+        }
+        fallback
     }
 
     // ── Display mode ────────────────────────────────────────────────────────
@@ -422,13 +509,14 @@ mod imp {
 
     // ── Assembly ────────────────────────────────────────────────────────────
 
-    pub fn collect_hardware() -> (HardwareSnapshot, MethodologyFacts) {
-        let (description, vendor_id, vram) = primary_adapter().unwrap_or_default();
+    fn collect_hardware_for_window(
+        hwnd: HWND,
+        process_luid: Option<(i32, u32)>,
+    ) -> (HardwareSnapshot, MethodologyFacts) {
+        let (description, vendor_id, vram) =
+            adapter_for_window(hwnd, process_luid).unwrap_or_default();
         let (internal_driver, radeon) = adapter_driver(&description);
         let (cpu, os, modules) = wmi_parts();
-        // SAFETY: null is a valid input; MonitorFromWindow falls back to the
-        // primary display, which is the right answer with no game running.
-        let hwnd = unsafe { GetForegroundWindow() };
 
         let snapshot = hardware::build_snapshot(
             &description,
@@ -446,6 +534,21 @@ mod imp {
             capture_tool: capture_tool(),
         };
         (snapshot, facts)
+    }
+
+    pub fn collect_hardware() -> (HardwareSnapshot, MethodologyFacts) {
+        // SAFETY: a null result is accepted by MonitorFromWindow, which falls
+        // back to the primary display.
+        collect_hardware_for_window(unsafe { GetForegroundWindow() }, None)
+    }
+
+    pub fn collect_hardware_for_pid(pid: u32) -> (HardwareSnapshot, MethodologyFacts) {
+        let hwnd = window_for_pid(pid).unwrap_or_else(|| {
+            // SAFETY: best-effort fallback when a process has no visible
+            // top-level window (or closes it during collection).
+            unsafe { GetForegroundWindow() }
+        });
+        collect_hardware_for_window(hwnd, crate::gpu_telemetry::adapter_luid_for_pid(pid))
     }
 }
 
@@ -487,9 +590,16 @@ mod imp {
             },
         )
     }
+
+    pub fn collect_hardware_for_pid(_pid: u32) -> (HardwareSnapshot, MethodologyFacts) {
+        collect_hardware()
+    }
 }
 
-pub use imp::{collect_hardware, detect_anti_cheat, foreground_target, in_performance_log_users};
+pub use imp::{
+    collect_hardware, collect_hardware_for_pid, detect_anti_cheat, foreground_target,
+    in_performance_log_users,
+};
 
 #[cfg(windows)]
 pub(crate) use imp::wide;
@@ -511,6 +621,40 @@ mod tests {
         assert!(!snapshot.gpu.is_empty());
         assert!(!snapshot.cpu.is_empty());
         assert!(facts.capture_tool.starts_with("PresentMon "));
+    }
+
+    #[test]
+    fn an_unmatched_adapter_never_borrows_another_gpus_driver() {
+        let entries = vec![
+            (
+                "Intel(R) Arc(TM) Graphics".to_string(),
+                Some("32.0.101.6734".to_string()),
+                None,
+            ),
+            (
+                "NVIDIA GeForce RTX 5090".to_string(),
+                Some("32.0.15.9012".to_string()),
+                None,
+            ),
+        ];
+
+        assert_eq!(
+            matching_adapter_driver("AMD Radeon RX 9070 XT", entries),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn adapter_driver_matching_is_trimmed_and_case_insensitive() {
+        let entries = vec![(
+            " NVIDIA GeForce RTX 5090 ".to_string(),
+            Some("32.0.15.9012".to_string()),
+            None,
+        )];
+        assert_eq!(
+            matching_adapter_driver("nvidia geforce rtx 5090", entries),
+            (Some("32.0.15.9012".to_string()), None)
+        );
     }
 }
 

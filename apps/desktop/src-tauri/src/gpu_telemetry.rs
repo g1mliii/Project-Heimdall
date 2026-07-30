@@ -83,6 +83,27 @@ fn is_3d_engine(instance_lower: &str) -> bool {
     instance_lower.contains("engtype_3d")
 }
 
+/// DXGI adapter LUID encoded in a GPU-engine instance for the captured pid.
+/// This is the only reliable bridge from a process to its render adapter on a
+/// hybrid laptop: the monitor can be wired to the iGPU while the game renders
+/// on a discrete adapter with no display outputs.
+fn adapter_luid_from_instances(pid: u32, items: &[(String, f64)]) -> Option<(i32, u32)> {
+    let prefix = format!("pid_{pid}_luid_0x");
+    items.iter().find_map(|(instance, _)| {
+        let lowered = instance.to_ascii_lowercase();
+        if !lowered.starts_with(&prefix) || !is_3d_engine(&lowered) {
+            return None;
+        }
+        let tail = lowered.strip_prefix(&prefix)?;
+        let (high, tail) = tail.split_once("_0x")?;
+        let (low, _) = tail.split_once('_')?;
+        Some((
+            u32::from_str_radix(high, 16).ok()? as i32,
+            u32::from_str_radix(low, 16).ok()?,
+        ))
+    })
+}
+
 /// `\GPU Engine(*)\Utilization Percentage` instances → the process's 3D load.
 ///
 /// Only `engtype_3d` counts. A GPU also exposes copy, video-decode and
@@ -149,6 +170,7 @@ fn telemetry_cells(sample: Option<GpuTelemetry>) -> String {
 mod imp {
     use super::*;
     use crate::win::wide;
+    use std::mem::MaybeUninit;
 
     use windows::core::PCWSTR;
     use windows::Win32::System::Performance::{
@@ -244,6 +266,12 @@ mod imp {
         }
     }
 
+    pub fn adapter_luid_for_pid(pid: u32) -> Option<(i32, u32)> {
+        let sampler = TelemetrySampler::new(pid)?;
+        sampler.collect();
+        adapter_luid_from_instances(pid, &read_array(sampler.engine)?)
+    }
+
     /// Wildcard counters return an array of (instance name, value). PDH wants
     /// the buffer sized by a first call that deliberately fails with
     /// `PDH_MORE_DATA`.
@@ -259,16 +287,22 @@ mod imp {
             return None;
         }
 
-        let mut buffer = vec![0u8; size as usize];
-        // SAFETY: the buffer is sized by the query above and correctly aligned
-        // for the item struct, which PDH writes along with its trailing strings.
+        let item_size = std::mem::size_of::<PDH_FMT_COUNTERVALUE_ITEM_W>();
+        let slots = (size as usize).div_ceil(item_size);
+        // A Vec<u8> is only byte-aligned. PDH writes an array of structs at the
+        // head of this allocation, so use the struct's own alignment while
+        // retaining enough trailing bytes for the UTF-16 instance names.
+        let mut buffer = Vec::<MaybeUninit<PDH_FMT_COUNTERVALUE_ITEM_W>>::with_capacity(slots);
+        buffer.resize_with(slots, MaybeUninit::uninit);
+        // SAFETY: the buffer has PDH's requested byte capacity and the exact
+        // alignment of the item struct.
         let status = unsafe {
             PdhGetFormattedCounterArrayW(
                 counter,
                 PDH_FMT_DOUBLE,
                 &mut size,
                 &mut count,
-                Some(buffer.as_mut_ptr().cast::<PDH_FMT_COUNTERVALUE_ITEM_W>()),
+                Some(buffer.as_mut_ptr().cast()),
             )
         };
         if status != 0 {
@@ -277,12 +311,8 @@ mod imp {
 
         let mut items = Vec::with_capacity(count as usize);
         // SAFETY: PDH wrote `count` items at the head of the buffer.
-        let entries = unsafe {
-            std::slice::from_raw_parts(
-                buffer.as_ptr().cast::<PDH_FMT_COUNTERVALUE_ITEM_W>(),
-                count as usize,
-            )
-        };
+        let entries: &[PDH_FMT_COUNTERVALUE_ITEM_W] =
+            unsafe { std::slice::from_raw_parts(buffer.as_ptr().cast(), count as usize) };
         for entry in entries {
             if entry.szName.is_null() {
                 continue;
@@ -297,6 +327,22 @@ mod imp {
             }
         }
         Some(items)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn pdh_array_storage_is_aligned_for_the_struct_it_exposes() {
+            let slots = 3;
+            let mut buffer = Vec::<MaybeUninit<PDH_FMT_COUNTERVALUE_ITEM_W>>::with_capacity(slots);
+            buffer.resize_with(slots, MaybeUninit::uninit);
+            assert_eq!(
+                buffer.as_ptr() as usize % std::mem::align_of::<PDH_FMT_COUNTERVALUE_ITEM_W>(),
+                0
+            );
+        }
     }
 }
 
@@ -316,9 +362,13 @@ mod imp {
             GpuTelemetry::default()
         }
     }
+
+    pub fn adapter_luid_for_pid(_pid: u32) -> Option<(i32, u32)> {
+        None
+    }
 }
 
-pub use imp::TelemetrySampler;
+pub use imp::{adapter_luid_for_pid, TelemetrySampler};
 
 #[cfg(test)]
 mod tests {
@@ -380,6 +430,19 @@ mod tests {
     fn a_pid_prefix_does_not_match_a_longer_pid() {
         let items = vec![engine(6500, "3D", 50.0)];
         assert_eq!(gpu_load_from_engine_instances(650, &items), None);
+    }
+
+    #[test]
+    fn extracts_the_process_render_adapter_luid_from_pdh() {
+        let items = vec![(
+            "pid_42_luid_0xFFFFFFFF_0x030C6551_phys_0_eng_0_engtype_3D".into(),
+            50.0,
+        )];
+        assert_eq!(
+            adapter_luid_from_instances(42, &items),
+            Some((-1, 0x030C6551))
+        );
+        assert_eq!(adapter_luid_from_instances(4, &items), None);
     }
 
     #[test]

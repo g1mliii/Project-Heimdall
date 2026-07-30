@@ -50,7 +50,11 @@ const failLoader =
   () =>
     Promise.resolve({ ok: false, code, message });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  window.sessionStorage.clear();
+  window.history.replaceState(null, "", "/");
+});
 
 describe("RunPageClient states", () => {
   it("shows a spinner while frames load", () => {
@@ -439,9 +443,16 @@ describe("RunHeader", () => {
   it("copies the share link and confirms", async () => {
     const writeText = vi.fn(() => Promise.resolve());
     Object.assign(navigator, { clipboard: { writeText } });
+    window.history.replaceState(
+      null,
+      "",
+      `/runs/${run.id}?view=chart&claim=query-secret#claim=fragment-secret`,
+    );
     render(<RunHeader run={run} />);
     await userEvent.click(screen.getByRole("button", { name: /Share/ }));
-    expect(writeText).toHaveBeenCalledWith(window.location.href);
+    expect(writeText).toHaveBeenCalledWith(
+      `${window.location.origin}/runs/${run.id}?view=chart`,
+    );
     expect(await screen.findByText("Link copied")).toBeInTheDocument();
   });
 });

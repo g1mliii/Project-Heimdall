@@ -26,6 +26,7 @@ const READY_ENV: Environment = {
   apiBaseUrl: "http://localhost:3000",
   appVersion: "0.1.0",
   signingAvailable: false,
+  updatesEnabled: false,
 };
 
 function run(actions: Action[], from: State = initialState): State {

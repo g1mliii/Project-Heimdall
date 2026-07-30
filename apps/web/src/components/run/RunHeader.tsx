@@ -18,6 +18,7 @@ import {
   graphicsApiLabel,
 } from "@/lib/format";
 import { CheckIcon, ClapperboardIcon, GitCompareIcon, ShareIcon } from "./icons";
+import { canonicalShareUrl } from "./claim-handoff";
 
 const TECH_LABELS: Record<Run["generatedFrameTech"], string | null> = {
   none: null,
@@ -155,7 +156,7 @@ export function RunHeader({ run }: { run: Run }) {
     try {
       // Throws (or is undefined) on insecure contexts, denied permission, or an
       // unfocused document — surface "Copy failed" instead of a silent no-op.
-      await navigator.clipboard.writeText(window.location.href);
+      await navigator.clipboard.writeText(canonicalShareUrl(window.location.href));
       setShareState("copied");
     } catch {
       setShareState("failed");

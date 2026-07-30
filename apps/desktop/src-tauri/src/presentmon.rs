@@ -111,7 +111,8 @@ pub fn sidecar_args(target: &CaptureTarget) -> Vec<String> {
 #[derive(Debug)]
 pub struct CaptureBuffer {
     pending: String,
-    lines: Vec<String>,
+    csv: String,
+    frames: usize,
     bytes: usize,
     max_bytes: usize,
     overflowed: bool,
@@ -122,10 +123,10 @@ pub struct CaptureBuffer {
     telemetry: bool,
 }
 
-/// 256 MiB of CSV is ~4 hours of 4-figure-FPS capture — far past the 64 MiB
-/// Parquet ceiling the ingest limits impose, so this only ever trips on a
-/// forgotten session.
-pub const MAX_CAPTURE_BYTES: usize = 256 * 1024 * 1024;
+/// Must match `INGEST_LIMITS.maxCaptureBytes` in @heimdall/shared. Keeping a
+/// larger native buffer only delays an inevitable JavaScript-side rejection
+/// while multiplying the peak across UTF-8, IPC, parser objects and Parquet.
+pub const MAX_CAPTURE_BYTES: usize = 64 * 1024 * 1024;
 
 impl Default for CaptureBuffer {
     fn default() -> Self {
@@ -137,7 +138,8 @@ impl CaptureBuffer {
     pub fn with_limit(max_bytes: usize) -> Self {
         Self {
             pending: String::new(),
-            lines: Vec::new(),
+            csv: String::new(),
+            frames: 0,
             bytes: 0,
             max_bytes,
             overflowed: false,
@@ -175,10 +177,17 @@ impl CaptureBuffer {
             return Vec::new();
         }
         self.pending.push_str(chunk);
+        let Some(last_newline) = self.pending.rfind('\n') else {
+            return Vec::new();
+        };
+        // Detach all complete rows once. Draining from the front for every row
+        // repeatedly shifted the remainder of a large stdout chunk and made
+        // row framing quadratic in that chunk's size.
+        let remainder = self.pending.split_off(last_newline + 1);
+        let complete = std::mem::replace(&mut self.pending, remainder);
         let mut completed = Vec::new();
-        while let Some(index) = self.pending.find('\n') {
-            let mut line = self.pending[..index].to_string();
-            self.pending.drain(..=index);
+        for raw_line in complete.split_terminator('\n') {
+            let mut line = raw_line.to_string();
             // PresentMon on Windows emits CRLF; the parser tolerates it, but
             // the live stream should carry clean rows.
             if line.ends_with('\r') {
@@ -189,7 +198,7 @@ impl CaptureBuffer {
             }
             if self.telemetry {
                 // The first line out of the sidecar is the header.
-                if self.lines.is_empty() {
+                if self.csv.is_empty() {
                     for header in TELEMETRY_HEADERS {
                         line.push(',');
                         line.push_str(header);
@@ -198,13 +207,19 @@ impl CaptureBuffer {
                     append_telemetry_cells(&mut line, sample);
                 }
             }
-            self.bytes += line.len() + 1;
-            if self.bytes > self.max_bytes {
+            let next_bytes = self.bytes.saturating_add(line.len() + 1);
+            if next_bytes > self.max_bytes {
                 self.overflowed = true;
                 self.pending.clear();
                 return completed;
             }
-            self.lines.push(line.clone());
+            let is_header = self.csv.is_empty();
+            self.csv.push_str(&line);
+            self.csv.push('\n');
+            self.bytes = next_bytes;
+            if !is_header {
+                self.frames += 1;
+            }
             completed.push(line);
         }
         completed
@@ -218,7 +233,7 @@ impl CaptureBuffer {
 
     /// Frame rows: everything after the header line.
     pub fn frame_count(&self) -> usize {
-        self.lines.len().saturating_sub(1)
+        self.frames
     }
 
     /// The complete capture as the CSV bytes `parseAnyCapture` expects.
@@ -227,12 +242,13 @@ impl CaptureBuffer {
     /// parse for the sake of one frame. Direct stdout is UTF-8 — the parser's
     /// UTF-16LE BOM sniffing exists for PowerShell redirection, which this
     /// path deliberately avoids.
-    pub fn to_csv(&self) -> String {
-        let mut csv = self.lines.join("\n");
-        if !csv.is_empty() {
-            csv.push('\n');
-        }
-        csv
+    pub fn csv(&self) -> &str {
+        &self.csv
+    }
+
+    /// Move the retained CSV out without allocating a second full-size copy.
+    pub fn into_csv(self) -> String {
+        self.csv
     }
 }
 
@@ -283,7 +299,7 @@ mod tests {
             for chunk in bytes.chunks(chunk_size) {
                 streamed.extend(buffer.push(std::str::from_utf8(chunk).unwrap()));
             }
-            assert_eq!(buffer.to_csv(), FIXTURE, "chunk size {chunk_size}");
+            assert_eq!(buffer.csv(), FIXTURE, "chunk size {chunk_size}");
             assert_eq!(streamed.len(), 4, "chunk size {chunk_size}");
             assert_eq!(buffer.frame_count(), 3);
         }
@@ -293,7 +309,7 @@ mod tests {
     fn strips_crlf_and_drops_a_trailing_partial_row() {
         let mut buffer = CaptureBuffer::default();
         buffer.push("Application,FrameTime\r\ngame.exe,10.1\r\ngame.exe,9.");
-        assert_eq!(buffer.to_csv(), "Application,FrameTime\ngame.exe,10.1\n");
+        assert_eq!(buffer.csv(), "Application,FrameTime\ngame.exe,10.1\n");
         assert_eq!(buffer.frame_count(), 1);
     }
 
@@ -315,7 +331,7 @@ mod tests {
         );
 
         assert_eq!(
-            buffer.to_csv(),
+            buffer.csv(),
             concat!(
                 "Application,FrameTime,HeimdallGpuUtilization,HeimdallGpuMemUsedMb
 ",
@@ -336,7 +352,7 @@ game.exe,10
         );
         // The parser reads an empty cell as "no reading". A literal 0 would say
         // the GPU was idle, which is a different and false claim.
-        assert!(buffer.to_csv().ends_with(
+        assert!(buffer.csv().ends_with(
             "game.exe,10,,
 "
         ));
@@ -353,7 +369,7 @@ game.exe,10
 ",
         );
         assert_eq!(
-            buffer.to_csv(),
+            buffer.csv(),
             "Application,FrameTime
 game.exe,10
 "
@@ -367,6 +383,6 @@ game.exe,10
             buffer.push("game.exe,4242,10.1\n");
         }
         assert!(buffer.overflowed());
-        assert!(buffer.to_csv().len() <= 64 + 32);
+        assert!(buffer.csv().len() <= 64);
     }
 }

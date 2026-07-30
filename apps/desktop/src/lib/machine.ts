@@ -35,7 +35,16 @@ export interface AnalyzedCapture {
 export type UploadPhase =
   | { status: "idle" }
   | { status: "running"; label: string; sentBytes?: number; totalBytes?: number }
-  | { status: "done"; runId: string; managementToken: string }
+  | {
+      status: "claim";
+      runId: string;
+      managementToken: string;
+      context: "confirmed" | "recovery";
+      handoff: "opening" | "failed";
+      message?: string;
+      handoffMessage?: string;
+    }
+  | { status: "done"; runId: string; context: "confirmed" | "recovery" }
   | { status: "failed"; code: string; message: string };
 
 export interface State {

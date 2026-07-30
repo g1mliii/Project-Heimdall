@@ -276,7 +276,7 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     );
   });
 
-  it("canonical recompute resets vendor frame generation when no frames are generated", async () => {
+  it("canonical recompute preserves declared frame generation when none is observable", async () => {
     const id = "run_wk_native";
     await setupFinalizedRun(
       id,
@@ -286,7 +286,7 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     const result = await drainJobs({}, realDeps(async () => parquetBytes));
 
     expect(result).toMatchObject({ claimed: 1, validated: 1 });
-    expect((await readRun(id, db.pool))?.generatedFrameTech).toBe(GENERATED_FRAME_TECH.none);
+    expect((await readRun(id, db.pool))?.generatedFrameTech).toBe(GENERATED_FRAME_TECH.dlss3);
   });
 
   it("keeps persisted methodology aligned with canonical resolution and frame generation", async () => {
@@ -312,7 +312,7 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
     expect((await readRun(id, db.pool))?.methodologyManifest).toEqual({
       ...methodologyManifest,
       resolution: validRun.hardware.resolution,
-      frameGeneration: GENERATED_FRAME_TECH.none,
+      frameGeneration: GENERATED_FRAME_TECH.dlss3,
     });
   });
 

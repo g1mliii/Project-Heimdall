@@ -8,7 +8,12 @@ use serde::Serialize;
 use tauri::ipc::{InvokeBody, Request};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_shell::ShellExt;
+#[cfg(feature = "release-updates")]
+use tauri_plugin_updater::UpdaterExt;
 
+#[cfg(feature = "release-updates")]
+use crate::activity::ActivityKind;
+use crate::activity::ActivityState;
 use crate::capture::{self, CaptureResult, CaptureStarted, CaptureState};
 use crate::crash;
 use crate::error::{AppError, AppResult};
@@ -35,6 +40,9 @@ pub struct Environment {
     /// True only in builds carrying an embedded key (§22.3). The UI must not
     /// promise a signature it cannot produce.
     pub signing_available: bool,
+    /// Release builds check the signed update channel; contributor builds have
+    /// no updater key or endpoint and leave this false.
+    pub updates_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -60,6 +68,73 @@ pub fn get_environment(app: AppHandle) -> Environment {
         api_base_url: upload::api_base_url(),
         app_version: app.package_info().version.to_string(),
         signing_available: PayloadSigner::from_build().is_some(),
+        updates_enabled: cfg!(feature = "release-updates"),
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInfo {
+    pub current_version: String,
+    pub version: String,
+}
+
+#[tauri::command]
+pub async fn check_for_update(app: AppHandle) -> AppResult<Option<UpdateInfo>> {
+    #[cfg(feature = "release-updates")]
+    {
+        let updater = app
+            .updater()
+            .map_err(|error| AppError::Update(error.to_string()))?;
+        return updater
+            .check()
+            .await
+            .map(|update| {
+                update.map(|update| UpdateInfo {
+                    current_version: update.current_version,
+                    version: update.version,
+                })
+            })
+            .map_err(|error| AppError::Update(error.to_string()));
+    }
+    #[cfg(not(feature = "release-updates"))]
+    {
+        let _ = app;
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+pub async fn install_update(app: AppHandle) -> AppResult<()> {
+    #[cfg(feature = "release-updates")]
+    {
+        // The permit is held across check, download, install and restart.
+        // Capture starts and upload sessions reserve the same gate, making
+        // this mutual exclusion atomic rather than a racy check-then-act.
+        let _activity = app.state::<ActivityState>().reserve(ActivityKind::Update)?;
+        let updater = app
+            .updater()
+            .map_err(|error| AppError::Update(error.to_string()))?;
+        let Some(update) = updater
+            .check()
+            .await
+            .map_err(|error| AppError::Update(error.to_string()))?
+        else {
+            return Ok(());
+        };
+        let bytes = update
+            .download(|_, _| {}, || {})
+            .await
+            .map_err(|error| AppError::Update(error.to_string()))?;
+        update
+            .install(bytes)
+            .map_err(|error| AppError::Update(error.to_string()))?;
+        app.restart();
+    }
+    #[cfg(not(feature = "release-updates"))]
+    {
+        let _ = app;
+        Ok(())
     }
 }
 
@@ -74,6 +149,21 @@ pub fn get_environment(app: AppHandle) -> Environment {
 pub async fn get_hardware() -> AppResult<DeclaredHardware> {
     blocking("hardware collection", || {
         let (hardware, methodology) = win::collect_hardware();
+        DeclaredHardware {
+            hardware,
+            methodology,
+        }
+    })
+    .await
+}
+
+/// Capture-specific hardware. The process window selects the monitor and DXGI
+/// adapter, avoiding adapter-0 and boot-time foreground guesses on hybrid-GPU
+/// or multi-monitor systems.
+#[tauri::command]
+pub async fn get_hardware_for_pid(pid: u32) -> AppResult<DeclaredHardware> {
+    blocking("capture hardware collection", move || {
+        let (hardware, methodology) = win::collect_hardware_for_pid(pid);
         DeclaredHardware {
             hardware,
             methodology,
@@ -97,8 +187,8 @@ pub async fn start_capture(app: AppHandle) -> AppResult<CaptureStarted> {
     blocking("capture start", move || capture::start(&app)).await?
 }
 
-/// Stop a capture. Off the main thread: this joins the entire retained capture
-/// into one CSV string, which for a long session is tens of megabytes.
+/// Stop a capture. Off the main thread: this kills and drains PresentMon, joins
+/// the telemetry sampler, and moves the retained CSV out of native custody.
 #[tauri::command]
 pub async fn stop_capture(app: AppHandle) -> AppResult<CaptureResult> {
     blocking("capture stop", move || capture::stop(&app)).await?
@@ -127,6 +217,19 @@ pub fn capture_running(state: State<'_, CaptureState>) -> bool {
 #[tauri::command]
 pub fn set_hotkey(app: AppHandle, accelerator: String) -> AppResult<HotkeyState> {
     hotkey::rebind(&app, &accelerator)
+}
+
+#[tauri::command]
+pub fn begin_upload(
+    activity: State<'_, ActivityState>,
+    payload: State<'_, PayloadState>,
+) -> AppResult<()> {
+    payload.begin_activity(&activity)
+}
+
+#[tauri::command]
+pub fn end_upload(payload: State<'_, PayloadState>) -> AppResult<()> {
+    payload.end_activity()
 }
 
 /// Sign the Parquet and take custody of it — see upload.rs for why these are

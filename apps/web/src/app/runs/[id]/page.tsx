@@ -21,8 +21,6 @@ const getVisibleRun = cache(async (id: string) => readVisibleRun(id, await getCu
 
 interface RunPageProps {
   params: Promise<{ id: string }>;
-  /** `?claim=<token>` arrives here from the desktop client's handoff (§22.5). */
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
 export async function generateMetadata({
@@ -41,18 +39,11 @@ export async function generateMetadata({
   };
 }
 
-export default async function RunPage({ params, searchParams }: RunPageProps) {
+export default async function RunPage({ params }: RunPageProps) {
   const { id } = await params;
   const run = await getVisibleRun(id);
   if (!run) notFound();
 
-  // Offer the claim affordance only for a run that is actually claimable. The
-  // token itself is still verified server-side by POST /api/runs/:id/claim —
-  // this only decides whether to render the card, so an owned run does not
-  // show a button that can never succeed.
-  const claimParam = (await searchParams).claim;
-  const claimToken =
-    run.ownerId || typeof claimParam !== "string" || claimParam === "" ? undefined : claimParam;
   const benchmarkSet = await readVisibleBenchmarkSet(run, await getCurrentViewer());
   // §20.3: ownerId (a raw Clerk user id) never reaches the client component.
   // Same mechanism as GET /api/runs/:id — the wire schema is the one place
@@ -62,7 +53,7 @@ export default async function RunPage({ params, searchParams }: RunPageProps) {
     <RunPageClient
       run={publicRun}
       benchmarkSet={benchmarkSet}
-      {...(claimToken === undefined ? {} : { claimToken })}
+      claimable={!run.ownerId}
     />
   );
 }

@@ -13,11 +13,16 @@ import type { CaptureResult, DeclaredHardware, Environment } from "./lib/ipc";
 const ipc = vi.hoisted(() => ({
   getEnvironment: vi.fn(),
   getHardware: vi.fn(),
+  getHardwareForPid: vi.fn(),
+  checkForUpdate: vi.fn(),
+  installUpdate: vi.fn(),
   getForegroundGame: vi.fn(),
   startCapture: vi.fn(),
   stopCapture: vi.fn(),
   captureRunning: vi.fn(),
   setHotkey: vi.fn(),
+  beginUpload: vi.fn(),
+  endUpload: vi.fn(),
   discardPayload: vi.fn(),
   openSetupGuide: vi.fn(),
   openClaim: vi.fn(),
@@ -60,6 +65,7 @@ const READY_ENV: Environment = {
   apiBaseUrl: "http://localhost:3000",
   appVersion: "0.1.0",
   signingAvailable: true,
+  updatesEnabled: false,
 };
 
 const HARDWARE: DeclaredHardware = {
@@ -71,6 +77,16 @@ const HARDWARE: DeclaredHardware = {
     ramSpeedMtps: 6000,
   },
   methodology: { captureTool: "PresentMon 2.4.1", hags: true },
+};
+
+const CAPTURE_HARDWARE: DeclaredHardware = {
+  hardware: {
+    ...HARDWARE.hardware,
+    gpu: "NVIDIA GeForce RTX 5090",
+    gpuDriver: "590.12",
+    resolution: "3840x2160",
+  },
+  methodology: { captureTool: "PresentMon 2.4.1", hags: false },
 };
 
 /** 200 frames at ~10 ms — comfortably past `minFramesPerRun`. */
@@ -99,10 +115,19 @@ beforeEach(() => {
   uploadCaptureBytes.mockReset();
   ipc.getEnvironment.mockResolvedValue(READY_ENV);
   ipc.getHardware.mockResolvedValue(HARDWARE);
+  ipc.getHardwareForPid.mockResolvedValue(HARDWARE);
+  ipc.checkForUpdate.mockResolvedValue(null);
+  ipc.installUpdate.mockResolvedValue(undefined);
   ipc.pendingCrashReport.mockResolvedValue(null);
-  ipc.startCapture.mockResolvedValue({ pid: 42, process: "Cyberpunk2077.exe" });
+  ipc.startCapture.mockImplementation(async () => {
+    const started = { pid: 42, process: "Cyberpunk2077.exe" };
+    handlers.get("capture://started")?.(started);
+    return started;
+  });
   ipc.stopCapture.mockResolvedValue(CAPTURE_RESULT);
   ipc.openClaim.mockResolvedValue(undefined);
+  ipc.beginUpload.mockResolvedValue(undefined);
+  ipc.endUpload.mockResolvedValue(undefined);
   ipc.discardPayload.mockResolvedValue(undefined);
   // Always keep the most recent handler. Unlisten is a no-op on purpose: the
   // effect re-registers when detected hardware arrives, and an async cleanup
@@ -174,15 +199,68 @@ describe("ready screen", () => {
     // The button still works, so the client is usable with a dead hotkey.
     expect(screen.getByRole("button", { name: /Start capture/ })).toBeEnabled();
   });
+
+  it("checks the signed release channel and offers an explicit install", async () => {
+    ipc.getEnvironment.mockResolvedValue({ ...READY_ENV, updatesEnabled: true });
+    ipc.checkForUpdate.mockResolvedValue({ currentVersion: "0.1.0", version: "0.2.0" });
+    await renderReady();
+
+    expect(await screen.findByText("Heimdall Capture 0.2.0 is available")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Install and restart" }));
+    expect(ipc.installUpdate).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("capturing screen", () => {
+  it("serializes competing start intents before React can render the busy state", async () => {
+    let resolveStart!: (value: { pid: number; process: string }) => void;
+    ipc.startCapture.mockReturnValue(
+      new Promise((resolve) => {
+        resolveStart = resolve;
+      }),
+    );
+    await renderReady();
+    const button = screen.getByRole("button", { name: /Start capture/ });
+
+    await act(async () => {
+      button.click();
+      button.click();
+    });
+    expect(ipc.startCapture).toHaveBeenCalledTimes(1);
+
+    handlers.get("capture://started")?.({ pid: 42, process: "Cyberpunk2077.exe" });
+    resolveStart({ pid: 42, process: "Cyberpunk2077.exe" });
+    expect(await screen.findByText("Capturing…")).toBeInTheDocument();
+  });
+
+  it("does not resurrect capturing when an immediate exit beats the invoke result", async () => {
+    let resolveStart!: (value: { pid: number; process: string }) => void;
+    ipc.startCapture.mockReturnValue(
+      new Promise((resolve) => {
+        resolveStart = resolve;
+      }),
+    );
+    await renderReady();
+    await userEvent.click(screen.getByRole("button", { name: /Start capture/ }));
+
+    await act(async () => {
+      handlers.get("capture://started")?.({ pid: 42, process: "game.exe" });
+      handlers.get("capture://ended")?.({ frames: 200, reason: "exited" });
+    });
+    expect(await screen.findByText("Capture complete")).toBeInTheDocument();
+
+    await act(async () => resolveStart({ pid: 42, process: "game.exe" }));
+    expect(screen.getByText("Capture complete")).toBeInTheDocument();
+    expect(screen.queryByText("Capturing…")).not.toBeInTheDocument();
+  });
+
   it("switches to the live view and counts frames from streamed rows", async () => {
     await renderReady();
     await userEvent.click(screen.getByRole("button", { name: /Start capture/ }));
 
     expect(await screen.findByText("Capturing…")).toBeInTheDocument();
     expect(screen.getByText("00:00")).toBeInTheDocument();
+    expect(ipc.getHardwareForPid).toHaveBeenCalledWith(42);
 
     await act(async () => {
       handlers.get("capture://rows")?.({
@@ -208,6 +286,28 @@ describe("capturing screen", () => {
     // It drains what was recorded rather than stranding the user.
     expect(await screen.findByText("Capture complete")).toBeInTheDocument();
     expect(screen.getByText(/the game exited/)).toBeInTheDocument();
+  });
+
+  it("does not call stop twice when termination races a requested stop", async () => {
+    let resolveStop!: (value: CaptureResult) => void;
+    ipc.stopCapture.mockReturnValue(
+      new Promise((resolve) => {
+        resolveStop = resolve;
+      }),
+    );
+    await renderReady();
+    await userEvent.click(screen.getByRole("button", { name: /Start capture/ }));
+    await screen.findByText("Capturing…");
+
+    await act(async () => {
+      screen.getByRole("button", { name: /Stop & analyze/ }).click();
+      handlers.get("capture://ended")?.({ frames: 200, reason: "exited" });
+    });
+    expect(ipc.stopCapture).toHaveBeenCalledTimes(1);
+
+    resolveStop(CAPTURE_RESULT);
+    expect(await screen.findByText("Capture complete")).toBeInTheDocument();
+    expect(ipc.stopCapture).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -269,6 +369,8 @@ describe("complete screen", () => {
     await userEvent.click(screen.getByRole("button", { name: /Upload & share/ }));
 
     await waitFor(() => expect(ipc.openClaim).toHaveBeenCalledWith("run_abc", "plaintext-token"));
+    expect(ipc.beginUpload).toHaveBeenCalledTimes(1);
+    expect(ipc.endUpload).toHaveBeenCalledTimes(1);
     const [, options] = uploadCaptureBytes.mock.calls[0]!;
     expect(options.hardware).toEqual(HARDWARE.hardware);
     expect(options.methodology.captureTool).toBe("PresentMon 2.4.1");
@@ -276,6 +378,114 @@ describe("complete screen", () => {
     // Prefilled from the foreground process name.
     expect(options.game).toBe("Cyberpunk2077");
     expect(await screen.findByText("Uploaded")).toBeInTheDocument();
+  });
+
+  it("retains ambiguous-finalize recovery until the claim page opens", async () => {
+    uploadCaptureBytes.mockResolvedValue({
+      ok: false,
+      code: "finalize-failed",
+      message: "The finalize response was lost.",
+      recovery: { runId: "run_recovery", managementToken: "recovery-token" },
+    });
+    ipc.openClaim.mockRejectedValueOnce(new Error("No browser is configured"));
+    await reachComplete();
+    await userEvent.click(screen.getByRole("button", { name: /Upload & share/ }));
+
+    expect(await screen.findByText("Upload status needs recovery")).toBeInTheDocument();
+    expect(screen.getByText(/one-time management credential is still held/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Upload & share/ })).not.toBeInTheDocument();
+
+    ipc.openClaim.mockResolvedValueOnce(undefined);
+    await userEvent.click(screen.getByRole("button", { name: "Open claim page" }));
+    await waitFor(() =>
+      expect(ipc.openClaim).toHaveBeenLastCalledWith("run_recovery", "recovery-token"),
+    );
+    expect(await screen.findByText("Uploaded")).toBeInTheDocument();
+    expect(screen.getByText(/recovery page opened/)).toBeInTheDocument();
+  });
+
+  it("keeps a successful upload claimable when browser handoff fails", async () => {
+    uploadCaptureBytes.mockResolvedValue({
+      ok: true,
+      runId: "run_handoff",
+      managementToken: "handoff-token",
+      captureSource: "presentmon",
+      summary: {},
+      warnings: [],
+    });
+    ipc.openClaim.mockRejectedValueOnce(new Error("Browser opener failed"));
+    await reachComplete();
+    await userEvent.click(screen.getByRole("button", { name: /Upload & share/ }));
+
+    expect(
+      await screen.findByText("Run uploaded — browser handoff failed"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open claim page" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Capture another run" })).not.toBeInTheDocument();
+
+    ipc.openClaim.mockResolvedValueOnce(undefined);
+    await userEvent.click(screen.getByRole("button", { name: "Open claim page" }));
+    expect(await screen.findByRole("button", { name: "Capture another run" })).toBeEnabled();
+  });
+
+  it("does not allow an update to restart the app during an upload", async () => {
+    ipc.getEnvironment.mockResolvedValue({ ...READY_ENV, updatesEnabled: true });
+    ipc.checkForUpdate.mockResolvedValue({ currentVersion: "0.1.0", version: "0.2.0" });
+    let resolveUpload!: (value: {
+      ok: false;
+      code: string;
+      message: string;
+    }) => void;
+    uploadCaptureBytes.mockReturnValue(
+      new Promise((resolve) => {
+        resolveUpload = resolve;
+      }),
+    );
+    await reachComplete();
+    await screen.findByText("Heimdall Capture 0.2.0 is available");
+    await userEvent.click(screen.getByRole("button", { name: /Upload & share/ }));
+
+    expect(await screen.findByRole("button", { name: "Install and restart" })).toBeDisabled();
+    expect(ipc.installUpdate).not.toHaveBeenCalled();
+
+    await act(async () =>
+      resolveUpload({ ok: false, code: "network", message: "Upload interrupted" }),
+    );
+    expect(await screen.findByText("Upload failed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Install and restart" })).toBeEnabled();
+  });
+
+  it("waits for captured-process hardware before finalizing a short capture", async () => {
+    let resolveHardware!: (hardware: DeclaredHardware) => void;
+    ipc.getHardwareForPid.mockReturnValue(
+      new Promise((resolve) => {
+        resolveHardware = resolve;
+      }),
+    );
+    uploadCaptureBytes.mockResolvedValue({
+      ok: true,
+      runId: "run_process_hardware",
+      managementToken: "plaintext-token",
+      captureSource: "presentmon",
+      summary: {},
+      warnings: [],
+    });
+
+    await renderReady();
+    await userEvent.click(screen.getByRole("button", { name: /Start capture/ }));
+    await screen.findByText("Capturing…");
+    await userEvent.click(screen.getByRole("button", { name: /Stop & analyze/ }));
+    await waitFor(() => expect(ipc.stopCapture).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("Capture complete")).not.toBeInTheDocument();
+
+    await act(async () => resolveHardware(CAPTURE_HARDWARE));
+    await screen.findByText("Capture complete");
+    await userEvent.click(screen.getByRole("button", { name: /Upload & share/ }));
+
+    await waitFor(() => expect(uploadCaptureBytes).toHaveBeenCalledTimes(1));
+    const [, options] = uploadCaptureBytes.mock.calls[0]!;
+    expect(options.hardware).toEqual(CAPTURE_HARDWARE.hardware);
+    expect(options.methodology.hags).toBe("disabled");
   });
 
   it("surfaces an upload failure without losing the capture", async () => {

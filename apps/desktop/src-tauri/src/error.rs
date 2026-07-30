@@ -20,6 +20,9 @@ pub enum AppError {
     #[error("no capture is running")]
     CaptureIdle,
 
+    #[error("another exclusive operation is active: {0}")]
+    OperationBusy(&'static str),
+
     #[error("the capture hotkey could not be registered: {0}")]
     Hotkey(String),
 
@@ -34,6 +37,10 @@ pub enum AppError {
 
     #[error("upload failed: {0}")]
     Upload(String),
+
+    #[cfg(feature = "release-updates")]
+    #[error("update failed: {0}")]
+    Update(String),
 
     #[error("settings could not be read or written: {0}")]
     Settings(String),
@@ -51,11 +58,14 @@ impl AppError {
             Self::Foreground(_) => "no-foreground-game",
             Self::CaptureBusy => "capture-busy",
             Self::CaptureIdle => "capture-idle",
+            Self::OperationBusy(_) => "operation-busy",
             Self::Hotkey(_) => "hotkey-unavailable",
             Self::NoSigningKey => "no-signing-key",
             Self::Signing(_) => "signing-failed",
             Self::NoPreparedPayload => "no-prepared-payload",
             Self::Upload(_) => "upload-failed",
+            #[cfg(feature = "release-updates")]
+            Self::Update(_) => "update-failed",
             Self::Settings(_) => "settings-unavailable",
             Self::Internal(_) => "internal",
         }
@@ -98,11 +108,14 @@ mod tests {
             AppError::Foreground(String::new()).code(),
             AppError::CaptureBusy.code(),
             AppError::CaptureIdle.code(),
+            AppError::OperationBusy("capture").code(),
             AppError::Hotkey(String::new()).code(),
             AppError::NoSigningKey.code(),
             AppError::Signing(String::new()).code(),
             AppError::NoPreparedPayload.code(),
             AppError::Upload(String::new()).code(),
+            #[cfg(feature = "release-updates")]
+            AppError::Update(String::new()).code(),
             AppError::Settings(String::new()).code(),
             AppError::Internal(String::new()).code(),
         ];

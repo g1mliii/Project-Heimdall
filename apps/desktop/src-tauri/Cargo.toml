@@ -64,8 +64,8 @@ features = [
 tauri-plugin-updater = "2.10"
 
 [features]
-# Enabled by the release workflow. Without it the updater plugin is registered
-# but never checks, so `cargo tauri build` locally needs no updater keypair.
+# Enabled by the release workflow. It exposes the signed-channel check/install
+# commands; contributor builds return "no update" and need no updater keypair.
 release-updates = []
 
 [profile.release]

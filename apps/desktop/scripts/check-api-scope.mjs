@@ -5,8 +5,8 @@
  * Two independent places have to agree about which origin this build talks to:
  *
  * * `HEIMDALL_API_BASE_URL`, compiled into the binary by `upload::api_base_url`
- * * `capabilities/default.json` → `http:default`, which is what actually lets
- *   `tauri-plugin-http` issue the request
+ * * the selected development/release capability → `http:default`, which is
+ *   what actually lets `tauri-plugin-http` issue the request
  *
  * Nothing connects them, and a mismatch is invisible until a real user presses
  * Upload and gets a permission error from the plugin — no test, no CI job and
@@ -24,6 +24,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const releaseBuild = process.env.HEIMDALL_RELEASE_BUILD === "true";
 const CAPABILITY_FILE = path.join(HERE, "..", "src-tauri", "capabilities", "default.json");
 
 /** Must match the default in `upload::api_base_url`. */
@@ -66,6 +67,26 @@ export function scopeAdmits(pattern, target) {
 
 const baseUrl = (process.env.HEIMDALL_API_BASE_URL || DEFAULT_BASE_URL).trim().replace(/\/+$/, "");
 const patterns = allowedPatterns();
+if (releaseBuild) {
+  const parsed = new URL(baseUrl);
+  if (parsed.protocol !== "https:" || ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname)) {
+    throw new Error(
+      `Release builds require a non-local HTTPS HEIMDALL_API_BASE_URL; received ${baseUrl}.`,
+    );
+  }
+  for (const name of ["HEIMDALL_R2_ACCOUNT_ID", "HEIMDALL_R2_BUCKET"]) {
+    if (!process.env[name]?.trim()) {
+      throw new Error(`Release builds require ${name} so the native PUT command has a trusted destination.`);
+    }
+  }
+  if (
+    patterns.some((pattern) =>
+      /(^|[/:])(localhost|127\.0\.0\.1|\[?::1\]?)([:/]|$)/i.test(pattern),
+    )
+  ) {
+    throw new Error("Release capability must not grant localhost HTTP access.");
+  }
+}
 
 if (!patterns.some((pattern) => scopeAdmits(pattern, baseUrl))) {
   throw new Error(

@@ -3,8 +3,9 @@
 /**
  * Claim affordance for a desktop handoff (§22.5).
  *
- * The desktop client opens `/runs/<id>?claim=<plaintext management token>`
- * after a successful upload. That token is the SAME single-use secret the
+ * The desktop client opens `/runs/<id>#claim=<plaintext management token>`
+ * after a successful upload. The fragment never reaches the server; the first
+ * client render moves it into tab-scoped storage. That token is the SAME single-use secret the
  * browser upload flow shows once, so this card is the only place on the web
  * side that Phase 9 needed: no new route, no new auth surface.
  *
@@ -21,8 +22,10 @@ import { readApiFailure } from "@heimdall/shared";
 
 interface ClaimRunCardProps {
   runId: string;
-  /** Plaintext token from the `?claim=` query parameter. */
+  /** Plaintext token held in tab-scoped client state. */
   token: string;
+  /** Clears the tab-scoped capability after a successful claim. */
+  onConsumed?: () => void;
   /** Injected in tests. */
   fetcher?: typeof fetch;
 }
@@ -34,7 +37,7 @@ type ClaimState =
   | { kind: "signed-out" }
   | { kind: "failed"; message: string };
 
-export function ClaimRunCard({ runId, token, fetcher }: ClaimRunCardProps) {
+export function ClaimRunCard({ runId, token, onConsumed, fetcher }: ClaimRunCardProps) {
   const [state, setState] = React.useState<ClaimState>({ kind: "idle" });
 
   const claim = React.useCallback(async () => {
@@ -63,16 +66,14 @@ export function ClaimRunCard({ runId, token, fetcher }: ClaimRunCardProps) {
         return;
       }
       setState({ kind: "claimed" });
-      // Drop the token from the address bar so it is not left in history, a
-      // screenshot, or a copied URL. It is spent either way.
-      window.history.replaceState(null, "", `/runs/${encodeURIComponent(runId)}`);
+      onConsumed?.();
     } catch (error) {
       setState({
         kind: "failed",
         message: error instanceof Error ? error.message : String(error),
       });
     }
-  }, [fetcher, runId, token]);
+  }, [fetcher, onConsumed, runId, token]);
 
   if (state.kind === "claimed") {
     return (
@@ -88,7 +89,7 @@ export function ClaimRunCard({ runId, token, fetcher }: ClaimRunCardProps) {
       This run was uploaded from the desktop capture client and is not attached to an account yet.
       Claiming it lets you manage and delete it, and change its visibility. The link works once.
       {state.kind === "signed-out" && (
-        <p>Sign in first, then claim — this page keeps the link until you do.</p>
+        <p>Sign in first, then claim — this tab keeps the token until you do.</p>
       )}
       {state.kind === "failed" && <p>{state.message}</p>}
       <div style={{ marginTop: "var(--space-3)" }}>

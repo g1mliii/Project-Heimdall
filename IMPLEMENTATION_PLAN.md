@@ -640,8 +640,9 @@ commit — local Windows renders are not valid baselines.
     `tauri.release.conf.json` overlay that keeps signing/updater config out of local builds
   - [ ] **Authenticode signing** — needs an Azure Trusted Signing account (`signCommand` is wired,
     credentials are not). Until then installers are unsigned and SmartScreen warns
-  - [ ] **Auto-update channel live** — plugin registered and `latest.json` publishing wired, but
-    `plugins.updater.pubkey` is a placeholder until the updater keypair is generated
+  - [ ] **Auto-update channel live** — signed check/install/restart flow and `latest.json`
+    publishing are wired, but `plugins.updater.pubkey` is a placeholder until the updater keypair
+    is generated
 - [x] 22.8 Surface `signature_valid` on the run report (§11.7) — a neutral badge when the payload
   matched, a `warn` badge when it did not, and **nothing at all** when no signature was checked.
   This closes the Phase 8.6 deferral: browser uploads carry no signature, so an "unsigned" stamp on
