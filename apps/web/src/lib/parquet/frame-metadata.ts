@@ -39,6 +39,8 @@ export const FRAME_CHART_PARQUET_COLUMN_NAMES = [
 /** §8.6.8 overlay columns, decoded only when the capability manifest declares
  * the sensors — see `decodeFrameParquetToSeries`. */
 export const FRAME_BUSY_PARQUET_COLUMN_NAMES = ["cpu_busy_ms", "gpu_busy_ms"] as const;
+/** §22.12 frame-type column, decoded only for a run with an available analysis. */
+const GENERATED_COLUMN = "generated";
 const [TIME_MS_COLUMN, FRAME_TIME_MS_COLUMN, GPU_LOAD_PCT_COLUMN, VRAM_USED_MB_COLUMN] =
   FRAME_CHART_PARQUET_COLUMN_NAMES;
 const [CPU_BUSY_MS_COLUMN, GPU_BUSY_MS_COLUMN] = FRAME_BUSY_PARQUET_COLUMN_NAMES;
@@ -371,7 +373,10 @@ export async function computeFrameParquetSummary(
  */
 export async function decodeFrameParquetToSeries(
   buffer: ArrayBuffer,
-  { busyColumns = true }: { busyColumns?: boolean } = {},
+  {
+    busyColumns = true,
+    generatedColumn = false,
+  }: { busyColumns?: boolean; generatedColumn?: boolean } = {},
 ): Promise<FrameSeries> {
   const { parquetMetadata, parquetRead } = await import("hyparquet");
   const metadata = parquetMetadata(buffer);
@@ -403,6 +408,20 @@ export async function decodeFrameParquetToSeries(
       },
     );
     return busyMs;
+  };
+  const readGeneratedColumn = async (): Promise<Uint8Array> => {
+    const types = new Uint8Array(frameCount);
+    await readFrameParquetColumn(
+      parquetRead,
+      buffer,
+      metadata,
+      frameCount,
+      GENERATED_COLUMN,
+      (value, row) => {
+        types[row] = presentFrameTypeCode(parseOptionalFrameParquetGenerated(value, row));
+      },
+    );
+    return types;
   };
 
   await readFrameParquetColumn(
@@ -454,6 +473,11 @@ export async function decodeFrameParquetToSeries(
   );
   const cpuBusyMs = busyColumns ? await readBusyColumn(CPU_BUSY_MS_COLUMN) : undefined;
   const gpuBusyMs = busyColumns ? await readBusyColumn(GPU_BUSY_MS_COLUMN) : undefined;
+  // §22.12: one byte per frame, allocated only when the caller asked. Unlike the
+  // busy columns there is no "allocate on first real sample" trick — code 0 IS
+  // a meaningful value (`unknown`), so a zero-filled buffer is already correct
+  // for a column of nulls.
+  const presentTypes = generatedColumn ? await readGeneratedColumn() : undefined;
 
   let previousTimeMs: number | undefined;
   for (let row = 0; row < frameCount; row++) {
@@ -469,5 +493,6 @@ export async function decodeFrameParquetToSeries(
     // absent" as "not captured" instead of drawing an all-NaN trace.
     ...(cpuBusyMs ? { cpuBusyMs } : {}),
     ...(gpuBusyMs ? { gpuBusyMs } : {}),
+    ...(presentTypes ? { presentTypes } : {}),
   });
 }

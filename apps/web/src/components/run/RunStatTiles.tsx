@@ -10,9 +10,25 @@
 
 import { Stat } from "@heimdall/ui";
 import type { RunSummary } from "@heimdall/shared";
+import { formatCount } from "@/lib/format";
 import styles from "./RunPageClient.module.css";
 
-export function RunStatTiles({ summary }: { summary: RunSummary }) {
+export function RunStatTiles({
+  summary,
+  interpolatedPresents,
+}: {
+  summary: RunSummary;
+  /**
+   * §22.12 — count of interpolated presents, supplied ONLY in rendered mode.
+   *
+   * When present it replaces the generated-frames tile. That swap is not
+   * cosmetic: every sample in a rendered summary is by construction a rendered
+   * interval, so `generatedFramePct` reads 0% for a run that is half generated
+   * — re-manufacturing the exact false claim §22.11 removed. The honest count
+   * lives on the analysis blob, so the tile reads from there instead.
+   */
+  interpolatedPresents?: number;
+}) {
   return (
     <div className={styles.statTiles}>
       <Stat label="Avg FPS" value={summary.avgFps.toFixed(1)} accent="var(--tier-avg)" />
@@ -22,12 +38,20 @@ export function RunStatTiles({ summary }: { summary: RunSummary }) {
         value={summary.pointOnePercentLowFps.toFixed(1)}
         accent="var(--tier-p01)"
       />
-      <Stat
-        label="Generated frames"
-        value={Math.round(summary.generatedFramePct * 100)}
-        unit="%"
-        accent="var(--brand-violet)"
-      />
+      {interpolatedPresents === undefined ? (
+        <Stat
+          label="Generated frames"
+          value={Math.round(summary.generatedFramePct * 100)}
+          unit="%"
+          accent="var(--brand-violet)"
+        />
+      ) : (
+        <Stat
+          label="Interpolated presents"
+          value={formatCount(interpolatedPresents)}
+          accent="var(--brand-violet)"
+        />
+      )}
       <Stat label="P95 frame time" value={summary.frameTimeP95Ms.toFixed(1)} unit="ms" />
       <Stat label="P99 frame time" value={summary.frameTimeP99Ms.toFixed(1)} unit="ms" />
       <Stat label="Stutter events" value={summary.stutterCount} />

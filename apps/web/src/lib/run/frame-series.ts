@@ -32,6 +32,13 @@ export interface FrameSeries {
    */
   cpuBusyMs?: Float64Array;
   gpuBusyMs?: Float64Array;
+  /**
+   * §22.12 per-present frame-type codes (`PRESENT_FRAME_TYPE`). Present only
+   * when the run's stored analysis is `available`, so the chart can rebuild the
+   * rendered-interval series without a second download. One byte per frame —
+   * 500 KiB at the ingest ceiling, against 4 MiB for a Float64 column.
+   */
+  presentTypes?: Uint8Array;
 }
 
 export interface FrameSeriesSensorStats {
@@ -40,6 +47,8 @@ export interface FrameSeriesSensorStats {
   /** NaN-holed busy-time columns (§8.6.8); omit when the capture had none. */
   cpuBusyMs?: Float64Array;
   gpuBusyMs?: Float64Array;
+  /** §22.12 present-type codes; omit unless the run has an available analysis. */
+  presentTypes?: Uint8Array;
 }
 
 /**

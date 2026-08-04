@@ -50,9 +50,16 @@ import {
   INGEST_LIMITS,
   PRESENT_FRAME_TYPE,
   percentileOfSorted,
-  type RunSummary,
+  type PresentTimeProfile,
+  type PresentTypeCounts,
+  type RenderedFrameAnalysis,
 } from "@heimdall/shared";
 import { computeRunSummaryFromFrameTimes } from "./metrics";
+
+// The stored shapes live in @heimdall/shared so the wire schema, the run page
+// and this coalescer all name one type. Re-exported for callers that reach for
+// them alongside the functions below.
+export type { PresentTimeProfile, PresentTypeCounts, RenderedFrameAnalysis };
 
 /**
  * Fewest rendered intervals that can carry a rendered rate.
@@ -67,15 +74,6 @@ export const MIN_RENDERED_INTERVALS = INGEST_LIMITS.minFramesPerRun;
 
 /** Per-row present-type codes, one byte each (`PRESENT_FRAME_TYPE`). */
 export type PresentTypeColumn = Uint8Array;
-
-export interface PresentTypeCounts {
-  /** Presents the capture labelled application-rendered. */
-  renderedCount: number;
-  /** Presents the capture labelled engine-generated (interpolated). */
-  generatedCount: number;
-  /** Presents carrying no frame-type information at all. */
-  unknownCount: number;
-}
 
 export interface RenderedIntervals extends PresentTypeCounts {
   /** Intervals between consecutive rendered presents (ms). */
@@ -175,41 +173,6 @@ export function coalesceRenderedIntervals(
 }
 
 /**
- * Why a rendered rate is unavailable, or that it is.
- *
- * A discriminated union rather than a nullable summary, mirroring
- * `vramCapacitySchema` ("a discrete total, or a typed reason it is
- * unavailable"). The server decides WHY once and the UI reads one field, so
- * §22.12's "stated, not silently omitted" is structural rather than a copy
- * convention three surfaces have to remember.
- */
-export type RenderedFrameAnalysis =
-  | ({
-      state: "available";
-      /** The rendered-only summary, from the SAME canonical metric code. */
-      summary: RunSummary;
-    } & PresentTypeCounts)
-  /**
-   * No present was ever labelled generated. A `FrameType` column full of
-   * `Application` is exactly what an uninstrumented driver produces, so it is
-   * indistinguishable from no column at all — only an observed `true` carries
-   * information (§22.11).
-   */
-  | { state: "no-frame-type-evidence" }
-  /**
-   * The capture reports frame type and shows no generated frames.
-   *
-   * No rendered summary is produced — and NOT because it would duplicate the
-   * presented one, but because it would not: the coalescer returns
-   * `d[0..n−2]`, differing from the presented summary in the 3rd–4th
-   * significant figure. Two numbers claiming to be the same rate and
-   * disagreeing slightly is worse than one number.
-   */
-  | ({ state: "no-generated-frames" } & PresentTypeCounts)
-  /** Fewer than {@link MIN_RENDERED_INTERVALS} intervals — too few to time. */
-  | ({ state: "too-few-rendered-presents" } & PresentTypeCounts);
-
-/**
  * Compute the rendered-frame analysis for a present stream.
  *
  * The intervals feed straight into the EXISTING
@@ -268,33 +231,14 @@ export function computeRenderedFrameAnalysis(
  * inert below the §17.4/§18.2 cold-start threshold so it does nothing at
  * current data volume, and 2× is not a clean constant (DLSS4 multi-frame
  * generation is 3–4×, and the multiplier drifts with base framerate).
- */
-export interface PresentTimeProfile {
-  minFrameTimeMs: number;
-  /** Nearest-rank low-tail percentiles, matching the canonical convention. */
-  p0_1Ms: number;
-  p1Ms: number;
-  p5Ms: number;
-  subMillisecondPresentCount: number;
-  subMillisecondPresentFraction: number;
-  /**
-   * Fraction of adjacent present PAIRS where both are sub-millisecond. A burst
-   * of interpolated presents clusters; scattered fast presents do not.
-   */
-  adjacentSubMillisecondPairFraction: number;
-  /**
-   * Median ÷ minimum present time — the statistic to lead the writeup with,
-   * because it is SCALE-FREE: independent of base framerate, resolution and
-   * title, which answers §22.13's own objection that the multiplier drifts. On
-   * the measured pair it separates 5×: 4.10/0.32 = 12.8 with frame generation
-   * on against 7.65/3.11 = 2.46 with it off.
-   *
-   * On n = 1 it is still worth nothing, and the docs say so in those words.
-   */
-  medianOverMinRatio: number;
-}
-
-/**
+ *
+ * `medianOverMinRatio` is the statistic to lead the writeup with, because it is
+ * SCALE-FREE: independent of base framerate, resolution and title, which
+ * answers §22.13's own objection that the multiplier drifts. On the measured
+ * pair it separates 5×: 4.10/0.32 = 12.8 with frame generation on against
+ * 7.65/3.11 = 2.46 with it off. On n = 1 it is still worth nothing, and the
+ * docs say so in those words.
+ *
  * Compute the present-time profile for a frame stream.
  *
  * Sorts its own copy rather than threading the sorted buffer out of

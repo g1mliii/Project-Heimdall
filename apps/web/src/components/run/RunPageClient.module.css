@@ -57,6 +57,23 @@
   margin-top: var(--space-6);
 }
 
+/* §22.12 rate toggle row. Sits above the tiles because it governs them, the
+   smoothness bars and the chart — not the chart alone. */
+.rateSwitch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-6);
+}
+
+/* The tiles follow the toggle directly, so they don't need their own top gap
+   as well — collapse it to keep the header region from drifting apart. */
+.rateSwitch + .statTiles,
+.rateSwitch + p + .statTiles {
+  margin-top: var(--space-3);
+}
+
 @container (max-width: 50rem) {
   .mainGrid {
     grid-template-columns: minmax(0, 1fr);

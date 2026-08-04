@@ -175,6 +175,8 @@ interface RunRow extends pg.QueryResultRow {
   settings_json: MethodologyManifest | null;
   benchmark_set_id: string | null;
   is_warmup: boolean;
+  /** §22.12; null until the verify worker has recomputed the run. */
+  rendered_frame_analysis: RenderedFrameAnalysis | null;
   schema_version: number;
   parser_version: string;
   created_at: Date;
@@ -197,7 +199,7 @@ const RUN_WITH_SUMMARY_SELECT = `select r.id, r.user_id, r.game_raw, r.gpu_hardw
         r.cpu_model, r.gpu_model, r.gpu_vendor, r.gpu_driver, r.gpu_vram_total_mb,
         r.ram_gb, r.ram_rated_mtps, r.ram_actual_mtps, r.os_build, r.resolution,
         r.generated_frame_tech, r.frames_object_key, r.capability_manifest, r.settings_json,
-        r.benchmark_set_id, r.is_warmup,
+        r.benchmark_set_id, r.is_warmup, r.rendered_frame_analysis,
         r.schema_version, r.parser_version, r.created_at,
         s.avg_fps, s.p1_low_fps, s.p01_low_fps,
         s.frametime_p50_ms, s.frametime_p95_ms, s.frametime_p99_ms,
@@ -255,6 +257,11 @@ function rowToRun(row: RunRow, diagnostics: Diagnostic[]): Run {
     methodologyManifest: row.settings_json ?? undefined,
     ...(row.benchmark_set_id === null ? {} : { benchmarkSetId: row.benchmark_set_id }),
     ...(row.is_warmup ? { isWarmup: true } : {}),
+    // §22.12. Null until verification recomputes the run; `present_time_profile`
+    // is deliberately NOT selected or mapped — it never leaves the database.
+    ...(row.rendered_frame_analysis === null
+      ? {}
+      : { renderedFrameAnalysis: row.rendered_frame_analysis }),
   };
 }
 

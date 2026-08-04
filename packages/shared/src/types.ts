@@ -380,6 +380,79 @@ export interface Run {
   benchmarkSetId?: string;
   /** True only for an intentionally retained warm-up pass (§16c.2). */
   isWarmup?: boolean;
+  /**
+   * Rendered-only rate under frame generation, or the typed reason there is
+   * none (§22.12). Written by the verification worker from the stored Parquet —
+   * never by the client, which has no contract for it. Absent until a run has
+   * been verified.
+   */
+  renderedFrameAnalysis?: RenderedFrameAnalysis;
+}
+
+/** How many presents of each type a capture carried (§22.12). */
+export interface PresentTypeCounts {
+  /** Presents the capture labelled application-rendered. */
+  renderedCount: number;
+  /** Presents the capture labelled engine-generated (interpolated). */
+  generatedCount: number;
+  /** Presents carrying no frame-type information at all. */
+  unknownCount: number;
+}
+
+/**
+ * Rendered-only rate under frame generation, or the typed reason there is none
+ * (§22.12). `renderedFrameAnalysisSchema` mirrors this; the drift is guarded in
+ * the schema tests, exactly as `CapabilityManifest` is.
+ *
+ * A discriminated union rather than an optional summary (precedent:
+ * `VramCapacity` — "a discrete total, or a typed reason it is unavailable").
+ * The server decides WHY once and every surface reads one field, so §22.12's
+ * "stated, not silently omitted" is structural rather than a copy convention.
+ *
+ * Lives here rather than in @heimdall/parsers so the wire schema, the run page
+ * and the coalescer that produces it all name the same type — parsers imports
+ * this, not the other way round.
+ */
+export type RenderedFrameAnalysis =
+  | ({
+      state: "available";
+      /** The rendered-only summary, from the same canonical metric code. */
+      summary: RunSummary;
+    } & PresentTypeCounts)
+  /**
+   * No present was ever labelled generated. A `FrameType` column full of
+   * `Application` is what an uninstrumented driver produces, so it is
+   * indistinguishable from no column at all — only an observed `true` carries
+   * information (§22.11).
+   */
+  | { state: "no-frame-type-evidence" }
+  /**
+   * The capture reports frame type and shows no generated frames, so the
+   * presented rate is already the rendered rate.
+   */
+  | ({ state: "no-generated-frames" } & PresentTypeCounts)
+  /** Too few rendered presents to time a rate. */
+  | ({ state: "too-few-rendered-presents" } & PresentTypeCounts);
+
+/**
+ * Low-tail present-time statistics (§22.13) — CHARACTERISATION ONLY.
+ *
+ * Stored on the run row, read by no rule, surfaced on no page, and absent from
+ * every wire schema. See `FRAME_GENERATION_EVIDENCE` and
+ * `docs/frame-generation.md`.
+ */
+export interface PresentTimeProfile {
+  minFrameTimeMs: number;
+  /** Nearest-rank low-tail percentiles, matching the canonical convention. */
+  p0_1Ms: number;
+  p1Ms: number;
+  p5Ms: number;
+  subMillisecondPresentCount: number;
+  subMillisecondPresentFraction: number;
+  /** Fraction of adjacent present pairs where both are sub-millisecond. */
+  adjacentSubMillisecondPairFraction: number;
+  /** Median ÷ minimum present time — scale-free, so title-independent. */
+  medianOverMinRatio: number;
 }
 
 /** Severity of an auto-diagnostic, matching the `Diagnostic` UI primitive. */
