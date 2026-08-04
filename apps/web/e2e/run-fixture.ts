@@ -9,12 +9,14 @@
 
 import {
   buildCapabilityManifest,
+  computePresentTimeProfile,
+  computeRenderedFrameAnalysis,
   computeRunSummary,
   detectAvailableSensors,
   framesToColumns,
   runDiagnostics,
 } from "@heimdall/parsers";
-import { makeSyntheticFrames, syntheticRunBase } from "@heimdall/shared";
+import { makeSyntheticFrames, presentFrameTypeCode, syntheticRunBase } from "@heimdall/shared";
 import type { Diagnostic, Run } from "@heimdall/shared";
 import { buildFramesParquet } from "@heimdall/ingest-client";
 
@@ -27,6 +29,28 @@ export const E2E_BENCHMARK_SET_SECRET = "a".repeat(43);
 export const e2eFrames = makeSyntheticFrames({ seed: 7, count: 7200 });
 
 const e2eSummary = computeRunSummary(e2eFrames);
+
+/**
+ * §22.12 rendered-frame analysis for the fixture run.
+ *
+ * `makeSyntheticFrames` emits three-state `generated` in a NON-alternating
+ * 3-of-5 pattern (40% true), so this exercises the coalescer's off-by-one on a
+ * stream where the backward reading would give a different answer — not a clean
+ * 1:1 alternation where the two conventions happen to agree.
+ *
+ * Computed here through the same coalescer the verify worker runs, rather than
+ * hand-authored, for the same reason `e2eDiagnostics` is real engine output.
+ * `insertRun` deliberately does not write these columns (there is no client
+ * contract for a rendered summary), so global-setup writes them directly.
+ */
+export const e2eRenderedFrameAnalysis = computeRenderedFrameAnalysis(
+  e2eFrames.map((frame) => frame.frameTimeMs),
+  Uint8Array.from(e2eFrames, (frame) => presentFrameTypeCode(frame.generated)),
+);
+
+export const e2ePresentTimeProfile = computePresentTimeProfile(
+  e2eFrames.map((frame) => frame.frameTimeMs),
+);
 
 /**
  * REAL rules-engine output for the fixture — not hand-authored rows. The

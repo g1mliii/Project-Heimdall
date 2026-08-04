@@ -831,7 +831,15 @@ writeup:
    presented frames underneath rendered numbers contradicts itself — and the rendered stream has its
    own median, so it has its own stutter threshold.
 
-- [ ] 22.12 **Dual summary where frame-type evidence exists.** Compute a second summary over
+> **Implementation status.** 22.12 and 22.13 are implemented on `phase-9.6-frame-generation`;
+> `pnpm verify` exits 0 across all 8 projects, `cargo test` is 108/108, `pnpm check:deps` passes.
+> Two numbers the plan left open were settled during implementation: `MIN_RENDERED_INTERVALS = 10`
+> (matching `INGEST_LIMITS.minFramesPerRun`), and `PHYSICS.recomputeTolerance` is KEPT with a
+> cross-reference comment at `floatsMatch` rather than deleted. Two corrections to the text below
+> are noted inline. Still outstanding: the DB-backed test tier and the e2e/`@visual` suites have
+> not been run (no Docker/`TEST_DATABASE_URL` on the dev box) — see the phase gate.
+
+- [x] 22.12 **Dual summary where frame-type evidence exists.** Compute a second summary over
   rendered presents only, and offer a toggle on the run report: "how fast did it render" vs "how
   smooth did it feel". Both are legitimate answers to different questions, which is why this is a
   toggle and not a replacement.
@@ -840,7 +848,7 @@ writeup:
   - Presentation only. `frameGeneration` is already a comparability key, so declared-FG and
     declared-non-FG runs are in different buckets regardless; this does not touch pooling.
 
-  - [ ] **The coalescing rule — the crux, and the thing that is easy to get quietly wrong.** A
+  - [x] **The coalescing rule — the crux, and the thing that is easy to get quietly wrong.** A
     rendered summary is **not** a filter of `generated === false` rows. `frameTimeMs` is an interval,
     so dropping the generated rows drops their durations too and the rate is unchanged: on the
     measured capture, 7,120 rendered rows over their own 4.10 ms mean interval recompute to
@@ -867,6 +875,11 @@ writeup:
       `computeFrameParquetSummary` drops `times` (`frame-metadata.ts:304`) to shed 4 MiB, and
       `buildFrameSeriesFromColumns` normalizes `times` **in place**, so server and browser would be
       working from different arrays — losing bit-identity exactly where it is needed.
+    - **Correction from implementation:** the "243.9 = 243.9" identity above holds only where
+      present durations are UNIFORM (which the measured AMD capture was, every row `Application`).
+      Where rendered and generated presents differ in duration, naive filtering lands on neither
+      rate — on an 8 ms / 0.4 ms stream it gives 125 FPS against 238.1 presented and 119.0
+      rendered. Filtering is wrong in a third direction, not merely a no-op. Both cases are tested.
     - Edge cases, all named constants and all tested: `generated === undefined` inside an
       evidence-bearing run is **absorbed** into the enclosing interval (the time elapsed; we just
       don't know what bounded it); fewer than `MIN_RENDERED_INTERVALS` rendered presents yields no
@@ -875,7 +888,7 @@ writeup:
       coalescer returns `d[0..n−2]`, differing in the 3rd–4th significant figure. Two numbers claiming
       to be the same rate and disagreeing slightly is worse than one number.
 
-  - [ ] **New `packages/parsers/src/frame-generation.ts`.** `coalesceRenderedIntervals(frameTimesMs,
+  - [x] **New `packages/parsers/src/frame-generation.ts`.** `coalesceRenderedIntervals(frameTimesMs,
     presentTypes)` returning the intervals plus `startRows` (each interval's originating row, so the
     browser can rebuild the chart on the real time base), the three present-type counts, and
     `leadingMs`/`trailingMs` so the docs can show the accounting closes. Then
@@ -896,7 +909,7 @@ writeup:
       already statically imports `stutterThresholdMs` from `@heimdall/parsers`. The comment at
       `frame-metadata.ts:307-310` implies otherwise and should be tightened while we are there.
 
-  - [ ] **Compute it in the existing Parquet pass — but not inside the chunk callback.**
+  - [x] **Compute it in the existing Parquet pass — but not inside the chunk callback.**
     `readFrameParquetColumn`'s own doc comment records that **row groups may arrive unordered**
     (hence its `seenRows` presence bitmap), so any accumulator in `onValue` would coalesce in
     delivery order and produce garbage on a multi-row-group file — nondeterministically, passing every
@@ -905,7 +918,7 @@ writeup:
     `FRAME_PARQUET_COLUMN_NAMES` orders `frame_time_ms` before `generated`, so the frame times are
     already complete when that pass ends.
 
-  - [ ] **Migration `0040_frame_analysis.sql`** — `runs.rendered_frame_analysis jsonb`,
+  - [x] **Migration `0040_frame_analysis.sql`** — `runs.rendered_frame_analysis jsonb`,
     `runs.present_time_profile jsonb`, `runs.frame_analysis_version integer`, plus the nulls-first
     partial index, following `0030_diagnostics_watermark.sql`. `FRAME_ANALYSIS_VERSION = 1` in
     `packages/shared/src/constants.ts` next to `DIAGNOSTICS_RULE_GENERATION`.
@@ -915,7 +928,7 @@ writeup:
       the lane that exists to reach it. Leave the watermark null and let `nulls first` make those
       rows highest-priority — the same reason 0030's own comment insists the predicate carry an
       `is null` branch.
-  - [ ] **Fourth lane in `FULL_REPROCESS_ENQUEUE_SQL`**, mirroring `diagnostics_generation_candidates`
+  - [x] **Fourth lane in `FULL_REPROCESS_ENQUEUE_SQL`**, mirroring `diagnostics_generation_candidates`
     verbatim, with `FRAME_ANALYSIS_VERSION` as `$6`. Write paths that must stamp:
     `applyVerificationResult` and `applyReprocessResult` (so `ReprocessResult` gains fields);
     `failVerificationJob` never stamps, which is exactly the population the `is null` branch reaches;
@@ -929,7 +942,7 @@ writeup:
       diagnostics arrays rather than renumbering — that class of bug writes the wrong value into the
       right column with no type error and no test failure.
 
-  - [ ] **Wire + UI.** `renderedFrameAnalysisSchema` as a `z.discriminatedUnion("state", …)` added to
+  - [x] **Wire + UI.** `renderedFrameAnalysisSchema` as a `z.discriminatedUnion("state", …)` added to
     `runResponseSchema`; `RUN_WITH_SUMMARY_SELECT` + `RunRow` + `rowToRun` in `db.ts` (two single-row
     callers only, so no list-query cost).
     - **`present_time_profile` stays off the wire.** §22.13 ships with no user-visible annotation;
@@ -938,6 +951,8 @@ writeup:
     - `page.tsx:60` does `runResponseSchema.parse(run)` and zod strips unknown keys — forget the
       schema field and the column plumbs all the way from Postgres to the page boundary and then
       vanishes with no error. Pin it with a schema-test assertion.
+    - **Correction:** `busy-readiness.ts` lives in `apps/web/src/components/run/`, not `lib/run/`;
+      `rendered-rate-readiness.ts` sits beside it there.
     - New `rendered-rate-readiness.ts`, a structural copy of `busy-readiness.ts`: one module owns the
       verdict and its reason string, shared by the toggle, the caption and the tests. A `Segmented`
       (`Presented` | `Rendered`) in a header row above `RunStatTiles` — not in the chart header, which
@@ -969,7 +984,7 @@ writeup:
       phase is about. `generateMetadata`'s share-card FPS stays on the canonical presented value;
       record that choice in the docs.
 
-- [ ] 22.13 **Physics-based frame-generation evidence — characterisation only, no rule.** Detect
+- [x] 22.13 **Physics-based frame-generation evidence — characterisation only, no rule.** Detect
   undeclared frame generation from WITHIN a run, not by comparing it to an aggregate.
   - The signal: sub-millisecond presents. The two captures above showed a 0.32 ms minimum with
     frame generation on versus 3.11 ms with it off. A 0.32 ms present is not a plausible rendered
@@ -981,7 +996,7 @@ writeup:
     generation is 3–4x, and the multiplier drifts with base framerate). Comparability keys control
     resolution/preset/upscaler/scene, but settings vary within a preset and a CPU-bound section
     moves FPS more than frame generation does.
-  - [ ] Store a `present_time_profile` from the same Parquet pass: `minFrameTimeMs`, the low-tail
+  - [x] Store a `present_time_profile` from the same Parquet pass: `minFrameTimeMs`, the low-tail
     nearest-rank percentiles (`p0_1`/`p1`/`p5` — free, `summarizeSortedFrameTimes` already sorts
     ascending), `subMillisecondPresentCount`/`Fraction`, `adjacentSubMillisecondPairFraction`, and
     **`medianOverMinRatio`**. Threshold as a named constant
@@ -992,12 +1007,12 @@ writeup:
       that the multiplier drifts. On the measured pair it separates 5x: 4.10/0.32 = **12.8** with
       frame generation on against 7.65/3.11 = **2.46** with it off. On n = 1 it is still worth
       nothing, and the doc must say that in those words.
-  - [ ] **No rule, no annotation, nothing on the wire.** The statistics accumulate from real uploads
+  - [x] **No rule, no annotation, nothing on the wire.** The statistics accumulate from real uploads
     until they can be calibrated on more than one vendor. **Evidence, never an accusation** (§0.5):
     telling an honest uploader their run looks like cheating is a worse failure than missing a
     dishonest one, and a false positive is unfalsifiable from the uploader's side. A threshold fitted
     to one GPU, one title and one resolution cannot carry that weight.
-  - [ ] `docs/frame-generation.md`: what the pipeline can and cannot see (only PresentMon v2
+  - [x] `docs/frame-generation.md`: what the pipeline can and cannot see (only PresentMon v2
     `--track_frame_type`, and why AMD cannot); the measured RX 9070 XT table with capture conditions;
     the coalescing definition with the worked arithmetic (243.9 presented → 121.9 rendered vs 130.7
     measured FG-off, and why −6.7% is expected); why naive filtering is wrong, with the 243.9 = 243.9
@@ -1006,11 +1021,11 @@ writeup:
     idle sections); and the explicit statement that no rule ships and no run is annotated. Cross-link
     from wanted-list item 9 in the fixtures README.
 
-- [ ] **Housekeeping this phase must not leave behind.**
-  - [ ] `packages/parsers/fixtures/README.md:80-81` still claims "`generatedFramePct` is always 0 and
+- [x] **Housekeeping this phase must not leave behind.**
+  - [x] `packages/parsers/fixtures/README.md:80-81` still claims "`generatedFramePct` is always 0 and
     `generatedFrameTech` always resolves to `none`" — §22.11 already invalidated that and this phase's
     fixtures invalidate it twice over.
-  - [ ] Settle `PHYSICS.recomputeTolerance` (`integrity.ts:30-33`), dead except for its own test.
+  - [x] Settle `PHYSICS.recomputeTolerance` (`integrity.ts:30-33`), dead except for its own test.
     **Do not** wire it into `verify-run.ts`: `floatsMatch` uses a `1e-6` relative epsilon, so adopting
     `0.01` would loosen the integrity gate by four orders of magnitude. Either delete it with its
     test, or comment at `floatsMatch` that `summaryMismatch` deliberately does not use it and why.
@@ -1020,31 +1035,45 @@ writeup:
   switches the tiles, the smoothness bars and the chart together; a capture with no frame-type
   evidence shows the toggle disabled with its reason as visible text; `present_time_profile` is
   populated on both members of the measured RX 9070 XT pair and appears nowhere in the API response
+  - [ ] **Not performed on a real capture, and not performable here.** No frame-generated capture
+    with frame-type evidence is obtainable on the available AMD hardware (§22.6) — the same block
+    that has held wanted-list item 9 open. The synthetic fixture below is the acceptance path;
+    the real-capture verification lands with that fixture, not with this phase
 - **Regression**:
-  - [ ] New `frame-generation.test.ts`: forward-convention coalescing on a hand-built stream; the
+  - [x] New `frame-generation.test.ts`: forward-convention coalescing on a hand-built stream; the
     `renderedCount − 1` invariant; `Σ intervals = t[last] − t[first]`; leading/trailing accounting;
-    `undefined` rows absorbed; each of the three unavailable states. Property test (fast-check is
-    already a parsers devDependency): an all-`false` stream yields `d[0..n−2]`, proving the
-    "it would just duplicate the presented summary" assumption false
-  - [ ] Dual-summary golden fixtures (hand-computed, both rates) — synthetic, per the `fixtures/README.md`
-    16a.1 procedure, since no real FG capture is obtainable on AMD hardware (§22.6). Suggested shape:
-    12 rows alternating rendered `d = 8 ms` / generated `d = 0.4 ms`, so presented avg = `1000×12/50.4`
-    and rendered avg = `1000×5/42.0` = 119.05 — both checkable by hand. Plus an
-    application-only fixture for the `no-generated-frames` branch
-  - [ ] Toggle absent — and said to be absent, as visible text — when the capture carries no
-    frame-type evidence; busy overlay forced off with its reason in rendered mode
-  - [ ] `verify-run.unit.test.ts`: **`summaryMismatch` is unchanged by a frame-generated run**, and the
+    `undefined` rows absorbed; each of the **four** unavailable/available states. Property test
+    (fast-check is already a parsers devDependency): an all-`false` stream yields `d[0..n−2]`,
+    proving the "it would just duplicate the presented summary" assumption false
+  - [x] Dual-summary golden fixture: `presentmon/v2-frame-generation.csv`, synthetic per the
+    `fixtures/README.md` 16a.1 procedure. **12 PAIRS, not the 12 rows the plan suggested** — 6
+    rendered presents bound only 5 intervals, below `MIN_RENDERED_INTERVALS` (10), so the suggested
+    shape would correctly return `too-few-rendered-presents` instead of a rate. Both hand-computed
+    rates are unchanged by the larger count: presented `1000×24/100.8` = 238.095, rendered
+    `1000×11/92.4` = 119.048. The golden harness now asserts `renderedFrameAnalysis` whenever a
+    fixture declares one. The `no-generated-frames` branch is covered by the existing
+    application-only fixtures plus a unit test rather than a second CSV
+  - [x] Toggle absent — and said to be absent, as visible text — when the capture carries no
+    frame-type evidence; busy overlay forced off with its reason in rendered mode. Plus the tile
+    swap (Generated frames % → Interpolated presents) and all four readiness states
+  - [x] `verify-run.unit.test.ts`: **`summaryMismatch` is unchanged by a frame-generated run**, and the
     rendered analysis never influences the validated/flagged verdict. This is decision 1's guarantee
     and the one a future reader is most likely to "fix"
   - [ ] Reprocess: the fourth lane enqueues a null-watermark run and skips a current-version one
     (mirroring the §17.8.0 case), both write paths stamp, and the new lane is proven index-backed by
-    the existing EXPLAIN assertion
-  - [ ] Functional e2e (non-`@visual`): `makeSyntheticFrames` already emits three-state `generated`
-    (40% true / 60% false) in a non-alternating 3-of-5 pattern, so the fixture run gets a real toggle
-    and exercises the off-by-one — but `global-setup.ts` must seed the new columns directly
+    the existing EXPLAIN assertion — **NOT RUN: needs Postgres.** Partially compensated by
+    `repo/frame-analysis-params.unit.test.ts`, which runs on the DB-free tier and asserts the
+    highest `$n` each write statement references equals the parameters supplied, that the two jsonb
+    values are appended last, that neither is `coalesce`d, and that the lane binds `$6` with no
+    unreferenced gap. Verified by mutation. The EXPLAIN assertion still needs
+    `runs_frame_analysis_version_idx` added and a real run
+  - [ ] Functional e2e (non-`@visual`): `global-setup.ts` now seeds the three columns directly (since
+    `insertRun` deliberately does not), and the fixture's analysis was confirmed `available` —
+    4,320 rendered / 2,880 generated, 68.99 rendered FPS against 114.96 presented, exercising the
+    off-by-one on a non-alternating stream. **The suite itself has NOT been run: needs Docker**
   - [ ] `@visual` baselines will churn: the toggle changes the run-page header region. Use the
     one-click **Regenerate visual baselines** `workflow_dispatch`, planned rather than discovered in CI
-  - [ ] Physics rule fires on a known-FG capture and stays silent on the matched non-FG one —
+  - [x] Physics rule fires on a known-FG capture and stays silent on the matched non-FG one —
     **deferred with the rule** (decision 2). No rule ships this phase, so there is nothing to assert
 
 ### Phase 9.6 Regression Gate
@@ -1053,6 +1082,10 @@ writeup:
   implying either
 - `RunSummary`, `summaryMismatch` and the client upload contract are byte-for-byte unchanged — the
   §11.5 recompute gate did not move to accommodate this phase
+- **Outstanding before this phase can be called done:** the DB-backed vitest tier (reprocess lane,
+  `repo.test.ts`, the EXPLAIN index assertion), the functional e2e suite, and the `@visual`
+  regeneration. All three need Docker or a `TEST_DATABASE_URL`, neither of which was available on
+  the dev box — they have not been run, not merely not been written. CI covers all three.
 - The frame-generation signature is characterised, stored and documented, and **no run is annotated
   or auto-rejected for it**; the calibration gap is written down rather than papered over with a
   threshold fitted to one machine

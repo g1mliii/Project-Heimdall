@@ -8,6 +8,7 @@ import {
   CAPABILITY_MANIFEST_VERSION,
   COHORT_EXCLUSION,
   DIAGNOSTICS_RULE_GENERATION,
+  FRAME_ANALYSIS_VERSION,
   METHODOLOGY_MANIFEST_VERSION,
   RUN_STATUS,
   RUN_VISIBILITY,
@@ -98,6 +99,26 @@ function runFixture(id: string, overrides: Partial<Run> = {}): Run {
     capabilityManifest: capability,
     ...overrides,
   };
+}
+
+/**
+ * Insert a run already stamped at the current frame-analysis version (§22.12).
+ *
+ * `insertRun` deliberately leaves `frame_analysis_version` null — that is what
+ * makes the whole pre-9.6 corpus reachable by the new lane — so without this a
+ * freshly inserted fixture is a candidate for `frame_analysis_candidates` and
+ * every count assertion in this file would be measuring that lane instead of
+ * the one under test. Stamping isolates each test to its own watermark, exactly
+ * as the diagnostics-generation tests already stamp theirs.
+ *
+ * The frame-analysis lane's own test deliberately does NOT use this.
+ */
+async function insertStampedRun(run: Run, pool: TestDb["pool"]): Promise<void> {
+  await insertRun(run, pool);
+  await pool.query("update runs set frame_analysis_version = $2 where id = $1", [
+    run.id,
+    FRAME_ANALYSIS_VERSION,
+  ]);
 }
 
 describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
@@ -193,7 +214,7 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
             : {}),
           ...(generated.warmup ? { isWarmup: true } : {}),
         });
-        await insertRun(run, db.pool);
+        await insertStampedRun(run, db.pool);
         await db.pool.query(
           `update runs
               set game_id = $2::bigint,
@@ -236,7 +257,7 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
 
   it("enriches an old Parquet run without changing status or inventing methodology", async () => {
     const id = "run_reprocess_status_preserved";
-    await insertRun(
+    await insertStampedRun(
       runFixture(id, {
         summary: { ...honestSummary, avgFps: honestSummary.avgFps + 25 },
         capabilityManifest: undefined,
@@ -289,7 +310,7 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
 
   it("refreshes driver findings without R2, preserves other findings, and ages to none", async () => {
     const id = "run_driver_refresh";
-    await insertRun(runFixture(id), db.pool);
+    await insertStampedRun(runFixture(id), db.pool);
     await insertDiagnostics(
       id,
       [
@@ -419,7 +440,7 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
 
   it("keeps a terminal failure as a tombstone and enqueue remains idempotent", async () => {
     const id = "run_reprocess_tombstone";
-    await insertRun(runFixture(id, { capabilityManifest: undefined }), db.pool);
+    await insertStampedRun(runFixture(id, { capabilityManifest: undefined }), db.pool);
     await settleDriverWatermark();
     expect(await enqueueFullReprocessJobs({}, db.pool)).toBe(1);
     expect(await enqueueFullReprocessJobs({}, db.pool)).toBe(0);
@@ -442,7 +463,7 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
     // them against the server recompute. Reprocessing it first would overwrite
     // that row with the server value, making the comparison server-vs-server and
     // laundering a tampered upload to validated.
-    await insertRun(
+    await insertStampedRun(
       runFixture(pending, { capabilityManifest: undefined, status: RUN_STATUS.pending }),
       db.pool,
     );
@@ -462,8 +483,8 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
     // the current generation" must be distinguishable from "never evaluated".
     const stale = "run_diag_generation_stale";
     const current = "run_diag_generation_current";
-    await insertRun(runFixture(stale), db.pool);
-    await insertRun(runFixture(current), db.pool);
+    await insertStampedRun(runFixture(stale), db.pool);
+    await insertStampedRun(runFixture(current), db.pool);
     await db.pool.query("update runs set diagnostics_rule_generation = $2 where id = $1", [
       stale,
       DIAGNOSTICS_RULE_GENERATION - 1,
@@ -481,9 +502,72 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
     expect(queued.rows.map((row) => row.run_id)).toEqual([stale]);
   });
 
+  it("enqueues an UNSTAMPED run for frame analysis, not one at the current version (§22.12)", async () => {
+    // The lane's own test, so it deliberately does not use insertStampedRun.
+    //
+    // The null case is the whole population here, not an edge case: migration
+    // 0040 does not backfill, so every run that predates Phase 9.6 carries a
+    // null watermark. `null < $6` is null in Postgres, so without the `is null`
+    // branch the historical corpus would be permanently invisible to the lane
+    // that exists to reach it.
+    const unstamped = "run_frame_analysis_unstamped";
+    const stale = "run_frame_analysis_stale";
+    const current = "run_frame_analysis_current";
+    await insertRun(runFixture(unstamped), db.pool);
+    await insertStampedRun(runFixture(current), db.pool);
+    await insertRun(runFixture(stale), db.pool);
+    await db.pool.query("update runs set frame_analysis_version = $2 where id = $1", [
+      stale,
+      FRAME_ANALYSIS_VERSION - 1,
+    ]);
+    await settleDriverWatermark();
+
+    expect(await enqueueFullReprocessJobs({}, db.pool)).toBe(2);
+    const queued = await db.pool.query<{ run_id: string }>(
+      "select run_id from reprocess_jobs where kind = 'full' order by run_id",
+    );
+    expect(queued.rows.map((row) => row.run_id)).toEqual([stale, unstamped]);
+  });
+
+  it("stamps the frame-analysis watermark on both write paths (§22.12)", async () => {
+    // A replay must ADVANCE the watermark, or the lane re-enqueues the run
+    // forever — the same trap §17.8.0 documents for diagnostics.
+    const id = "run_frame_analysis_stamped_by_replay";
+    await insertRun(runFixture(id), db.pool);
+    await settleDriverWatermark();
+    expect(await enqueueFullReprocessJobs({}, db.pool)).toBe(1);
+
+    await drainReprocessJobs(
+      { maxJobs: 5 },
+      { db: db.pool, getObject: async () => parquetBytes },
+    );
+
+    const after = await db.pool.query<{
+      frame_analysis_version: number | null;
+      rendered_frame_analysis: unknown;
+      present_time_profile: unknown;
+    }>(
+      `select frame_analysis_version, rendered_frame_analysis, present_time_profile
+         from runs where id = $1`,
+      [id],
+    );
+    expect(after.rows[0]?.frame_analysis_version).toBe(FRAME_ANALYSIS_VERSION);
+    // validFrames carry no frame-type column, so the honest stored state is
+    // "the capture told us nothing" — not a fabricated rendered rate.
+    expect(after.rows[0]?.rendered_frame_analysis).toEqual({ state: "no-frame-type-evidence" });
+    // §22.13 statistics are stored but never exposed; readRun must not carry them.
+    expect(after.rows[0]?.present_time_profile).not.toBeNull();
+    const run = await readRun(id, db.pool);
+    expect(run).not.toHaveProperty("presentTimeProfile");
+
+    // And the run is no longer a candidate for the lane.
+    await db.pool.query("delete from reprocess_jobs");
+    expect(await enqueueFullReprocessJobs({}, db.pool)).toBe(0);
+  });
+
   it("keeps findings in registry order after a driver refresh replaces them", async () => {
     const id = "run_driver_finding_order";
-    await insertRun(runFixture(id), db.pool);
+    await insertStampedRun(runFixture(id), db.pool);
     await insertDiagnostics(
       id,
       [
@@ -514,7 +598,7 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
 
   it("records driver_evaluated_at when the full lane replays the driver rules", async () => {
     const id = "run_full_sets_driver_watermark";
-    await insertRun(runFixture(id, { capabilityManifest: undefined }), db.pool);
+    await insertStampedRun(runFixture(id, { capabilityManifest: undefined }), db.pool);
     await settleDriverWatermark();
     await db.pool.query("update runs set driver_evaluated_at = null where id = $1", [id]);
     expect(await enqueueFullReprocessJobs({}, db.pool)).toBe(1);
@@ -534,7 +618,7 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
 
   it("revives a driver tombstone when a source watermark moves again", async () => {
     const id = "run_driver_tombstone_revive";
-    await insertRun(runFixture(id), db.pool);
+    await insertStampedRun(runFixture(id), db.pool);
     await settleDriverWatermark();
     await db.pool.query(
       "update driver_catalog set fetched_at = now() + interval '1 hour', released_at = current_date",
@@ -560,7 +644,7 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
 
   it("does not revive a driver tombstone until the sweep generation changes", async () => {
     for (const suffix of ["a", "b", "c"]) {
-      await insertRun(runFixture(`run_driver_terminal_${suffix}`), db.pool);
+      await insertStampedRun(runFixture(`run_driver_terminal_${suffix}`), db.pool);
     }
     await settleDriverWatermark();
     await db.pool.query(
@@ -586,7 +670,7 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
 
   it("keeps a newer sweep open while an older driver job is live", async () => {
     const id = "run_driver_generation_race";
-    await insertRun(runFixture(id), db.pool);
+    await insertStampedRun(runFixture(id), db.pool);
     await settleDriverWatermark();
     await db.pool.query(
       `update driver_catalog
@@ -614,7 +698,7 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
 
   it("keeps a driver refresh sweep within its live-queue capacity", async () => {
     for (const suffix of ["a", "b", "c"]) {
-      await insertRun(runFixture(`run_driver_capacity_${suffix}`), db.pool);
+      await insertStampedRun(runFixture(`run_driver_capacity_${suffix}`), db.pool);
     }
     await settleDriverWatermark();
     await db.pool.query(
@@ -634,7 +718,7 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
 
   it("sweeps driver findings from game_driver_requirements with an empty catalog", async () => {
     const id = "run_driver_requirements_only";
-    await insertRun(runFixture(id), db.pool);
+    await insertStampedRun(runFixture(id), db.pool);
     await settleDriverWatermark();
     // gpuDriverOutdatedRule reads game_driver_requirements and needs no catalog
     // at all. Watermarking only driver_catalog left an empty catalog blocking
@@ -650,7 +734,7 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
 
   it("reclaims an interrupted full job without duplicate diagnostics", async () => {
     const id = "run_reprocess_restart";
-    await insertRun(runFixture(id, { capabilityManifest: undefined }), db.pool);
+    await insertStampedRun(runFixture(id, { capabilityManifest: undefined }), db.pool);
     await settleDriverWatermark();
     await enqueueFullReprocessJobs({}, db.pool);
     const first = await claimNextReprocessJob(REPROCESS_KIND.full, {}, db.pool);
@@ -683,7 +767,7 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
 
   it("keeps live verification moving with a large full backfill queued", async () => {
     const liveId = "run_live_ingest_during_backfill";
-    await insertRun(
+    await insertStampedRun(
       runFixture(liveId, {
         status: RUN_STATUS.pending,
         visibility: RUN_VISIBILITY.unlisted,
@@ -786,6 +870,7 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
           DIAGNOSTIC_RULES.map((rule) => rule.version),
           CAPABILITY_MANIFEST_VERSION,
           DIAGNOSTICS_RULE_GENERATION,
+          FRAME_ANALYSIS_VERSION,
         ],
       );
       const driver = await client.query(
@@ -806,6 +891,10 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
       expect(Number(queued.rows[0]?.count)).toBe(100);
       expect(cteScanActualRows(full.rows, "diagnostic_candidates")).toEqual([100]);
       expect(JSON.stringify(full.rows)).toContain("runs_reprocess_capability_idx");
+      // §22.12 fourth lane. Without this the lane seq-scans `runs` on every
+      // enqueue pass — and because 0040 deliberately does not backfill, EVERY
+      // pre-9.6 row is a candidate, so the scan is over the whole table.
+      expect(JSON.stringify(full.rows)).toContain("runs_frame_analysis_version_idx");
       expect(JSON.stringify(full.rows)).toContain("diagnostics_rule_version_run_idx");
       expect(JSON.stringify(driver.rows)).toContain("runs_driver_evaluated_at_idx");
       expect(JSON.stringify(driverSweep.rows)).toContain("driver_catalog_fetched_at_idx");

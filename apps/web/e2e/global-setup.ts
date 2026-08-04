@@ -7,7 +7,7 @@
 
 import pg from "pg";
 import { PostgreSqlContainer } from "@testcontainers/postgresql";
-import { hashManagementToken } from "@heimdall/shared";
+import { FRAME_ANALYSIS_VERSION, hashManagementToken } from "@heimdall/shared";
 import { migrate } from "../../../infra/db/migrate.mjs";
 import { insertDiagnostics, insertRun } from "../src/lib/db";
 import { resolveGameId, resolveHardwareId } from "../src/lib/repo/catalog";
@@ -19,6 +19,8 @@ import {
   E2E_BENCHMARK_SET_SECRET,
   e2eDiagnostics,
   e2eFixtureRun,
+  e2ePresentTimeProfile,
+  e2eRenderedFrameAnalysis,
   e2eVramDiagnostics,
   e2eVramFixtureRun,
 } from "./run-fixture";
@@ -36,6 +38,22 @@ export default async function globalSetup() {
     // Diagnostics are written by the verification worker in production; seed the
     // same engine output here so the SSR run page renders real findings.
     await insertDiagnostics(e2eFixtureRun.id, e2eDiagnostics, pool);
+    // §22.12: same story, but `insertRun` deliberately never writes these — the
+    // verify worker owns them because there is no client contract for a rendered
+    // summary. Seed them directly so the run page gets a real rate toggle.
+    await pool.query(
+      `update runs
+          set rendered_frame_analysis = $2::jsonb,
+              present_time_profile = $3::jsonb,
+              frame_analysis_version = $4
+        where id = $1`,
+      [
+        e2eFixtureRun.id,
+        JSON.stringify(e2eRenderedFrameAnalysis),
+        JSON.stringify(e2ePresentTimeProfile),
+        FRAME_ANALYSIS_VERSION,
+      ],
+    );
     await insertRun(e2eVramFixtureRun, pool);
     await insertDiagnostics(e2eVramFixtureRun.id, e2eVramDiagnostics, pool);
     const benchmarkSetSecretHash = await hashManagementToken(E2E_BENCHMARK_SET_SECRET);

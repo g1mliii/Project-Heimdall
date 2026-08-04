@@ -1,0 +1,25 @@
+Application,ProcessID,SwapChainAddress,PresentRuntime,SyncInterval,PresentFlags,AllowsTearing,PresentMode,FrameType,CPUStartTime,FrameTime,CPUBusy,CPUWait,GPULatency,GPUTime,GPUBusy,GPUWait,DisplayLatency,DisplayedTime
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,1000,8,5.2,2.8,1.1,7.9,7.6,0.3,12.4,8.0
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Intel_XEFG,1008,0.4,0,0.4,0,0,0,0,12.4,0.4
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,1008.4,8,5.2,2.8,1.1,7.9,7.6,0.3,12.4,8.0
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Intel_XEFG,1016.4,0.4,0,0.4,0,0,0,0,12.4,0.4
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,1016.8,8,5.2,2.8,1.1,7.9,7.6,0.3,12.4,8.0
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Intel_XEFG,1024.8,0.4,0,0.4,0,0,0,0,12.4,0.4
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,1025.2,8,5.2,2.8,1.1,7.9,7.6,0.3,12.4,8.0
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Intel_XEFG,1033.2,0.4,0,0.4,0,0,0,0,12.4,0.4
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,1033.6,8,5.2,2.8,1.1,7.9,7.6,0.3,12.4,8.0
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Intel_XEFG,1041.6,0.4,0,0.4,0,0,0,0,12.4,0.4
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,1042,8,5.2,2.8,1.1,7.9,7.6,0.3,12.4,8.0
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Intel_XEFG,1050,0.4,0,0.4,0,0,0,0,12.4,0.4
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,1050.4,8,5.2,2.8,1.1,7.9,7.6,0.3,12.4,8.0
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Intel_XEFG,1058.4,0.4,0,0.4,0,0,0,0,12.4,0.4
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,1058.8,8,5.2,2.8,1.1,7.9,7.6,0.3,12.4,8.0
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Intel_XEFG,1066.8,0.4,0,0.4,0,0,0,0,12.4,0.4
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,1067.2,8,5.2,2.8,1.1,7.9,7.6,0.3,12.4,8.0
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Intel_XEFG,1075.2,0.4,0,0.4,0,0,0,0,12.4,0.4
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,1075.6,8,5.2,2.8,1.1,7.9,7.6,0.3,12.4,8.0
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Intel_XEFG,1083.6,0.4,0,0.4,0,0,0,0,12.4,0.4
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,1084,8,5.2,2.8,1.1,7.9,7.6,0.3,12.4,8.0
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Intel_XEFG,1092,0.4,0,0.4,0,0,0,0,12.4,0.4
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Application,1092.4,8,5.2,2.8,1.1,7.9,7.6,0.3,12.4,8.0
+game.exe,4242,0x00000244B6D4E770,DXGI,0,512,1,Hardware: Independent Flip,Intel_XEFG,1100.4,0.4,0,0.4,0,0,0,0,12.4,0.4

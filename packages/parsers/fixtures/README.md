@@ -84,8 +84,26 @@ completes the §7.3 spike for that cell. Wanted, in priority order:
    frame generation enabled produced 14,241 rows, every one `Application`.
    A useful capture therefore needs a title or driver that instruments for
    Intel's provider — realistically an Intel XeSS-FG title, or a game shipping
-   the PresentMon SDK. Until one lands, `generatedFramePct` is always 0 and
-   `generatedFrameTech` always resolves to `none`.
+   the PresentMon SDK.
+
+   **What a real capture would unblock has changed twice since this item was
+   written, so do not read the old summary here.** It used to say
+   `generatedFramePct` is always 0 and `generatedFrameTech` always resolves to
+   `none`; both halves are now wrong:
+
+   - §22.11 (`presentmon@1.2.0`) stopped the pipeline manufacturing
+     `generatedFrameTech: none`. A declared tech is kept as declared, and an
+     undeclared run carries `unknown` — only an *observed* generated frame lets
+     the recompute overrule a declaration.
+   - §22.12 (Phase 9.6) added the rendered-only rate, which is computed from
+     exactly this column. Synthetic fixtures cover the arithmetic
+     (`frame-generation.test.ts`, and the golden pair below), but nothing here
+     has ever seen a real interpolated present.
+
+   So a real capture now flips a sensor cell *and* gives the rendered-rate
+   coalescer its first non-synthetic input. See
+   [`docs/frame-generation.md`](../../../docs/frame-generation.md) for what the
+   pipeline can and cannot see, and for the measured RX 9070 XT numbers.
 
 ### NVIDIA and Intel cells are open contributions
 
