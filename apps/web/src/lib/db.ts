@@ -11,7 +11,11 @@
  */
 
 import pg from "pg";
-import { DIAGNOSTICS, normalizeMethodologyManifest } from "@heimdall/shared";
+import {
+  DIAGNOSTICS,
+  FRAME_ANALYSIS_VERSION,
+  normalizeMethodologyManifest,
+} from "@heimdall/shared";
 import type {
   CapabilityManifest,
   ConfidenceLevel,
@@ -25,6 +29,8 @@ import type {
 import type {
   DiagnosticsDriverCatalog,
   DiagnosticsDriverPlatform,
+  PresentTimeProfile,
+  RenderedFrameAnalysis,
 } from "@heimdall/parsers";
 import { DIAGNOSTIC_RULES } from "@heimdall/parsers";
 import { getDbEnv } from "./env";
@@ -335,6 +341,42 @@ export function summaryUpdateSql(
 }
 
 /**
+ * §22.12/§22.13 frame-analysis output, committed alongside a recompute.
+ *
+ * One definition shared by `VerificationResult` and `ReprocessResult`: both
+ * write paths stamp the same three columns, and a copy in each would be a copy
+ * to drift. `insertRun` deliberately does NOT write these — see the comment
+ * there.
+ */
+export interface FrameAnalysisResult {
+  renderedFrameAnalysis: RenderedFrameAnalysis;
+  /** Never reaches the wire; stored for §22.13 calibration only. */
+  presentTimeProfile: PresentTimeProfile | undefined;
+}
+
+/**
+ * The `runs` assignments that stamp a frame analysis, for use inside a CTE.
+ *
+ * Deliberately NOT wrapped in `coalesce(...)` the way the nullable columns
+ * around it are: a run whose analysis becomes unavailable under a new algorithm
+ * version must LOSE the stored value, not silently keep a stale one that no
+ * longer describes any computation we would perform today.
+ */
+export function frameAnalysisUpdateSql(firstParameter: number): string {
+  return `rendered_frame_analysis = $${firstParameter}::jsonb,
+              present_time_profile = $${firstParameter + 1}::jsonb,
+              frame_analysis_version = ${FRAME_ANALYSIS_VERSION}`;
+}
+
+/** The two jsonb values `frameAnalysisUpdateSql` binds, in order. */
+export function frameAnalysisColumns(result: FrameAnalysisResult): (string | null)[] {
+  return [
+    JSON.stringify(result.renderedFrameAnalysis),
+    result.presentTimeProfile ? JSON.stringify(result.presentTimeProfile) : null,
+  ];
+}
+
+/**
  * Retry backoff for a failed queue job, in seconds: 30s doubling per attempt,
  * capped at 5 doublings and a 300s ceiling. Reads `attempts` from the row being
  * updated, so it is only valid inside an update on a job table.
@@ -496,6 +538,15 @@ export interface InsertRunOptions {
  * cannot be claimed by a separate request between check and insert. This
  * remains one network round trip on the app's primary write path (Neon is
  * remote; an explicit begin/insert/insert/commit would cost 4 RTTs).
+ *
+ * This deliberately does NOT write `rendered_frame_analysis`,
+ * `present_time_profile` or `frame_analysis_version` (§22.12). That is not an
+ * oversight to be tidied up: there is no client contract for a rendered
+ * summary, and inventing one would make an uploader's claim about frame
+ * generation load-bearing — exactly the trust violation this phase removes. The
+ * columns stay null until the verify worker computes them from the stored
+ * Parquet, and a null watermark is precisely what makes the run visible to the
+ * frame-analysis reprocess lane.
  */
 export async function insertRun(
   run: Run,

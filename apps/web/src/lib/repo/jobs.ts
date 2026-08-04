@@ -23,9 +23,12 @@ import {
   getPool,
   diagnosticInsertColumns,
   diagnosticInsertSql,
+  frameAnalysisColumns,
+  frameAnalysisUpdateSql,
   RETRY_BACKOFF_SECS_SQL,
   summaryColumns,
   summaryUpdateSql,
+  type FrameAnalysisResult,
   type Queryable,
 } from "../db";
 
@@ -40,7 +43,7 @@ export interface ClaimedJob {
 }
 
 /** Canonical worker output committed together after a successful verification. */
-export interface VerificationResult {
+export interface VerificationResult extends FrameAnalysisResult {
   summary: RunSummary;
   runStatus: "validated" | "flagged";
   signatureValid: boolean | null;
@@ -217,7 +220,14 @@ export async function applyVerificationResult(
               -- generation, so stamp the §17.8.0 watermark; a freshly verified
               -- run is never re-enqueued by the generation lane.
               diagnostics_rule_generation = ${DIAGNOSTICS_RULE_GENERATION},
-              diagnostics_evaluated_at = now()
+              diagnostics_evaluated_at = now(),
+              -- §22.12: this recompute produced a frame analysis at the current
+              -- algorithm version, so stamp the watermark. The parameters are
+              -- APPENDED after the diagnostics arrays ($20-$26) rather than
+              -- renumbered into the middle — shifting the existing offsets
+              -- writes the wrong value into the right column with no type error
+              -- and no test failure.
+              ${frameAnalysisUpdateSql(27)}
         where id = $1
           and ${writableRunStatusSql()}
           and exists (select 1 from job_claim)
@@ -241,6 +251,7 @@ export async function applyVerificationResult(
       result.capabilityManifest ? JSON.stringify(result.capabilityManifest) : null,
       result.methodologyManifest ? JSON.stringify(result.methodologyManifest) : null,
       ...diagnosticInsertColumns(result.diagnostics),
+      ...frameAnalysisColumns(result),
     ],
   );
 }

@@ -15,10 +15,15 @@ import {
   parseFrameParquetTimeMs,
   parseOptionalFrameParquetGenerated,
   parseOptionalFrameParquetNumber,
+  presentFrameTypeCode,
 } from "@heimdall/shared";
 import type { CapabilitySensorField, RunSummary } from "@heimdall/shared";
 import type { DiagnosticFrameSensorField } from "@heimdall/shared";
-import type { DiagnosticsFrameColumns } from "@heimdall/parsers";
+import type {
+  DiagnosticsFrameColumns,
+  PresentTimeProfile,
+  RenderedFrameAnalysis,
+} from "@heimdall/parsers";
 import { buildFrameSeriesFromColumns, type FrameSeries } from "../run/frame-series";
 
 export const FRAME_PARQUET_COLUMN_NAMES = FRAME_PARQUET_COLUMNS.map((column) => column.name);
@@ -215,6 +220,18 @@ export interface FrameParquetSummary {
    * never evidence of absence; see `reconcileGeneratedFrameTech`.
    */
   frameGenerationObserved: boolean;
+  /**
+   * §22.12 rendered-only rate, or the typed reason there isn't one. Always
+   * present — the union's non-`available` arms ARE the answer, so a caller
+   * never has to guess why a rate is missing.
+   */
+  renderedFrameAnalysis: RenderedFrameAnalysis;
+  /**
+   * §22.13 low-tail present-time statistics. Characterisation only: no rule
+   * reads this, no run is annotated with it, and it never reaches the wire.
+   * Undefined only for an empty stream, which ingest limits already reject.
+   */
+  presentTimeProfile: PresentTimeProfile | undefined;
 }
 
 /**
@@ -235,6 +252,14 @@ export async function computeFrameParquetSummary(
   let times: Float64Array | undefined = new Float64Array(frameCount);
   const frameTimes = new Float64Array(frameCount);
   let generatedFrameCount = 0;
+  // §22.12 per-row present type, one byte per frame. Filled during the
+  // `generated` column pass and coalesced AFTER it resolves — never inside the
+  // chunk callback. `readFrameParquetColumn`'s own doc comment records that row
+  // groups may arrive UNORDERED (hence its `seenRows` presence bitmap), so an
+  // accumulator in `onValue` would coalesce in delivery order and produce
+  // garbage on a multi-row-group file — nondeterministically, while passing
+  // every single-row-group fixture we own.
+  const presentTypes = new Uint8Array(frameCount);
 
   // Retained diagnostics sensor columns (NaN = value absent for that frame).
   // Allocate lazily: sensor-sparse captures should not pay 12 MiB for three
@@ -268,7 +293,10 @@ export async function computeFrameParquetSummary(
           return;
         }
         if (expectedColumnName === "generated") {
-          if (parseOptionalFrameParquetGenerated(value, row) === true) generatedFrameCount++;
+          const generated = parseOptionalFrameParquetGenerated(value, row);
+          if (generated === true) generatedFrameCount++;
+          // Written by row index, so unordered row groups still land correctly.
+          presentTypes[row] = presentFrameTypeCode(generated);
           return;
         }
         const parsed = parseOptionalFrameParquetNumber(expectedColumnName, value, row);
@@ -300,11 +328,18 @@ export async function computeFrameParquetSummary(
       times = undefined;
     }
   }
-  // `frame-metadata` also ships to the run-page client. Keep the parser
-  // dependency behind the worker-only path so downloading chart frames does
-  // not pull the parser bundle into the browser.
-  const { computeRunSummaryFromFrameTimes } = await import("@heimdall/parsers");
+  // `frame-metadata` also ships to the run-page client, so the parser import
+  // stays dynamic and inside the worker-only path. Note this is a code-split
+  // boundary, not a "parsers never reach the browser" rule: `lib/run/stutters`
+  // already imports `stutterThresholdMs` statically, and the run page decodes
+  // its rendered series through the same module.
+  const { computeRunSummaryFromFrameTimes, computePresentTimeProfile, computeRenderedFrameAnalysis } =
+    await import("@heimdall/parsers");
   const summary = computeRunSummaryFromFrameTimes(frameTimes, generatedFrameCount);
+  // Row-ordered by construction: `FRAME_PARQUET_COLUMN_NAMES` puts
+  // `frame_time_ms` before `generated`, so both buffers are complete here.
+  const renderedFrameAnalysis = computeRenderedFrameAnalysis(frameTimes, presentTypes);
+  const presentTimeProfile = computePresentTimeProfile(frameTimes);
 
   const diagnosticsColumns: FrameParquetDiagnosticsColumns = { frameTimeMs: frameTimes };
   for (const field of DIAGNOSTIC_FRAME_SENSOR_FIELDS) {
@@ -317,6 +352,8 @@ export async function computeFrameParquetSummary(
     diagnosticsColumns,
     presentSensors: [...presentSensors],
     frameGenerationObserved: generatedFrameCount > 0,
+    renderedFrameAnalysis,
+    presentTimeProfile,
   };
 }
 

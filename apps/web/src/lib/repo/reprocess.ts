@@ -10,6 +10,7 @@ import {
   CAPABILITY_MANIFEST_VERSION,
   DIAGNOSTICS,
   DIAGNOSTICS_RULE_GENERATION,
+  FRAME_ANALYSIS_VERSION,
   writableRunStatusSql,
   type CapabilityManifest,
   type DiagnosticFinding,
@@ -20,11 +21,14 @@ import {
 import {
   diagnosticInsertColumns,
   diagnosticInsertSql,
+  frameAnalysisColumns,
+  frameAnalysisUpdateSql,
   getPool,
   query,
   RETRY_BACKOFF_SECS_SQL,
   summaryColumns,
   summaryUpdateSql,
+  type FrameAnalysisResult,
   type Queryable,
 } from "../db";
 
@@ -43,7 +47,7 @@ export interface ClaimedReprocessJob {
   attempts: number;
 }
 
-export interface ReprocessResult {
+export interface ReprocessResult extends FrameAnalysisResult {
   summary: RunSummary;
   signatureValid: boolean | null;
   diagnostics: readonly DiagnosticFinding[];
@@ -126,6 +130,30 @@ export const FULL_REPROCESS_ENQUEUE_SQL = `with current_rules as materialized (
           )
         order by r.diagnostics_rule_generation nulls first, r.created_at, r.id
         limit $1
+     ), frame_analysis_candidates as materialized (
+       -- §22.12 rendered-frame analysis watermark, structurally identical to the
+       -- diagnostics generation lane above.
+       --
+       -- The null branch matters MORE here than it does there: 0040 deliberately
+       -- did not backfill, so every run that predates Phase 9.6 carries a null
+       -- watermark. That is not an edge case to be defensive about — it is the
+       -- entire historical corpus, and this branch is the only thing that reaches
+       -- it. Index-backed by runs_frame_analysis_version_idx (nulls first).
+       select r.id, r.created_at
+         from runs r
+        where r.frames_object_key is not null
+          and ${REPROCESSABLE_STATUS_SQL("r")}
+          and (
+            r.frame_analysis_version is null
+            or r.frame_analysis_version < $6
+          )
+          and not exists (
+            select 1 from reprocess_jobs existing
+             where existing.run_id = r.id
+               and existing.kind = '${REPROCESS_KIND.full}'
+          )
+        order by r.frame_analysis_version nulls first, r.created_at, r.id
+        limit $1
      -- The diagnostics-join lane below is now redundant with the generation
      -- watermark above (which covers clean AND finding-bearing runs), but is kept
      -- as a defensive second path: it still enqueues a run whose STORED finding
@@ -184,6 +212,8 @@ export const FULL_REPROCESS_ENQUEUE_SQL = `with current_rules as materialized (
        union
        select id, created_at from diagnostics_generation_candidates
        union
+       select id, created_at from frame_analysis_candidates
+       union
        select id, created_at from diagnostic_candidates
      )
      insert into reprocess_jobs (run_id, kind)
@@ -207,6 +237,7 @@ export async function enqueueFullReprocessJobs(
       CURRENT_RULE_VERSIONS,
       CAPABILITY_MANIFEST_VERSION,
       DIAGNOSTICS_RULE_GENERATION,
+      FRAME_ANALYSIS_VERSION,
     ],
     db,
   );
@@ -519,7 +550,13 @@ export async function applyReprocessResult(
               methodology_manifest_version = coalesce(
                 ($17::jsonb ->> 'version')::integer,
                 runs.methodology_manifest_version
-              )
+              ),
+              -- §22.12: appended after the diagnostics arrays ($18-$24), never
+              -- renumbered into the middle. Note these assignments are NOT
+              -- coalesced like the two above: a run whose analysis becomes
+              -- unavailable under a new algorithm version must lose the value,
+              -- not silently keep a stale one.
+              ${frameAnalysisUpdateSql(25)}
         where id = $1
           and ${writableRunStatusSql()}
           and exists (select 1 from job_claim)
@@ -541,6 +578,7 @@ export async function applyReprocessResult(
       JSON.stringify(result.capabilityManifest),
       result.methodologyManifest ? JSON.stringify(result.methodologyManifest) : null,
       ...diagnosticInsertColumns(result.diagnostics),
+      ...frameAnalysisColumns(result),
     ],
   );
 }

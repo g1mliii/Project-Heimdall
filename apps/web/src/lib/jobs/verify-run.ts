@@ -15,7 +15,7 @@ import {
 } from "@heimdall/shared";
 import type { CapabilityManifest, DiagnosticFinding, RunSummary } from "@heimdall/shared";
 import { buildCapabilityManifest, runDiagnostics } from "@heimdall/parsers";
-import { readRunForVerification, type Queryable } from "../db";
+import { readRunForVerification, type FrameAnalysisResult, type Queryable } from "../db";
 import { applyVerificationResult, type ClaimedJob } from "../repo/jobs";
 import {
   applyReprocessResult,
@@ -131,6 +131,7 @@ export async function verifyRunJob(
   let signatureValid: boolean | null;
   let findings: DiagnosticFinding[];
   let capabilityManifest: CapabilityManifest;
+  let frameAnalysis: FrameAnalysisResult;
   {
     let bytes: Uint8Array;
     try {
@@ -148,6 +149,16 @@ export async function verifyRunJob(
       // captures.
       const parquet = await computeFrameParquetSummary(bytes);
       recomputed = parquet.summary;
+      // §22.12/§22.13. Deliberately NOT fed into `summaryMismatch` below: the
+      // rendered analysis is a second, separate statistic over the same frames,
+      // and the §11.5 integrity gate compares the client's summary against the
+      // server's canonical one and nothing else. A frame-generated run must
+      // reach exactly the same validated/flagged verdict it reached before this
+      // phase existed.
+      frameAnalysis = {
+        renderedFrameAnalysis: parquet.renderedFrameAnalysis,
+        presentTimeProfile: parquet.presentTimeProfile,
+      };
 
       // Recompute the capability manifest canonically from the stored Parquet —
       // the client-derived manifest (written at insertRun) was provisional, the
@@ -237,6 +248,7 @@ export async function verifyRunJob(
         capabilityManifest,
         methodologyManifest: methodologyManifest ?? null,
         generatedFrameTech,
+        ...frameAnalysis,
       },
       job,
       db,
@@ -261,6 +273,7 @@ export async function verifyRunJob(
       capabilityManifest,
       methodologyManifest: methodologyManifest ?? null,
       generatedFrameTech,
+      ...frameAnalysis,
     },
     job,
     db,
