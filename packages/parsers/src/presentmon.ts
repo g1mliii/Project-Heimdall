@@ -76,7 +76,16 @@ export function parsePresentMon(
 
   const stream = dominantStream(lines, found);
   if (stream.error !== undefined) return failure(SOURCE, "too-many-streams", stream.error);
-  const generatedColumn = findColumn(found.header, ["frametype"]);
+  // Frame type is read ONLY on the v2 profile, and the gate is structural
+  // rather than documentary (§22.12). `frameTimeMs` must be forward-looking
+  // (`d[i] = t[i+1] − t[i]`) for the rendered-interval coalescer to be correct,
+  // and the two profiles genuinely disagree: on
+  // `fixtures/presentmon/v2-v1-metrics-amd-real.csv`,
+  // `2.01124880 − 2.00495280 = 6.296 ms` is row 2's `msBetweenPresents`, not
+  // row 1's — backward. A `FrameType` column can only reach us on v2, so
+  // reading one off a v1 profile would pair frame types with intervals that
+  // point the other way.
+  const generatedColumn = isV2 ? findColumn(found.header, ["frametype"]) : undefined;
   const rows = parseFrameRowsAt(SOURCE, lines, found, columns, {
     ...(stream.rowFilter === undefined ? {} : { rowFilter: stream.rowFilter }),
     ...(generatedColumn === undefined ? {} : { generatedColumn }),

@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   FRAME_PARQUET_COLUMNS,
+  PRESENT_FRAME_TYPE,
   framesToColumnData,
+  presentFrameTypeCode,
   rowsToFrameSamples,
 } from "./parquet";
 import { MIN_FRAME_TIME_MS } from "./constants";
@@ -98,5 +100,28 @@ describe("frame parquet column contract", () => {
       { time_ms: 8.3, frame_time_ms: -2 },
     ];
     expect(() => rowsToFrameSamples(rows)).toThrow(/row 1/);
+  });
+});
+
+describe("presentFrameTypeCode (§22.12)", () => {
+  it("keeps `unknown` distinct from `rendered`", () => {
+    // The distinction the whole phase rests on: a present nobody labelled is
+    // NOT a rendered present. Collapsing the two would let the coalescer open
+    // an interval on evidence that does not exist.
+    expect(presentFrameTypeCode(undefined)).toBe(PRESENT_FRAME_TYPE.unknown);
+    expect(presentFrameTypeCode(false)).toBe(PRESENT_FRAME_TYPE.rendered);
+    expect(presentFrameTypeCode(true)).toBe(PRESENT_FRAME_TYPE.generated);
+  });
+
+  it("produces codes that fit a Uint8Array without truncation", () => {
+    // The column is stored one byte per row for up to 500k rows; a code above
+    // 255 would silently wrap.
+    const codes = Object.values(PRESENT_FRAME_TYPE);
+    for (const code of codes) {
+      expect(Number.isInteger(code)).toBe(true);
+      expect(code).toBeGreaterThanOrEqual(0);
+      expect(code).toBeLessThanOrEqual(255);
+    }
+    expect(new Set(codes).size).toBe(codes.length);
   });
 });

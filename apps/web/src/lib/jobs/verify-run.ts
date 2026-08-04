@@ -47,6 +47,14 @@ export type VerifyOutcome =
  * `computeRunSummary` code runs on both sides over DOUBLE columns, so honest
  * uploads should be bit-identical — the epsilon only absorbs float
  * serialization noise, never tampering.
+ *
+ * Deliberately NOT `PHYSICS.recomputeTolerance` (0.01). That constant names the
+ * loose fractional gap a physics-style plausibility check would allow; adopting
+ * it here would widen this gate by four orders of magnitude against the 1e-6
+ * relative epsilon below, which is the difference between "absorbs
+ * serialization noise" and "passes real tampering". §22.12 adds a second
+ * recompute path (the rendered-frame analysis) that does NOT feed this
+ * comparison at all — see `summaryMismatch`'s callers.
  */
 function floatsMatch(client: number, server: number): boolean {
   return Math.abs(client - server) <= Math.max(1e-9, 1e-6 * Math.abs(server));

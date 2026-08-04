@@ -31,8 +31,45 @@ export const OUTLIER = {
  * cannot safely establish that a run is fabricated.
  */
 export const PHYSICS = {
-  /** Allowed fractional gap between the client-submitted and server-recomputed summary. */
+  /**
+   * Allowed fractional gap between the client-submitted and server-recomputed
+   * summary.
+   *
+   * NOT the tolerance `summaryMismatch` actually applies. The §11.5 gate uses
+   * `floatsMatch` (a 1e-6 relative epsilon) because the same `computeRunSummary`
+   * code runs on both sides over DOUBLE columns — honest uploads are bit-
+   * identical, so the epsilon only absorbs serialization noise. Adopting 0.01
+   * there would loosen the gate by four orders of magnitude and let real
+   * tampering through. See the comment at `floatsMatch` in
+   * `apps/web/src/lib/jobs/verify-run.ts`.
+   */
   recomputeTolerance: 0.01,
+} as const;
+
+/**
+ * Frame-generation physics evidence (§22.13) — CHARACTERISATION ONLY.
+ *
+ * These thresholds shape the statistics stored in `runs.present_time_profile`.
+ * **No rule reads them, no run is annotated, and nothing reaches the wire.**
+ * The signal is real — an RX 9070 XT showed a 0.32 ms minimum present with
+ * frame generation on against 3.11 ms with it off, and a 0.32 ms present is not
+ * a plausible rendered frame at that resolution — but the evidence in hand is
+ * one GPU, one title, one resolution.
+ *
+ * A threshold fitted to n = 1 that accuses honest uploaders is the failure §0.5
+ * exists to prevent: telling an honest uploader their run looks like cheating is
+ * a worse failure than missing a dishonest one, and a false positive is
+ * unfalsifiable from the uploader's side. The statistics accumulate from real
+ * uploads until they can be calibrated across vendors; the rule gets its own
+ * phase then. See `docs/frame-generation.md`.
+ */
+export const FRAME_GENERATION_EVIDENCE = {
+  /**
+   * Presents at or below this duration are counted as sub-millisecond. Well
+   * above `MIN_FRAME_TIME_MS` (0.01), so these presents survive parsing and the
+   * signal reaches storage intact.
+   */
+  subMillisecondPresentMs: 1,
 } as const;
 
 /**

@@ -13,7 +13,7 @@ describe("parsePresentMon — v1 (§8)", () => {
   it("parses MsBetweenPresents/TimeInSeconds with no sensors and no hardware", () => {
     const { value, warnings } = parseOk("presentmon/v1-basic.csv");
     expect(value.source).toBe("presentmon");
-    expect(value.parserVersion).toBe("presentmon@1.2.0");
+    expect(value.parserVersion).toBe("presentmon@1.3.0");
     expect(value.hardware).toBeUndefined();
     expect(value.frames).toHaveLength(10);
     expect(value.frames[0]).toEqual({ timeMs: 0, frameTimeMs: 10 });
