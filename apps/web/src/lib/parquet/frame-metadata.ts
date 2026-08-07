@@ -16,6 +16,7 @@ import {
   parseOptionalFrameParquetGenerated,
   parseOptionalFrameParquetNumber,
   presentFrameTypeCode,
+  PRESENT_FRAME_TYPE,
 } from "@heimdall/shared";
 import type { CapabilitySensorField, RunSummary } from "@heimdall/shared";
 import type { DiagnosticFrameSensorField } from "@heimdall/shared";
@@ -41,6 +42,18 @@ export const FRAME_CHART_PARQUET_COLUMN_NAMES = [
 export const FRAME_BUSY_PARQUET_COLUMN_NAMES = ["cpu_busy_ms", "gpu_busy_ms"] as const;
 /** §22.12 frame-type column, decoded only for a run with an available analysis. */
 const GENERATED_COLUMN = "generated";
+
+/**
+ * Fill one row of a present-type column from a raw `generated` cell.
+ *
+ * Both decode paths — the verification worker's full pass and the run page's
+ * chart projection — must produce byte-identical columns, or the server's
+ * stored analysis and the browser's redrawn trace would disagree about which
+ * presents were rendered. One definition, called from both.
+ */
+function writePresentType(types: Uint8Array, value: unknown, row: number): void {
+  types[row] = presentFrameTypeCode(parseOptionalFrameParquetGenerated(value, row));
+}
 const [TIME_MS_COLUMN, FRAME_TIME_MS_COLUMN, GPU_LOAD_PCT_COLUMN, VRAM_USED_MB_COLUMN] =
   FRAME_CHART_PARQUET_COLUMN_NAMES;
 const [CPU_BUSY_MS_COLUMN, GPU_BUSY_MS_COLUMN] = FRAME_BUSY_PARQUET_COLUMN_NAMES;
@@ -294,11 +307,10 @@ export async function computeFrameParquetSummary(
           frameTimes[row] = parseFrameParquetFrameTimeMs(value, row);
           return;
         }
-        if (expectedColumnName === "generated") {
-          const generated = parseOptionalFrameParquetGenerated(value, row);
-          if (generated === true) generatedFrameCount++;
+        if (expectedColumnName === GENERATED_COLUMN) {
           // Written by row index, so unordered row groups still land correctly.
-          presentTypes[row] = presentFrameTypeCode(generated);
+          writePresentType(presentTypes, value, row);
+          if (presentTypes[row] === PRESENT_FRAME_TYPE.generated) generatedFrameCount++;
           return;
         }
         const parsed = parseOptionalFrameParquetNumber(expectedColumnName, value, row);
@@ -417,9 +429,7 @@ export async function decodeFrameParquetToSeries(
       metadata,
       frameCount,
       GENERATED_COLUMN,
-      (value, row) => {
-        types[row] = presentFrameTypeCode(parseOptionalFrameParquetGenerated(value, row));
-      },
+      (value, row) => writePresentType(types, value, row),
     );
     return types;
   };

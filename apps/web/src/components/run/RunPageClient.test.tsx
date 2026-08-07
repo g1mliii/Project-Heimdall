@@ -13,7 +13,12 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom/vitest";
 import { computeRunSummary } from "@heimdall/parsers";
-import { makeSyntheticFrames, RUN_STATUS, syntheticRunBase } from "@heimdall/shared";
+import {
+  makeSyntheticFrames,
+  presentFrameTypeCode,
+  RUN_STATUS,
+  syntheticRunBase,
+} from "@heimdall/shared";
 import type { CapabilityManifest, MethodologyManifest, Run } from "@heimdall/shared";
 import type { ApiResult } from "@/lib/api/client";
 import { buildFrameSeries, type FrameSeries } from "@/lib/run/frame-series";
@@ -749,7 +754,11 @@ describe("Rendered-rate toggle (§22.12)", () => {
     generated: i % 2 !== 0,
   }));
   const fgSeries = buildFrameSeries(fgFrames);
-  const fgPresentTypes = Uint8Array.from(fgFrames, (frame) => (frame.generated ? 2 : 1));
+  // Through the codec, not raw 2/1 literals — a fixture that hardcodes the
+  // wire values keeps passing if PRESENT_FRAME_TYPE is ever renumbered.
+  const fgPresentTypes = Uint8Array.from(fgFrames, (frame) =>
+    presentFrameTypeCode(frame.generated),
+  );
   const fgLoader: FramesLoader = () =>
     Promise.resolve({ ok: true, data: { ...fgSeries, presentTypes: fgPresentTypes } });
 

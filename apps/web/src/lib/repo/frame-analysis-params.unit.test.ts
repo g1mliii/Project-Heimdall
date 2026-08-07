@@ -57,10 +57,60 @@ function expectParametersFullyBound(sql: string, params: unknown[]): void {
   expect(missing, `unreferenced placeholders: ${missing.join(", ")}`).toEqual([]);
 }
 
-function captureQuery() {
+/** Run a write against a stub pool and return the (sql, params) it issued. */
+async function capture(
+  run: (db: Queryable) => Promise<void>,
+): Promise<[sql: string, params: unknown[]]> {
   const query = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
-  return { query: query as unknown as Queryable["query"], spy: query };
+  await run({ query } as unknown as Queryable);
+  return query.mock.calls[0] as [string, unknown[]];
 }
+
+const captureVerificationWrite = () =>
+  capture((db) =>
+    applyVerificationResult(
+      "run_1",
+      {
+        summary: validSummary,
+        runStatus: "validated",
+        signatureValid: true,
+        diagnostics: [],
+        capabilityManifest: null,
+        methodologyManifest: null,
+        generatedFrameTech: "none",
+        ...frameAnalysis,
+      },
+      { id: "9", attempts: 1 },
+      db,
+    ),
+  );
+
+const captureReprocessWrite = () =>
+  capture((db) =>
+    applyReprocessResult(
+      "run_1",
+      {
+        summary: validSummary,
+        signatureValid: null,
+        diagnostics: [],
+        capabilityManifest: {
+          version: 1,
+          source: "presentmon",
+          sensors: {} as never,
+          presentationMode: "unknown",
+          syncMode: "unknown",
+          frameGenerationObserved: false,
+          vramCapacity: { state: "unknown" },
+          caveats: [],
+        },
+        methodologyManifest: null,
+        generatedFrameTech: "none",
+        ...frameAnalysis,
+      },
+      { attempts: 1 },
+      db,
+    ),
+  );
 
 const frameAnalysis = {
   renderedFrameAnalysis: {
@@ -84,24 +134,7 @@ const frameAnalysis = {
 
 describe("frame-analysis write paths bind every parameter they reference", () => {
   it("applyVerificationResult", async () => {
-    const { query, spy } = captureQuery();
-    await applyVerificationResult(
-      "run_1",
-      {
-        summary: validSummary,
-        runStatus: "validated",
-        signatureValid: true,
-        diagnostics: [],
-        capabilityManifest: null,
-        methodologyManifest: null,
-        generatedFrameTech: "none",
-        ...frameAnalysis,
-      },
-      { id: "9", attempts: 1 },
-      { query } as Queryable,
-    );
-
-    const [sql, params] = spy.mock.calls[0] as [string, unknown[]];
+    const [sql, params] = await captureVerificationWrite();
     expectParametersFullyBound(sql, params);
     // The two jsonb values are the LAST two parameters — appended, not inserted.
     expect(params.at(-2)).toBe(JSON.stringify(frameAnalysis.renderedFrameAnalysis));
@@ -113,32 +146,7 @@ describe("frame-analysis write paths bind every parameter they reference", () =>
   });
 
   it("applyReprocessResult", async () => {
-    const { query, spy } = captureQuery();
-    await applyReprocessResult(
-      "run_1",
-      {
-        summary: validSummary,
-        signatureValid: null,
-        diagnostics: [],
-        capabilityManifest: {
-          version: 1,
-          source: "presentmon",
-          sensors: {} as never,
-          presentationMode: "unknown",
-          syncMode: "unknown",
-          frameGenerationObserved: false,
-          vramCapacity: { state: "unknown" },
-          caveats: [],
-        },
-        methodologyManifest: null,
-        generatedFrameTech: "none",
-        ...frameAnalysis,
-      },
-      { attempts: 1 },
-      { query } as Queryable,
-    );
-
-    const [sql, params] = spy.mock.calls[0] as [string, unknown[]];
+    const [sql, params] = await captureReprocessWrite();
     expectParametersFullyBound(sql, params);
     expect(params.at(-2)).toBe(JSON.stringify(frameAnalysis.renderedFrameAnalysis));
     expect(params.at(-1)).toBe(JSON.stringify(frameAnalysis.presentTimeProfile));
@@ -147,21 +155,18 @@ describe("frame-analysis write paths bind every parameter they reference", () =>
     expect(sql).toContain("present_time_profile = $26::jsonb");
   });
 
-  it("is NOT coalesced — a newly-unavailable analysis must overwrite, not linger", () => {
+  it("is NOT coalesced — a newly-unavailable analysis must overwrite, not linger", async () => {
     // The two assignments immediately above these in applyReprocessResult DO use
     // coalesce($n, runs.col). Copying that pattern here would let a run keep a
     // stale rendered rate from an older algorithm version forever.
-    for (const sql of [applyVerificationSql(), applyReprocessSql()]) {
+    for (const [sql] of [await captureVerificationWrite(), await captureReprocessWrite()]) {
       expect(sql).not.toMatch(/rendered_frame_analysis = coalesce/);
       expect(sql).not.toMatch(/present_time_profile = coalesce/);
     }
   });
 
   it("the fourth reprocess lane binds $6 and enqueueFullReprocessJobs supplies it", async () => {
-    const { query, spy } = captureQuery();
-    await enqueueFullReprocessJobs({ limit: 100 }, { query } as Queryable);
-
-    const [sql, params] = spy.mock.calls[0] as [string, unknown[]];
+    const [sql, params] = await capture((db) => enqueueFullReprocessJobs({ limit: 100 }, db).then());
     expect(sql).toBe(FULL_REPROCESS_ENQUEUE_SQL);
     expectParametersFullyBound(sql, params);
     expect(params.length).toBe(6);
@@ -177,51 +182,3 @@ describe("frame-analysis write paths bind every parameter they reference", () =>
   });
 });
 
-/** Re-capture the two statements without re-running their assertions. */
-function applyVerificationSql(): string {
-  const query = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
-  void applyVerificationResult(
-    "run_1",
-    {
-      summary: validSummary,
-      runStatus: "validated",
-      signatureValid: null,
-      diagnostics: [],
-      capabilityManifest: null,
-      methodologyManifest: null,
-      generatedFrameTech: "none",
-      ...frameAnalysis,
-    },
-    { id: "9", attempts: 1 },
-    { query } as unknown as Queryable,
-  );
-  return query.mock.calls[0]?.[0] as string;
-}
-
-function applyReprocessSql(): string {
-  const query = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 });
-  void applyReprocessResult(
-    "run_1",
-    {
-      summary: validSummary,
-      signatureValid: null,
-      diagnostics: [],
-      capabilityManifest: {
-        version: 1,
-        source: "presentmon",
-        sensors: {} as never,
-        presentationMode: "unknown",
-        syncMode: "unknown",
-        frameGenerationObserved: false,
-        vramCapacity: { state: "unknown" },
-        caveats: [],
-      },
-      methodologyManifest: null,
-      generatedFrameTech: "none",
-      ...frameAnalysis,
-    },
-    { attempts: 1 },
-    { query } as unknown as Queryable,
-  );
-  return query.mock.calls[0]?.[0] as string;
-}

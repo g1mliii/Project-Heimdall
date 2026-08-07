@@ -43,14 +43,14 @@ const e2eSummary = computeRunSummary(e2eFrames);
  * `insertRun` deliberately does not write these columns (there is no client
  * contract for a rendered summary), so global-setup writes them directly.
  */
+const e2eFrameTimesMs = Float64Array.from(e2eFrames, (frame) => frame.frameTimeMs);
+
 export const e2eRenderedFrameAnalysis = computeRenderedFrameAnalysis(
-  e2eFrames.map((frame) => frame.frameTimeMs),
+  e2eFrameTimesMs,
   Uint8Array.from(e2eFrames, (frame) => presentFrameTypeCode(frame.generated)),
 );
 
-export const e2ePresentTimeProfile = computePresentTimeProfile(
-  e2eFrames.map((frame) => frame.frameTimeMs),
-);
+export const e2ePresentTimeProfile = computePresentTimeProfile(e2eFrameTimesMs);
 
 /**
  * REAL rules-engine output for the fixture — not hand-authored rows. The

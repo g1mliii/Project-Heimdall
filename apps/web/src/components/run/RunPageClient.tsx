@@ -149,7 +149,15 @@ export function RunPageClient({
   const rateToggleable = toggleReadiness.kind === "ready";
   const wantsRendered = rateToggleable && rateMode === RATE_MODE.rendered;
 
-  if (wantsRendered && frames.kind === "ready" && renderedCacheRef.current?.source !== frames.series) {
+  // `serverAnalysis` is non-null whenever `wantsRendered` is — both derive from
+  // `rateReadiness.kind === "ready"` — but naming it in the guard is what lets
+  // the compiler see that, and it documents the dependency besides.
+  if (
+    wantsRendered &&
+    serverAnalysis &&
+    frames.kind === "ready" &&
+    renderedCacheRef.current?.source !== frames.series
+  ) {
     const series = buildRenderedSeries(frames.series);
     renderedCacheRef.current = {
       source: frames.series,
@@ -157,7 +165,7 @@ export function RunPageClient({
       // The rendered stream has its own median, hence its own stutter
       // threshold — reusing the presented one would mark the wrong frames.
       stutterIndices: series
-        ? findStutterIndices(series.frameTimes, serverAnalysis?.summary.frameTimeP50Ms)
+        ? findStutterIndices(series.frameTimes, serverAnalysis.summary.frameTimeP50Ms)
         : undefined,
     };
   }
@@ -292,25 +300,25 @@ export function RunPageClient({
           which would imply chart-only scope — it switches the tiles, the
           smoothness bars and the trace together. Disabled with a VISIBLE
           reason, the same rule the busy Switch follows. */}
-      <div className={styles.rateSwitch}>
-        <span className="heimdall-overline">Rate</span>
-        <Segmented
-          value={showRendered ? RATE_MODE.rendered : RATE_MODE.presented}
-          onChange={(value) => setRateMode(value as RateMode)}
-          options={[
-            { value: RATE_MODE.presented, label: "Presented" },
-            { value: RATE_MODE.rendered, label: "Rendered" },
-          ]}
-          disabled={!rateToggleable}
-          title={toggleReadiness.kind === "unavailable" ? toggleReadiness.reason : undefined}
-        />
+      <div className={styles.rateHeader}>
+        <div className={styles.rateSwitch}>
+          <span className="heimdall-overline">Rate</span>
+          <Segmented
+            value={showRendered ? RATE_MODE.rendered : RATE_MODE.presented}
+            onChange={(value) => setRateMode(value as RateMode)}
+            options={[
+              { value: RATE_MODE.presented, label: "Presented" },
+              { value: RATE_MODE.rendered, label: "Rendered" },
+            ]}
+            disabled={!rateToggleable}
+            title={toggleReadiness.kind === "unavailable" ? toggleReadiness.reason : undefined}
+          />
+        </div>
+        {/* Exactly one of: why the control is off, why the rendered view could
+            not be drawn, or what the rendered numbers mean. Never nothing while
+            the control is disabled — that is the §8.6.6 rule. */}
+        {rateCaption === undefined ? null : <p style={CAPTION_STYLE}>{rateCaption}</p>}
       </div>
-      {/* Exactly one of: why the control is off, why the rendered view could
-          not be drawn, or what the rendered numbers mean. Never nothing while
-          the control is disabled — that is the §8.6.6 rule. */}
-      {rateCaption === undefined ? null : (
-        <p style={{ ...CAPTION_STYLE, marginTop: "calc(-1 * var(--space-2))" }}>{rateCaption}</p>
-      )}
       <RunStatTiles
         summary={activeSummary}
         {...(showRendered && renderedAnalysis
