@@ -57,6 +57,28 @@ function expectParametersFullyBound(sql: string, params: unknown[]): void {
   expect(missing, `unreferenced placeholders: ${missing.join(", ")}`).toEqual([]);
 }
 
+/**
+ * The two frame-analysis columns are assigned from the placeholders that
+ * actually hold their values.
+ *
+ * Resolved by reading the `$n` out of the statement and indexing the parameter
+ * array, rather than asserting a literal `$27`. Hardcoding the number is what
+ * this refactor removed: the offsets now shift freely whenever a value is added
+ * upstream, and a test pinned to them would fail for the wrong reason while
+ * still not proving the binding is right.
+ */
+function expectFrameAnalysisBoundCorrectly(sql: string, params: unknown[]): void {
+  const bound = (column: string): unknown => {
+    const match = new RegExp(`${column} = \\$(\\d+)::jsonb`).exec(sql);
+    expect(match, `${column} is not assigned from a placeholder`).not.toBeNull();
+    return params[Number(match![1]) - 1];
+  };
+  expect(bound("rendered_frame_analysis")).toBe(
+    JSON.stringify(frameAnalysis.renderedFrameAnalysis),
+  );
+  expect(bound("present_time_profile")).toBe(JSON.stringify(frameAnalysis.presentTimeProfile));
+}
+
 /** Run a write against a stub pool and return the (sql, params) it issued. */
 async function capture(
   run: (db: Queryable) => Promise<void>,
@@ -136,23 +158,13 @@ describe("frame-analysis write paths bind every parameter they reference", () =>
   it("applyVerificationResult", async () => {
     const [sql, params] = await captureVerificationWrite();
     expectParametersFullyBound(sql, params);
-    // The two jsonb values are the LAST two parameters — appended, not inserted.
-    expect(params.at(-2)).toBe(JSON.stringify(frameAnalysis.renderedFrameAnalysis));
-    expect(params.at(-1)).toBe(JSON.stringify(frameAnalysis.presentTimeProfile));
-    // And the diagnostics arrays still start where the SQL says they do.
-    expect(sql).toContain("unnest($20::text[]");
-    expect(sql).toContain("rendered_frame_analysis = $27::jsonb");
-    expect(sql).toContain("present_time_profile = $28::jsonb");
+    expectFrameAnalysisBoundCorrectly(sql, params);
   });
 
   it("applyReprocessResult", async () => {
     const [sql, params] = await captureReprocessWrite();
     expectParametersFullyBound(sql, params);
-    expect(params.at(-2)).toBe(JSON.stringify(frameAnalysis.renderedFrameAnalysis));
-    expect(params.at(-1)).toBe(JSON.stringify(frameAnalysis.presentTimeProfile));
-    expect(sql).toContain("unnest($18::text[]");
-    expect(sql).toContain("rendered_frame_analysis = $25::jsonb");
-    expect(sql).toContain("present_time_profile = $26::jsonb");
+    expectFrameAnalysisBoundCorrectly(sql, params);
   });
 
   it("is NOT coalesced — a newly-unavailable analysis must overwrite, not linger", async () => {

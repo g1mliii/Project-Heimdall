@@ -19,14 +19,12 @@ import {
   type RunSummary,
 } from "@heimdall/shared";
 import {
-  diagnosticInsertColumns,
   diagnosticInsertSql,
-  frameAnalysisColumns,
   frameAnalysisUpdateSql,
   getPool,
   query,
   RETRY_BACKOFF_SECS_SQL,
-  summaryColumns,
+  SqlParams,
   summaryUpdateSql,
   type FrameAnalysisResult,
   type Queryable,
@@ -522,21 +520,35 @@ export async function applyReprocessResult(
   claim: Pick<ClaimedReprocessJob, "attempts">,
   db: Queryable = getPool(),
 ): Promise<void> {
+  const params = new SqlParams();
+  const runIdParam = params.add(runId);
+  const attempts = params.add(claim.attempts);
+  const signatureValid = params.add(result.signatureValid);
+  const generatedFrameTech = params.add(result.generatedFrameTech);
+  const capabilityManifest = params.add(JSON.stringify(result.capabilityManifest));
+  const settingsJson = params.add(
+    result.methodologyManifest ? JSON.stringify(result.methodologyManifest) : null,
+  );
+  const guard = "exists (select 1 from run_update)";
+  const frameAnalysis = frameAnalysisUpdateSql(params, result);
+  const summaryUpdate = summaryUpdateSql(params, runIdParam, result.summary, guard);
+  const diagnosticInsert = diagnosticInsertSql(params, runIdParam, result.diagnostics, guard);
+
   await db.query(
     `with job_claim as (
        select 1
          from reprocess_jobs
-        where run_id = $1
+        where run_id = ${runIdParam}
           and kind = '${REPROCESS_KIND.full}'
-          and attempts = $15
+          and attempts = ${attempts}
           and locked_at is not null
           and failed_at is null
      ), run_update as (
        update runs
-          set signature_valid = coalesce($13, runs.signature_valid),
-              generated_frame_tech = $14,
-              capability_manifest = $16::jsonb,
-              capability_manifest_version = ($16::jsonb ->> 'version')::integer,
+          set signature_valid = coalesce(${signatureValid}, runs.signature_valid),
+              generated_frame_tech = ${generatedFrameTech},
+              capability_manifest = ${capabilityManifest}::jsonb,
+              capability_manifest_version = (${capabilityManifest}::jsonb ->> 'version')::integer,
               -- DIAGNOSTIC_RULES contains both driver rules, so this replay just
               -- re-evaluated them against the current catalog. Record it, or the
               -- driver sweep cannot see the work is done and queues it again.
@@ -546,40 +558,28 @@ export async function applyReprocessResult(
               -- would re-enqueue the run forever (§17.8.0).
               diagnostics_rule_generation = ${DIAGNOSTICS_RULE_GENERATION},
               diagnostics_evaluated_at = now(),
-              settings_json = coalesce($17::jsonb, runs.settings_json),
+              settings_json = coalesce(${settingsJson}::jsonb, runs.settings_json),
               methodology_manifest_version = coalesce(
-                ($17::jsonb ->> 'version')::integer,
+                (${settingsJson}::jsonb ->> 'version')::integer,
                 runs.methodology_manifest_version
               ),
-              -- §22.12: appended after the diagnostics arrays ($18-$24), never
-              -- renumbered into the middle. Note these assignments are NOT
-              -- coalesced like the two above: a run whose analysis becomes
-              -- unavailable under a new algorithm version must lose the value,
-              -- not silently keep a stale one.
-              ${frameAnalysisUpdateSql(25)}
-        where id = $1
+              -- §22.12: NOT coalesced like the two above — a run whose analysis
+              -- becomes unavailable under a new algorithm version must lose the
+              -- value, not silently keep a stale one.
+              ${frameAnalysis}
+        where id = ${runIdParam}
           and ${writableRunStatusSql()}
           and exists (select 1 from job_claim)
         returning id
      ), summary_update as (
-       ${summaryUpdateSql(1, 2, "exists (select 1 from run_update)")}
+       ${summaryUpdate}
      ), diagnostics_delete as (
        delete from diagnostics
-        where run_id = $1
-          and exists (select 1 from run_update)
+        where run_id = ${runIdParam}
+          and ${guard}
      )
-     ${diagnosticInsertSql(1, 18, "exists (select 1 from run_update)")}`,
-    [
-      runId,
-      ...summaryColumns(result.summary),
-      result.signatureValid,
-      result.generatedFrameTech,
-      claim.attempts,
-      JSON.stringify(result.capabilityManifest),
-      result.methodologyManifest ? JSON.stringify(result.methodologyManifest) : null,
-      ...diagnosticInsertColumns(result.diagnostics),
-      ...frameAnalysisColumns(result),
-    ],
+     ${diagnosticInsert}`,
+    params.all,
   );
 }
 
@@ -682,34 +682,36 @@ export async function applyDriverRefresh(
     return;
   }
 
+  const params = new SqlParams();
+  const runIdParam = params.add(runId);
+  const attempts = params.add(claim.attempts);
+  const driverRuleCodes = params.add(DRIVER_RULE_CODES);
+  const guard = "exists (select 1 from run_update)";
+  const diagnosticInsert = diagnosticInsertSql(params, runIdParam, findings, guard);
+
   await db.query(
     `with job_claim as (
        select 1
          from reprocess_jobs
-        where run_id = $1
+        where run_id = ${runIdParam}
           and kind = '${REPROCESS_KIND.driver}'
-          and attempts = $2
+          and attempts = ${attempts}
           and locked_at is not null
           and failed_at is null
      ), run_update as (
        update runs
           set driver_evaluated_at = now()
-        where id = $1
+        where id = ${runIdParam}
           and ${writableRunStatusSql()}
           and exists (select 1 from job_claim)
         returning id
      ), diagnostics_delete as (
        delete from diagnostics
-        where run_id = $1
-          and code = any($3::text[])
-          and exists (select 1 from run_update)
+        where run_id = ${runIdParam}
+          and code = any(${driverRuleCodes}::text[])
+          and ${guard}
      )
-     ${diagnosticInsertSql(1, 4, "exists (select 1 from run_update)")}`,
-    [
-      runId,
-      claim.attempts,
-      DRIVER_RULE_CODES,
-      ...diagnosticInsertColumns(findings),
-    ],
+     ${diagnosticInsert}`,
+    params.all,
   );
 }

@@ -296,6 +296,45 @@ const SUMMARY_COLUMNS = [
 ] as const;
 
 /**
+ * Positional-parameter accumulator for a hand-written statement.
+ *
+ * Postgres parameters are positional, and this codebase assembles several large
+ * CTEs from reusable SQL fragments. Those fragments used to take the index they
+ * should start numbering from — `summaryUpdateSql(1, 2)`,
+ * `diagnosticInsertSql(1, 20)` — which the caller computed by counting an array
+ * built fifty lines further down. Insert a value anywhere but the end and every
+ * later offset is silently wrong: the statement still runs, the parameter count
+ * still matches, and the wrong value lands in the right column with no type
+ * error and nothing for a row-inspecting test to catch.
+ *
+ * With this, a fragment ASKS for a placeholder as it appends the value behind
+ * it, so the two cannot disagree. No `$n` is written by hand anywhere, and
+ * inserting a value is safe by construction rather than by careful counting.
+ *
+ * A value referenced in several places is added ONCE and its placeholder
+ * reused — see how `runId` threads through the callers below.
+ */
+export class SqlParams {
+  private readonly values: unknown[] = [];
+
+  /** Append one value; returns the `$n` that now refers to it. */
+  add(value: unknown): string {
+    this.values.push(value);
+    return `$${this.values.length}`;
+  }
+
+  /** Append several values in order; returns their placeholders in order. */
+  addAll(values: readonly unknown[]): string[] {
+    return values.map((value) => this.add(value));
+  }
+
+  /** The bound values, in the order their placeholders were handed out. */
+  get all(): unknown[] {
+    return this.values;
+  }
+}
+
+/**
  * Transpose a summary into positional parameters in {@link SUMMARY_COLUMNS}
  * order.
  *
@@ -320,8 +359,8 @@ export function summaryColumns(summary: RunSummary): (number | ConfidenceLevel)[
 }
 
 /** `$n, $n+1, …` for the summary values, for the insert form. */
-export function summaryValuesSql(firstSummaryParameter: number): string {
-  return SUMMARY_COLUMNS.map((_, i) => `$${firstSummaryParameter + i}`).join(", ");
+export function summaryValuesSql(params: SqlParams, summary: RunSummary): string {
+  return params.addAll(summaryColumns(summary)).join(", ");
 }
 
 /** The `run_summaries` column list, for the insert form. */
@@ -330,21 +369,22 @@ export function summaryInsertColumnsSql(): string {
 }
 
 /**
- * The complete `run_summaries` update. `runIdParameter` and
- * `firstSummaryParameter` make it usable from any CTE without restating the
- * column order; `guardSql` gates the write on the caller's claim.
+ * The complete `run_summaries` update, usable from any CTE without restating
+ * the column order. `guardSql` gates the write on the caller's claim.
  */
 export function summaryUpdateSql(
-  runIdParameter: number,
-  firstSummaryParameter: number,
+  params: SqlParams,
+  runIdPlaceholder: string,
+  summary: RunSummary,
   guardSql?: string,
 ): string {
+  const values = summaryColumns(summary);
   const assignments = SUMMARY_COLUMNS.map(
-    (column, i) => `${column} = $${firstSummaryParameter + i}`,
+    (column, i) => `${column} = ${params.add(values[i])}`,
   ).join(", ");
   return `update run_summaries
           set ${assignments}
-        where run_id = $${runIdParameter}${guardSql ? `\n          and ${guardSql}` : ""}`;
+        where run_id = ${runIdPlaceholder}${guardSql ? `\n          and ${guardSql}` : ""}`;
 }
 
 /**
@@ -369,18 +409,14 @@ export interface FrameAnalysisResult {
  * version must LOSE the stored value, not silently keep a stale one that no
  * longer describes any computation we would perform today.
  */
-export function frameAnalysisUpdateSql(firstParameter: number): string {
-  return `rendered_frame_analysis = $${firstParameter}::jsonb,
-              present_time_profile = $${firstParameter + 1}::jsonb,
-              frame_analysis_version = ${FRAME_ANALYSIS_VERSION}`;
-}
-
-/** The two jsonb values `frameAnalysisUpdateSql` binds, in order. */
-export function frameAnalysisColumns(result: FrameAnalysisResult): (string | null)[] {
-  return [
+export function frameAnalysisUpdateSql(params: SqlParams, result: FrameAnalysisResult): string {
+  const [rendered, profile] = params.addAll([
     JSON.stringify(result.renderedFrameAnalysis),
     result.presentTimeProfile ? JSON.stringify(result.presentTimeProfile) : null,
-  ];
+  ]);
+  return `rendered_frame_analysis = ${rendered}::jsonb,
+              present_time_profile = ${profile}::jsonb,
+              frame_analysis_version = ${FRAME_ANALYSIS_VERSION}`;
 }
 
 /**
@@ -422,26 +458,23 @@ export function diagnosticInsertColumns(
 }
 
 /**
- * The complete diagnostics insert/unnest shape. `runIdParameter` and
- * `firstFindingParameter` make it usable in both a standalone write and a
- * larger CTE without duplicating column order, aliases, or casts. The evidence
- * text[] is cast to jsonb per row so a null element stays a SQL null.
+ * The complete diagnostics insert/unnest shape, usable in both a standalone
+ * write and a larger CTE without duplicating column order, aliases, or casts.
+ * The evidence text[] is cast to jsonb per row so a null element stays a SQL
+ * null.
  */
 export function diagnosticInsertSql(
-  runIdParameter: number,
-  firstFindingParameter: number,
+  params: SqlParams,
+  runIdPlaceholder: string,
+  diagnostics: readonly DiagnosticFinding[],
   guardSql?: string,
 ): string {
-  const codeParameter = firstFindingParameter;
-  const severityParameter = codeParameter + 1;
-  const titleParameter = codeParameter + 2;
-  const detailParameter = codeParameter + 3;
-  const evidenceParameter = codeParameter + 4;
-  const ruleVersionParameter = codeParameter + 5;
-  const confidenceParameter = codeParameter + 6;
+  const [code, severity, title, detail, evidence, ruleVersion, confidence] = params.addAll(
+    diagnosticInsertColumns(diagnostics),
+  );
   return `insert into diagnostics (run_id, code, severity, title, detail, evidence, rule_version, confidence, evaluated_at)
-     select $${runIdParameter}, code, severity, title, detail, evidence::jsonb, rule_version, confidence, now()
-       from unnest($${codeParameter}::text[], $${severityParameter}::text[], $${titleParameter}::text[], $${detailParameter}::text[], $${evidenceParameter}::text[], $${ruleVersionParameter}::text[], $${confidenceParameter}::text[])
+     select ${runIdPlaceholder}, code, severity, title, detail, evidence::jsonb, rule_version, confidence, now()
+       from unnest(${code}::text[], ${severity}::text[], ${title}::text[], ${detail}::text[], ${evidence}::text[], ${ruleVersion}::text[], ${confidence}::text[])
          as finding(code, severity, title, detail, evidence, rule_version, confidence)${guardSql ? `\n      where ${guardSql}` : ""}`;
 }
 
@@ -457,10 +490,9 @@ export async function insertDiagnostics(
   db: Queryable = getPool(),
 ): Promise<void> {
   if (diagnostics.length === 0) return;
-  await db.query(
-    diagnosticInsertSql(1, 2),
-    [runId, ...diagnosticInsertColumns(diagnostics)],
-  );
+  const params = new SqlParams();
+  const sql = diagnosticInsertSql(params, params.add(runId), diagnostics);
+  await db.query(sql, params.all);
 }
 
 /** Read a run's diagnostics in insertion order (stable render order). */
@@ -580,18 +612,66 @@ export async function insertRun(
     run.generatedFrameTech,
   );
   const resolution = methodologyManifest?.resolution ?? hw.resolution ?? null;
+  // Each placeholder is named beside the value it binds, so the column list and
+  // the parameter array cannot drift apart. This statement carries fifty-odd
+  // parameters and reuses several (`benchmarkSetId` three times); numbering it
+  // by hand meant every insertion renumbered everything after it.
+  const p = new SqlParams();
+  const id = p.add(run.id);
+  const userId = p.add(run.ownerId ?? null);
+  const gameRaw = p.add(run.game);
+  const gpuHardwareId = p.add(canonicalIdParam(hw.canonicalGpuId, "canonicalGpuId"));
+  const cpuHardwareId = p.add(canonicalIdParam(hw.canonicalCpuId, "canonicalCpuId"));
+  const captureSource = p.add(run.captureSource);
+  const visibility = p.add(run.visibility);
+  const status = p.add(run.status);
+  const signatureValid = p.add(run.signatureValid ?? null);
+  const cpuModel = p.add(hw.cpu);
+  const gpuModel = p.add(hw.gpu);
+  const gpuVendor = p.add(hw.gpuVendor ?? null);
+  const gpuDriver = p.add(hw.gpuDriver ?? null);
+  const ramGb = p.add(hw.ramGb ?? null);
+  const ramRatedMtps = p.add(hw.ramRatedSpeedMtps ?? null);
+  const ramActualMtps = p.add(hw.ramSpeedMtps ?? null);
+  const osBuild = p.add(hw.os ?? null);
+  const resolutionParam = p.add(resolution);
+  const generatedFrameTech = p.add(run.generatedFrameTech);
+  const framesObjectKey = p.add(run.framesObjectKey ?? null);
+  const schemaVersion = p.add(run.schemaVersion);
+  const parserVersion = p.add(run.parserVersion);
+  const createdAt = p.add(run.createdAt);
+  const gpuVramTotalMb = p.add(hw.gpuVramTotalMb ?? null);
+  const capabilityManifest = p.add(
+    run.capabilityManifest ? JSON.stringify(run.capabilityManifest) : null,
+  );
+  const capabilityManifestVersion = p.add(run.capabilityManifest?.version ?? null);
+  const settingsJson = p.add(methodologyManifest ? JSON.stringify(methodologyManifest) : null);
+  const methodologyManifestVersion = p.add(methodologyManifest?.version ?? null);
+  const upscaler = p.add(methodologyManifest?.upscaler ?? null);
+  const rayTracing = p.add(methodologyManifest?.rayTracing ?? null);
+  const framePacingCap = p.add(methodologyManifest?.framePacing.capFps ?? null);
+  const vsync = p.add(methodologyManifest?.framePacing.vsync ?? null);
+  const vrr = p.add(methodologyManifest?.framePacing.vrr ?? null);
+  const sceneType = p.add(methodologyManifest?.sceneType ?? null);
+  const benchmarkSetId = p.add(run.benchmarkSetId ?? null);
+  const isWarmup = p.add(run.isWarmup ?? false);
+  const benchmarkSetSecret = p.add(benchmarkSetSecretHash ?? null);
+  const graphicsApi = p.add(methodologyManifest?.graphicsApi ?? null);
+  const scene = p.add(methodologyManifest?.scene ?? null);
+  const settingsPreset = p.add(methodologyManifest?.settingsPreset ?? null);
+  const summaryValues = summaryValuesSql(p, summary);
   const rows = await query<{ run_id: string | null; owner_writable: boolean }>(
     `with owner_writable as materialized (
-       select $2::text is null or exists (
+       select ${userId}::text is null or exists (
          select 1
            from users
-          where id = $2
+          where id = ${userId}
             and erasure_requested_at is null
        ) as allowed
      ), benchmark_set as (
        insert into benchmark_sets (id, secret_hash)
-       select $46::text, $48::text
-        where $46::text is not null
+       select ${benchmarkSetId}::text, ${benchmarkSetSecret}::text
+        where ${benchmarkSetId}::text is not null
        on conflict (id) do update
          set secret_hash = excluded.secret_hash
        where benchmark_sets.secret_hash = excluded.secret_hash
@@ -609,51 +689,30 @@ export async function insertRun(
          upscaler, ray_tracing, frame_pacing_cap, vsync, vrr, scene_type,
          benchmark_set_id, is_warmup, graphics_api, scene, settings_preset
        ) select
-         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-         $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
-         $36::jsonb, $37,
-         $38::jsonb, $39, $40, $41, $42, $43, $44, $45, $46, $47, $49, $50, $51
-       where ($46::text is null or exists (select 1 from benchmark_set))
+         ${id}, ${userId}, ${gameRaw}, ${gpuHardwareId}, ${cpuHardwareId},
+         ${captureSource}, ${visibility}, ${status}, ${signatureValid},
+         ${cpuModel}, ${gpuModel}, ${gpuVendor}, ${gpuDriver},
+         ${ramGb}, ${ramRatedMtps}, ${ramActualMtps}, ${osBuild}, ${resolutionParam},
+         ${generatedFrameTech}, ${framesObjectKey},
+         ${schemaVersion}, ${parserVersion}, ${createdAt}, ${gpuVramTotalMb},
+         ${capabilityManifest}::jsonb, ${capabilityManifestVersion},
+         ${settingsJson}::jsonb, ${methodologyManifestVersion},
+         ${upscaler}, ${rayTracing}, ${framePacingCap}, ${vsync}, ${vrr}, ${sceneType},
+         ${benchmarkSetId}, ${isWarmup}, ${graphicsApi}, ${scene}, ${settingsPreset}
+       where (${benchmarkSetId}::text is null or exists (select 1 from benchmark_set))
          and (select allowed from owner_writable)
        returning id
      ), inserted as (
        insert into run_summaries (
        run_id, ${summaryInsertColumnsSql()}
-      ) select $1, ${summaryValuesSql(25)}
+      ) select ${id}, ${summaryValues}
           from run_row
         returning run_id
       )
       select inserted.run_id, owner_writable.allowed as owner_writable
         from owner_writable
        left join inserted on true`,
-    [
-      run.id, run.ownerId ?? null, run.game,
-      canonicalIdParam(hw.canonicalGpuId, "canonicalGpuId"),
-      canonicalIdParam(hw.canonicalCpuId, "canonicalCpuId"),
-      run.captureSource, run.visibility, run.status, run.signatureValid ?? null,
-      hw.cpu, hw.gpu, hw.gpuVendor ?? null, hw.gpuDriver ?? null,
-      hw.ramGb ?? null, hw.ramRatedSpeedMtps ?? null, hw.ramSpeedMtps ?? null,
-      hw.os ?? null, resolution,
-      run.generatedFrameTech, run.framesObjectKey ?? null,
-      run.schemaVersion, run.parserVersion, run.createdAt, hw.gpuVramTotalMb ?? null,
-      ...summaryColumns(summary),
-      run.capabilityManifest ? JSON.stringify(run.capabilityManifest) : null,
-      run.capabilityManifest?.version ?? null,
-      methodologyManifest ? JSON.stringify(methodologyManifest) : null,
-      methodologyManifest?.version ?? null,
-      methodologyManifest?.upscaler ?? null,
-      methodologyManifest?.rayTracing ?? null,
-      methodologyManifest?.framePacing.capFps ?? null,
-      methodologyManifest?.framePacing.vsync ?? null,
-      methodologyManifest?.framePacing.vrr ?? null,
-      methodologyManifest?.sceneType ?? null,
-      run.benchmarkSetId ?? null,
-      run.isWarmup ?? false,
-      benchmarkSetSecretHash ?? null,
-      methodologyManifest?.graphicsApi ?? null,
-      methodologyManifest?.scene ?? null,
-      methodologyManifest?.settingsPreset ?? null,
-    ],
+    p.all,
     db,
   );
   const result = rows[0];
