@@ -170,18 +170,26 @@ describe("computeRenderedFrameAnalysis", () => {
     expect(analysis).toEqual({ state: "no-frame-type-evidence" });
   });
 
-  it("states no-generated-frames for an application-only capture", () => {
-    // The distinction §22.11 turns on: an all-`Application` column is evidence
-    // the capture LOOKED, not evidence that nothing was generated elsewhere.
+  it("treats an all-Application capture as NO evidence, not as proof of none", () => {
+    // The §22.11 invariant, enforced structurally. A frame-type column full of
+    // `Application` is exactly what an uninstrumented driver produces — the
+    // project's reference AMD capture had frame generation ON and 14,241 such
+    // rows — so it must reach the same state as a capture with no column at
+    // all. Splitting these would license "the presented rate is already the
+    // rendered rate" for a run that is half interpolated.
     const frameTimes = Array.from({ length: 30 }, () => 8);
-    const analysis = computeRenderedFrameAnalysis(
+    const allApplication = computeRenderedFrameAnalysis(
       frameTimes,
       Uint8Array.from(frameTimes, () => rendered),
     );
-    expect(analysis.state).toBe("no-generated-frames");
-    if (analysis.state !== "no-generated-frames") return;
-    expect(analysis.renderedCount).toBe(30);
-    expect(analysis.generatedCount).toBe(0);
+    const noColumn = computeRenderedFrameAnalysis(
+      frameTimes,
+      Uint8Array.from(frameTimes, () => unknown),
+    );
+
+    expect(allApplication).toEqual({ state: "no-frame-type-evidence" });
+    // Indistinguishable by construction — the whole point.
+    expect(allApplication).toEqual(noColumn);
   });
 
   it("states too-few-rendered-presents below the floor", () => {
@@ -246,10 +254,11 @@ describe("the naive filter is wrong — the property that proves it", () => {
   });
 
   it("an all-rendered stream yields d[0..n-2], NOT the presented summary", () => {
-    // Property: this is why `no-generated-frames` withholds a rendered summary
-    // instead of emitting a duplicate. The two disagree in the 3rd-4th
-    // significant figure — two numbers claiming to be the same rate and
-    // differing slightly is worse than one number.
+    // Property: this is the second reason an all-rendered stream withholds a
+    // rendered summary (the first being §22.11 — no evidence either way). Even
+    // setting that aside, the coalesced series is NOT the presented one: it
+    // disagrees in the 3rd-4th significant figure, and two numbers claiming to
+    // be the same rate and differing slightly is worse than one number.
     fc.assert(
       fc.property(
         fc.array(fc.double({ min: 1, max: 40, noNaN: true }), {

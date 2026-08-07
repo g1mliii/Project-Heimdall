@@ -198,7 +198,6 @@ export const renderedFrameAnalysisSchema = z.discriminatedUnion("state", [
     ...presentTypeCountsShape,
   }),
   z.object({ state: z.literal("no-frame-type-evidence") }),
-  z.object({ state: z.literal("no-generated-frames"), ...presentTypeCountsShape }),
   z.object({ state: z.literal("too-few-rendered-presents"), ...presentTypeCountsShape }),
 ]);
 export type RenderedFrameAnalysisDto = z.infer<typeof renderedFrameAnalysisSchema>;
@@ -778,13 +777,23 @@ export const runResponseSchema = z.object({
    * page says "rendered rate appears once verification recomputes this run"
    * rather than implying either rate.
    *
+   * `.catch(undefined)` is load-bearing, not defensive noise. This value is
+   * stored jsonb written under whatever `FRAME_ANALYSIS_VERSION` was current at
+   * the time, migration 0040 deliberately leaves the watermark null so old rows
+   * persist until the reprocess lane drains, and `page.tsx` parses with the
+   * THROWING `.parse`. Without the catch, any future change to the state
+   * vocabulary — the collapse of `no-generated-frames` in this very phase was
+   * one — turns every un-reprocessed run page into a 500 until the backlog
+   * clears. With it, an unrecognised blob degrades to "no analysis yet", which
+   * is both true and self-correcting.
+   *
    * `presentTimeProfile` is deliberately NOT here, for the same reason
    * `ownerId` is not: it exists internally (§22.13 calibration) and no viewer
    * needs it. Shipping an unexposed frame-generation suspicion score to every
    * reader of every run is precisely what §0.5 warns against — evidence, never
    * an accusation. Do not add it without a reason a viewer needs it.
    */
-  renderedFrameAnalysis: renderedFrameAnalysisSchema.optional(),
+  renderedFrameAnalysis: renderedFrameAnalysisSchema.optional().catch(undefined),
 });
 export type RunResponse = z.infer<typeof runResponseSchema>;
 

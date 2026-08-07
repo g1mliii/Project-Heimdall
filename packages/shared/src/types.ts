@@ -420,17 +420,17 @@ export type RenderedFrameAnalysis =
       summary: RunSummary;
     } & PresentTypeCounts)
   /**
-   * No present was ever labelled generated. A `FrameType` column full of
-   * `Application` is what an uninstrumented driver produces, so it is
-   * indistinguishable from no column at all — only an observed `true` carries
-   * information (§22.11).
+   * No present was ever observed generated.
+   *
+   * This covers BOTH "the capture carries no frame-type column" and "the column
+   * read `Application` on every row", because those two are indistinguishable
+   * (§22.11): the column is only populated where something instrumented Intel's
+   * provider, and AMD's driver does not. There is deliberately no separate
+   * `no-generated-frames` state — one would license the claim that the
+   * presented rate is already the rendered rate, which is false for exactly the
+   * AMD frame-generation captures this phase was written about.
    */
   | { state: "no-frame-type-evidence" }
-  /**
-   * The capture reports frame type and shows no generated frames, so the
-   * presented rate is already the rendered rate.
-   */
-  | ({ state: "no-generated-frames" } & PresentTypeCounts)
   /** Too few rendered presents to time a rate. */
   | ({ state: "too-few-rendered-presents" } & PresentTypeCounts);
 

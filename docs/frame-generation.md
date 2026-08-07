@@ -125,14 +125,23 @@ The result is a discriminated union on `state`, stored in `runs.rendered_frame_a
 | `state` | Meaning |
 | --- | --- |
 | `available` | carries the rendered summary and the three present-type counts |
-| `no-frame-type-evidence` | no present was ever labelled generated |
-| `no-generated-frames` | the capture reports frame type and shows none generated |
+| `no-frame-type-evidence` | no present was ever **observed** generated |
 | `too-few-rendered-presents` | fewer than `MIN_RENDERED_INTERVALS` (10) intervals |
 
-`no-generated-frames` deliberately produces **no** rendered summary. Not because it would duplicate
-the presented one, but because it would *not*: the coalescer returns `d[0..n−2]`, differing in the
-3rd–4th significant figure. Two numbers claiming to be the same rate and disagreeing slightly is
-worse than one number.
+**There is deliberately no `no-generated-frames` state**, and this is the single most important
+consequence of §2 above. It is tempting to distinguish "the capture carries no frame-type column"
+from "the column read `Application` on every row" and tell the second user their presented rate is
+already their rendered rate. That claim is false for exactly the captures this document is about:
+the reference AMD capture had frame generation **on** and 14,241 rows every one `Application`.
+Because the column is only populated where something instrumented Intel's provider, an
+all-`Application` column and no column at all are the same evidence — none. Both reach
+`no-frame-type-evidence`, and `frame-generation.test.ts` asserts the two are `toEqual` so the
+distinction cannot be reintroduced by accident.
+
+A second, independent reason not to emit a rendered summary for an all-rendered stream: it would
+**not** duplicate the presented one. The coalescer returns `d[0..n−2]`, differing in the 3rd–4th
+significant figure, and two numbers claiming to be the same rate while disagreeing slightly is worse
+than one number.
 
 ### 3.5 What the toggle does and does not change
 

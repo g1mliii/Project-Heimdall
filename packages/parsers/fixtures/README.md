@@ -22,6 +22,7 @@ notes below.
 | `presentmon/v2-gpu-telemetry.csv` | PresentMon 2.x | synthetic | opt-in `GPUUtilization/GPUFrequency/GPUPower/GPUMemUsed` |
 | `presentmon/v2-amd-real.csv` | PresentMon 2.4.1 | anonymized real capture | AMD v2 output; proves `CPUStartTime` is milliseconds and busy fields are frame-aligned |
 | `presentmon/v2-v1-metrics-amd-real.csv` | PresentMon 2.4.1 `--v1_metrics` | anonymized real capture | compatibility profile with `msGPUActive` and presentation semantics |
+| `presentmon/v2-frame-generation.csv` | PresentMon 2.x `--track_frame_type` | **synthetic** | 12 alternating `Application` (8 ms) / `Intel_XEFG` (0.4 ms) pairs — the §22.12 rendered-rate coalescer's only fixture. Presented `1000×24/100.8` = 238.095 FPS, rendered `1000×11/92.4` = 119.048 FPS, both hand-computed. **No real interpolated present has ever been captured by this project** (wanted-list item 9), so the frame types here are constructed, not observed |
 | `mangohud/nvidia-basic.csv` | MangoHud | synthetic | sysinfo block + `elapsed` ns timestamps |
 | `mangohud/amd-mesa-basic.csv` | MangoHud | synthetic | same frame shape as `nvidia-basic`, with a Mesa `driver` sysinfo value — pins that the Linux driver-currency contract reads `Mesa <version>` verbatim (`docs/driver-currency-curation.md`) |
 | `malformed/*` | — | synthetic | each maps to one typed `ParseErrorCode` |

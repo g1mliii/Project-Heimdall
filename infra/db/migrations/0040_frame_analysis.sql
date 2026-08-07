@@ -29,6 +29,21 @@ alter table runs add column if not exists frame_analysis_version integer;
 -- computed, so stamping here would permanently hide the entire historical
 -- corpus from the lane that exists to reach it. Leaving the watermark null makes
 -- those rows the highest-priority candidates instead.
+--
+-- KNOW WHAT THIS COSTS BEFORE DEPLOYING. There is only one `full` reprocess
+-- kind, so every run this lane enqueues is replayed through the whole verifier:
+-- its Parquet is re-read from R2 and `applyReprocessResult` rewrites
+-- `run_summaries`, `capability_manifest`, `generated_frame_tech`,
+-- `settings_json` and every diagnostic row — not just the two columns added
+-- here. Because 0030 DID backfill its watermark, the existing corpus is not
+-- already queued by the diagnostics lane, so this migration is what makes it
+-- eligible: the first sweeps after deploy re-verify every historical run.
+--
+-- That is safe (the replay never touches `status`, and version drift must never
+-- manufacture a flag — see applyReprocessResult) and bounded per pass by the
+-- enqueue limit, but it is real R2 egress and worker time proportional to the
+-- whole corpus. Size the drain accordingly rather than discovering it in
+-- production.
 
 -- Bounded access path for "runs at or below the current analysis version",
 -- mirroring runs_diagnostics_generation_idx. NULLS FIRST because unstamped runs

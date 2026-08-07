@@ -10,18 +10,22 @@
  * accepts whatever it is handed.
  *
  * These assertions need no database: they capture the SQL and the parameter
- * array, and check that the highest `$n` the statement references is exactly the
- * number of parameters supplied. An off-by-one in either direction fails here,
- * on the ubuntu unit tier, rather than in a DB-backed suite that may be skipped
- * locally.
+ * array, and check that the statement references `$1..$n` with no gap and that
+ * exactly `n` parameters are supplied. An off-by-one in either direction, or a
+ * parameter bound to nothing, fails here on the ubuntu unit tier rather than in
+ * a DB-backed suite that may be skipped locally.
  */
 
 import { describe, expect, it, vi } from "vitest";
 import { validSummary } from "@heimdall/shared";
 import type { Queryable } from "../db";
 import { applyVerificationResult } from "./jobs";
-import { applyReprocessResult, REPROCESS_KIND } from "./reprocess";
-import { FULL_REPROCESS_ENQUEUE_SQL, enqueueFullReprocessJobs } from "./reprocess";
+import {
+  FULL_REPROCESS_ENQUEUE_SQL,
+  REPROCESS_KIND,
+  applyReprocessResult,
+  enqueueFullReprocessJobs,
+} from "./reprocess";
 
 /** Highest `$n` referenced anywhere in a statement. */
 function maxPlaceholder(sql: string): number {
@@ -32,6 +36,25 @@ function maxPlaceholder(sql: string): number {
 /** Every `$n` from 1..max is actually referenced — no silent gap. */
 function referencedPlaceholders(sql: string): Set<number> {
   return new Set((sql.match(/\$(\d+)/g) ?? []).map((token) => Number(token.slice(1))));
+}
+
+/**
+ * The full contract: the statement references `$1..$n` with no gap, and exactly
+ * `n` parameters are supplied.
+ *
+ * A max-only check is not enough. A statement that references `$28` while
+ * silently never referencing some lower `$n` still passes it — the parameter is
+ * supplied, bound to nothing, and the column it was meant for keeps its old
+ * value with no error from Postgres and no failure from any test that only
+ * inspects rows afterwards. That is precisely the bug class these two
+ * hardcoded-offset statements are exposed to.
+ */
+function expectParametersFullyBound(sql: string, params: unknown[]): void {
+  expect(maxPlaceholder(sql)).toBe(params.length);
+  const referenced = referencedPlaceholders(sql);
+  const missing = [];
+  for (let n = 1; n <= params.length; n++) if (!referenced.has(n)) missing.push(n);
+  expect(missing, `unreferenced placeholders: ${missing.join(", ")}`).toEqual([]);
 }
 
 function captureQuery() {
@@ -79,7 +102,7 @@ describe("frame-analysis write paths bind every parameter they reference", () =>
     );
 
     const [sql, params] = spy.mock.calls[0] as [string, unknown[]];
-    expect(maxPlaceholder(sql)).toBe(params.length);
+    expectParametersFullyBound(sql, params);
     // The two jsonb values are the LAST two parameters — appended, not inserted.
     expect(params.at(-2)).toBe(JSON.stringify(frameAnalysis.renderedFrameAnalysis));
     expect(params.at(-1)).toBe(JSON.stringify(frameAnalysis.presentTimeProfile));
@@ -116,7 +139,7 @@ describe("frame-analysis write paths bind every parameter they reference", () =>
     );
 
     const [sql, params] = spy.mock.calls[0] as [string, unknown[]];
-    expect(maxPlaceholder(sql)).toBe(params.length);
+    expectParametersFullyBound(sql, params);
     expect(params.at(-2)).toBe(JSON.stringify(frameAnalysis.renderedFrameAnalysis));
     expect(params.at(-1)).toBe(JSON.stringify(frameAnalysis.presentTimeProfile));
     expect(sql).toContain("unnest($18::text[]");
@@ -140,15 +163,8 @@ describe("frame-analysis write paths bind every parameter they reference", () =>
 
     const [sql, params] = spy.mock.calls[0] as [string, unknown[]];
     expect(sql).toBe(FULL_REPROCESS_ENQUEUE_SQL);
-    expect(maxPlaceholder(sql)).toBe(params.length);
+    expectParametersFullyBound(sql, params);
     expect(params.length).toBe(6);
-
-    // No gaps: a lane that referenced $7 while only 6 were supplied, or one that
-    // stopped referencing $5, would both slip past a max-only check.
-    const referenced = referencedPlaceholders(sql);
-    for (let n = 1; n <= params.length; n++) {
-      expect(referenced.has(n)).toBe(true);
-    }
 
     // The lane itself, and its union into the candidate set.
     expect(sql).toContain("frame_analysis_candidates as materialized");

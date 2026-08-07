@@ -37,11 +37,11 @@ const NO_EVIDENCE_REASON =
   "Intel-PresentMon provider; AMD frame generation carries no such label, so its " +
   "presents are indistinguishable from rendered ones.";
 
-const NO_GENERATED_REASON =
-  "This capture reports frame type and shows no generated frames, so the presented " +
-  "rate is already the rendered rate.";
-
 const UNVERIFIED_REASON = "Rendered rate appears once verification recomputes this run.";
+
+/** The toggle exists but the frames it would redraw have not arrived yet. */
+const FRAMES_NOT_READY_REASON =
+  "Rendered rate becomes available once the frame data finishes loading.";
 
 function tooFewReason(renderedCount: number): string {
   const presents = renderedCount === 1 ? "1 present was" : `${renderedCount} presents were`;
@@ -64,12 +64,48 @@ export function renderedRateReadiness(
       return { kind: "ready", analysis };
     case "no-frame-type-evidence":
       return { kind: "unavailable", reason: NO_EVIDENCE_REASON };
-    case "no-generated-frames":
-      return { kind: "unavailable", reason: NO_GENERATED_REASON };
     case "too-few-rendered-presents":
       return { kind: "unavailable", reason: tooFewReason(analysis.renderedCount) };
+    default:
+      // Unreachable for any state this build knows. Kept because the value is
+      // stored jsonb written by a possibly-older FRAME_ANALYSIS_VERSION: the
+      // wire schema drops an unrecognised blob to `undefined` rather than
+      // throwing, and if one ever reached here it must hide the toggle, not
+      // fall through to `undefined` and crash the page.
+      return { kind: "unavailable", reason: UNVERIFIED_REASON };
   }
 }
+
+/**
+ * Whether the toggle may be offered at all: the server has a rendered rate AND
+ * the frames it would redraw have arrived.
+ *
+ * `renderedRateReadiness` answers "does a rendered rate exist"; this adds "can
+ * the page act on it yet". An unavailable answer still names itself — a
+ * disabled control with no visible reason is the §8.6.6 failure this module
+ * exists to avoid, and the frames-loading case was previously the one arm that
+ * fell through it silently.
+ */
+export function renderedRateToggleReadiness(
+  readiness: RenderedRateReadiness,
+  framesReady: boolean,
+): RenderedRateReadiness {
+  if (readiness.kind === "unavailable") return readiness;
+  return framesReady ? readiness : { kind: "unavailable", reason: FRAMES_NOT_READY_REASON };
+}
+
+/**
+ * Shown when the reader asked for the rendered view but coalescing the DECODED
+ * frames produced nothing.
+ *
+ * Belt-and-braces, mirroring `busyUnavailableReason`'s check that the decoded
+ * frames really carry the columns the manifest promised. The server decides
+ * `available` from the full Parquet; the browser coalesces its own decode. If
+ * those ever disagree the page stays on the presented view and says why, rather
+ * than drawing a presented trace underneath rendered numbers.
+ */
+export const SERIES_UNAVAILABLE_REASON =
+  "The decoded frames carry no usable frame-type column, so a rendered trace cannot be drawn.";
 
 /**
  * Caption under the chart while the rendered rate is showing.

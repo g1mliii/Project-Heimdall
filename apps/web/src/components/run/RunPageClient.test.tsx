@@ -854,25 +854,24 @@ describe("Rendered-rate toggle (§22.12)", () => {
     expect(screen.getByText(/Intel-PresentMon provider/)).toBeVisible();
   });
 
-  it("says the presented rate is already the rendered rate when nothing was generated", async () => {
+  it("never claims the presented rate is already the rendered rate (§22.11)", async () => {
+    // An all-`Application` capture reaches `no-frame-type-evidence`, so the
+    // page must say the capture cannot report frame type — NOT that the two
+    // rates coincide. The reference AMD capture had frame generation on and
+    // every row labelled `Application`; telling that uploader their presented
+    // 243.9 FPS is already their rendered rate is the false claim this phase
+    // exists to remove.
     render(
       <RunPageClient
-        run={{
-          ...run,
-          renderedFrameAnalysis: {
-            state: "no-generated-frames",
-            renderedCount: 1000,
-            generatedCount: 0,
-            unknownCount: 0,
-          },
-        }}
+        run={{ ...run, renderedFrameAnalysis: { state: "no-frame-type-evidence" } }}
         loadFrames={okLoader}
       />,
     );
     await screen.findByRole("img", { name: "Frame-time progression chart" });
 
     expect(screen.getByRole("button", { name: "Rendered" })).toBeDisabled();
-    expect(screen.getByText(/presented rate is already the rendered rate/)).toBeVisible();
+    expect(screen.getByText(/Capture does not report frame type/)).toBeVisible();
+    expect(screen.queryByText(/already the rendered rate/)).not.toBeInTheDocument();
   });
 
   it("names the count when too few presents were labelled rendered", async () => {
@@ -892,6 +891,64 @@ describe("Rendered-rate toggle (§22.12)", () => {
     );
     await screen.findByRole("img", { name: "Frame-time progression chart" });
     expect(screen.getByText(/Only 4 presents were labelled as rendered/)).toBeVisible();
+  });
+
+  it("coalesces once per capture, not once per toggle click", async () => {
+    // The memo this replaced was keyed on the toggle, so its cache was thrown
+    // away exactly when it was about to be reused. Coalescing is O(n) over up
+    // to 500k frames, so a reader flipping back and forth must not pay it more
+    // than once.
+    const built: number[] = [];
+    const countingSeries = {
+      ...fgSeries,
+      presentTypes: fgPresentTypes,
+      get frameTimes() {
+        built.push(1);
+        return fgSeries.frameTimes;
+      },
+    };
+    render(
+      <RunPageClient
+        run={fgRun()}
+        loadFrames={() => Promise.resolve({ ok: true, data: countingSeries as FrameSeries })}
+      />,
+    );
+    await screen.findByRole("img", { name: "Frame-time progression chart" });
+
+    const before = built.length;
+    await userEvent.click(screen.getByRole("button", { name: "Rendered" }));
+    const afterFirst = built.length;
+    expect(afterFirst).toBeGreaterThan(before);
+
+    await userEvent.click(screen.getByRole("button", { name: "Presented" }));
+    await userEvent.click(screen.getByRole("button", { name: "Rendered" }));
+    // The second switch reuses the cache: no further reads of the source column.
+    expect(built.length).toBe(afterFirst);
+  });
+
+  it("names a reason while the frames are still loading", async () => {
+    // Previously the one arm where the control was disabled with no title and
+    // no caption — the §8.6.6 failure `rendered-rate-readiness` claims to avoid.
+    render(
+      <RunPageClient run={fgRun()} loadFrames={() => new Promise<never>(() => {})} />,
+    );
+    expect(screen.getByRole("button", { name: "Rendered" })).toBeDisabled();
+    expect(screen.getByText(/once the frame data finishes loading/)).toBeVisible();
+  });
+
+  it("stays on the presented view when the decoded frames cannot be coalesced", async () => {
+    // Server says `available`, but the decode carries no present-type column.
+    // The page must not switch the tiles and leave the trace behind.
+    render(
+      <RunPageClient run={fgRun()} loadFrames={() => Promise.resolve({ ok: true, data: fgSeries })} />,
+    );
+    await screen.findByRole("img", { name: "Frame-time progression chart" });
+    await userEvent.click(screen.getByRole("button", { name: "Rendered" }));
+
+    expect(screen.getByText(/no usable frame-type column/)).toBeVisible();
+    // Presented numbers intact; the interpolated-presents tile never appears.
+    expect(screen.getByText("Generated frames")).toBeInTheDocument();
+    expect(screen.queryByText("Interpolated presents")).not.toBeInTheDocument();
   });
 
   it("says the rate is pending rather than deficient on an unverified run", async () => {

@@ -28,8 +28,10 @@ import {
 import {
   BUSY_RENDERED_MODE_REASON,
   RATE_MODE,
+  SERIES_UNAVAILABLE_REASON,
   renderedRateCaption,
   renderedRateReadiness,
+  renderedRateToggleReadiness,
   type RateMode,
 } from "./rendered-rate-readiness";
 import { RunHeader } from "./RunHeader";
@@ -129,30 +131,65 @@ export function RunPageClient({
 
   // §22.12 rate toggle. The verdict is server-decided; this only reads it.
   const rateReadiness = renderedRateReadiness(run.renderedFrameAnalysis);
-  const rateToggleable = rateReadiness.kind === "ready" && frames.kind === "ready";
-  const showRendered = rateToggleable && rateMode === RATE_MODE.rendered;
-  const renderedAnalysis = rateReadiness.kind === "ready" ? rateReadiness.analysis : undefined;
+  const serverAnalysis = rateReadiness.kind === "ready" ? rateReadiness.analysis : undefined;
 
-  // Coalescing 500k frames on every toggle click is a visible hang, so both the
-  // rendered series and its own stutter indices are memoized. The rendered
-  // stream has its own median, hence its own stutter threshold — reusing the
-  // presented one would mark the wrong frames.
-  const renderedSeries = React.useMemo(
-    () =>
-      showRendered && frames.kind === "ready" ? buildRenderedSeries(frames.series) : undefined,
-    [showRendered, frames],
-  );
-  const renderedStutterIndices = React.useMemo(
-    () =>
-      renderedSeries
-        ? findStutterIndices(renderedSeries.frameTimes, renderedAnalysis?.summary.frameTimeP50Ms)
+  // Coalescing up to 500k frames is a visible hang, so it happens at most ONCE
+  // per loaded capture: lazily (nothing is paid by a reader who never switches)
+  // and cached in a ref keyed on the series identity (so the second, third and
+  // tenth switch are free). A `useMemo` keyed on the toggle cannot do this —
+  // its cache is discarded the moment the toggle flips back, which is exactly
+  // when it would need to be kept.
+  const renderedCacheRef = React.useRef<{
+    source: FrameSeries;
+    series: FrameSeries | undefined;
+    stutterIndices: Uint32Array | undefined;
+  }>(undefined);
+  // Whether the control may be offered — server verdict plus loaded frames.
+  const toggleReadiness = renderedRateToggleReadiness(rateReadiness, frames.kind === "ready");
+  const rateToggleable = toggleReadiness.kind === "ready";
+  const wantsRendered = rateToggleable && rateMode === RATE_MODE.rendered;
+
+  if (wantsRendered && frames.kind === "ready" && renderedCacheRef.current?.source !== frames.series) {
+    const series = buildRenderedSeries(frames.series);
+    renderedCacheRef.current = {
+      source: frames.series,
+      series,
+      // The rendered stream has its own median, hence its own stutter
+      // threshold — reusing the presented one would mark the wrong frames.
+      stutterIndices: series
+        ? findStutterIndices(series.frameTimes, serverAnalysis?.summary.frameTimeP50Ms)
         : undefined,
-    [renderedSeries, renderedAnalysis],
-  );
+    };
+  }
+  const cachedRendered =
+    frames.kind === "ready" && renderedCacheRef.current?.source === frames.series
+      ? renderedCacheRef.current
+      : undefined;
+
+  // Rendered mode requires the series to have ACTUALLY built. Every rendered
+  // surface reads `renderedAnalysis`/`showRendered`, so a coalesce that yields
+  // nothing keeps the whole page on the presented view instead of switching the
+  // numbers and leaving the trace behind.
+  const renderedSeries = wantsRendered ? cachedRendered?.series : undefined;
+  const showRendered = wantsRendered && renderedSeries !== undefined;
+  const renderedSeriesFailed = wantsRendered && renderedSeries === undefined;
+  const renderedStutterIndices = showRendered ? cachedRendered?.stutterIndices : undefined;
+  const renderedAnalysis = showRendered ? serverAnalysis : undefined;
 
   // What the tiles, bars and chart all read. One source, so they cannot drift
   // into showing a rendered chart under presented numbers.
-  const activeSummary = showRendered && renderedAnalysis ? renderedAnalysis.summary : run.summary;
+  const activeSummary = renderedAnalysis ? renderedAnalysis.summary : run.summary;
+
+  // The single line under the toggle, resolved once so the three cases stay
+  // mutually exclusive and none of them can go unstated.
+  const rateCaption =
+    toggleReadiness.kind === "unavailable"
+      ? toggleReadiness.reason
+      : renderedSeriesFailed
+        ? SERIES_UNAVAILABLE_REASON
+        : renderedAnalysis
+          ? renderedRateCaption(renderedAnalysis)
+          : undefined;
 
   // The manifest verdict, derived once: it gates both the overlay control and
   // whether the busy columns are worth decoding at all.
@@ -265,18 +302,15 @@ export function RunPageClient({
             { value: RATE_MODE.rendered, label: "Rendered" },
           ]}
           disabled={!rateToggleable}
-          title={rateReadiness.kind === "unavailable" ? rateReadiness.reason : undefined}
+          title={toggleReadiness.kind === "unavailable" ? toggleReadiness.reason : undefined}
         />
       </div>
-      {rateReadiness.kind === "unavailable" ? (
-        <p style={{ ...CAPTION_STYLE, marginTop: "calc(-1 * var(--space-2))" }}>
-          {rateReadiness.reason}
-        </p>
-      ) : showRendered ? (
-        <p style={{ ...CAPTION_STYLE, marginTop: "calc(-1 * var(--space-2))" }}>
-          {renderedRateCaption(rateReadiness.analysis)}
-        </p>
-      ) : null}
+      {/* Exactly one of: why the control is off, why the rendered view could
+          not be drawn, or what the rendered numbers mean. Never nothing while
+          the control is disabled — that is the §8.6.6 rule. */}
+      {rateCaption === undefined ? null : (
+        <p style={{ ...CAPTION_STYLE, marginTop: "calc(-1 * var(--space-2))" }}>{rateCaption}</p>
+      )}
       <RunStatTiles
         summary={activeSummary}
         {...(showRendered && renderedAnalysis

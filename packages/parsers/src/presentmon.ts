@@ -76,16 +76,23 @@ export function parsePresentMon(
 
   const stream = dominantStream(lines, found);
   if (stream.error !== undefined) return failure(SOURCE, "too-many-streams", stream.error);
-  // Frame type is read ONLY on the v2 profile, and the gate is structural
-  // rather than documentary (§22.12). `frameTimeMs` must be forward-looking
-  // (`d[i] = t[i+1] − t[i]`) for the rendered-interval coalescer to be correct,
-  // and the two profiles genuinely disagree: on
-  // `fixtures/presentmon/v2-v1-metrics-amd-real.csv`,
+  // Read on EVERY profile, deliberately.
+  //
+  // An earlier revision gated this on `isV2` to protect §22.12's coalescer,
+  // whose forward-interval convention (`d[i] = t[i+1] − t[i]`) only holds on the
+  // v2 profile — the profiles genuinely disagree, and on
+  // `fixtures/presentmon/v2-v1-metrics-amd-real.csv`
   // `2.01124880 − 2.00495280 = 6.296 ms` is row 2's `msBetweenPresents`, not
-  // row 1's — backward. A `FrameType` column can only reach us on v2, so
-  // reading one off a v1 profile would pair frame types with intervals that
-  // point the other way.
-  const generatedColumn = isV2 ? findColumn(found.header, ["frametype"]) : undefined;
+  // row 1's. But the coalescer is not this column's only consumer:
+  // `reconcileGeneratedFrameTech` (§22.11) keys on a generated frame having been
+  // SEEN, and `frameGenerationObserved` feeds the capability manifest. Neither
+  // cares which side of a row an interval falls on, so gating here bought the
+  // coalescer nothing it needs — PresentMon only emits `FrameType` under
+  // `--track_frame_type` on 2.x v2 output anyway — while silently costing
+  // §22.11 the evidence that stops a frame-generated run keeping a declared
+  // `none`. Losing that is the §0.5-class failure; the convention is documented
+  // where it is actually applied, in `frame-generation.ts`.
+  const generatedColumn = findColumn(found.header, ["frametype"]);
   const rows = parseFrameRowsAt(SOURCE, lines, found, columns, {
     ...(stream.rowFilter === undefined ? {} : { rowFilter: stream.rowFilter }),
     ...(generatedColumn === undefined ? {} : { generatedColumn }),

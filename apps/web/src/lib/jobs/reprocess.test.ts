@@ -516,6 +516,13 @@ describe.skipIf(!canRun)("Phase 6.7 data activation", () => {
     await insertRun(runFixture(unstamped), db.pool);
     await insertStampedRun(runFixture(current), db.pool);
     await insertRun(runFixture(stale), db.pool);
+    // Every OTHER lane must be settled or it decides the outcome instead of
+    // this one. `insertRun` leaves `diagnostics_rule_generation` null, and the
+    // §17.8.0 lane matches nulls, so without this `current` is enqueued by the
+    // diagnostics lane and the counts below measure the wrong thing entirely.
+    await db.pool.query("update runs set diagnostics_rule_generation = $1", [
+      DIAGNOSTICS_RULE_GENERATION,
+    ]);
     await db.pool.query("update runs set frame_analysis_version = $2 where id = $1", [
       stale,
       FRAME_ANALYSIS_VERSION - 1,

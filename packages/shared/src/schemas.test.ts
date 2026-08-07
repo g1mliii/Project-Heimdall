@@ -404,7 +404,6 @@ describe("renderedFrameAnalysis on the wire (§22.12)", () => {
     const counts = { renderedCount: 10, generatedCount: 0, unknownCount: 2 };
     for (const analysis of [
       { state: "no-frame-type-evidence" as const },
-      { state: "no-generated-frames" as const, ...counts },
       { state: "too-few-rendered-presents" as const, ...counts },
     ]) {
       const parsed = runResponseSchema.parse({ ...fixtures.validRun, renderedFrameAnalysis: analysis });
@@ -428,13 +427,32 @@ describe("renderedFrameAnalysis on the wire (§22.12)", () => {
     expect(parsed).not.toHaveProperty("presentTimeProfile");
   });
 
-  it("rejects an unknown state rather than passing it through", () => {
+  it("drops an unknown state instead of throwing the run page away", () => {
+    // A stored blob written under an older FRAME_ANALYSIS_VERSION must not be
+    // able to 500 the page. `page.tsx` uses the throwing `.parse`, and 0040
+    // deliberately leaves rows unstamped until the reprocess lane reaches them,
+    // so the stale-vocabulary window is designed in. Degrade to "no analysis".
+    const parsed = runResponseSchema.parse({
+      ...fixtures.validRun,
+      renderedFrameAnalysis: { state: "probably-fine" },
+    });
+    expect(parsed.renderedFrameAnalysis).toBeUndefined();
+
+    // The union itself still rejects it — the tolerance lives at the wire
+    // boundary, not in the type.
     expect(
-      runResponseSchema.safeParse({
-        ...fixtures.validRun,
-        renderedFrameAnalysis: { state: "probably-fine" },
-      }).success,
+      renderedFrameAnalysisSchema.safeParse({ state: "probably-fine" }).success,
     ).toBe(false);
+  });
+
+  it("still rejects a malformed AVAILABLE analysis rather than half-rendering it", () => {
+    // Tolerance is for unknown STATES, not for a known state missing its
+    // summary — that would reach the tiles as `undefined.avgFps`.
+    const parsed = runResponseSchema.parse({
+      ...fixtures.validRun,
+      renderedFrameAnalysis: { state: "available", renderedCount: 5 },
+    });
+    expect(parsed.renderedFrameAnalysis).toBeUndefined();
   });
 });
 

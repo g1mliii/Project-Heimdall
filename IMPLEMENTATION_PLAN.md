@@ -871,6 +871,15 @@ writeup:
       A `FrameType` column can only reach us on the v2 profile, so **gate `generatedColumn` on `isV2`**
       in `presentmon.ts:79` (today `findColumn(header, ["frametype"])` runs for every profile). One
       line, and it makes the convention structural instead of documentary.
+      - **Correction from code review — the gate was implemented and then REVERTED.** The coalescer
+        is not the column's only consumer: `reconcileGeneratedFrameTech` (§22.11) keys on a generated
+        frame having been seen, and `frameGenerationObserved` feeds the capability manifest. Neither
+        cares about the interval convention, so gating the parser bought the coalescer nothing it
+        needs — PresentMon only emits `FrameType` on v2 output anyway — while costing §22.11 the
+        evidence that stops a frame-generated run keeping a declared `none`. Losing that is the
+        §0.5-class failure. The column is read on every profile; the convention is documented where
+        it is applied, in `frame-generation.ts`. `presentmon` stays at **1.2.0** (the reverted gate
+        was the only behaviour change, so the 1.3.0 bump was withdrawn too).
     - Do **not** rederive intervals from `time_ms` deltas to dodge the convention.
       `computeFrameParquetSummary` drops `times` (`frame-metadata.ts:304`) to shed 4 MiB, and
       `buildFrameSeriesFromColumns` normalizes `times` **in place**, so server and browser would be
@@ -895,6 +904,13 @@ writeup:
     `computeRenderedFrameAnalysis(...)` feeding those intervals straight into the **existing**
     `computeRunSummaryFromFrameTimes` — no percentile, low or stutter definition is rederived, which
     is what makes server/browser agreement structural rather than merely tested.
+    - **Correction from code review — `no-generated-frames` does NOT ship.** The plan's four-state
+      union splits "no frame-type column" from "a column that read `Application` everywhere", and
+      the second state licenses the copy "the presented rate is already the rendered rate". That
+      claim is false for exactly the captures this phase is about: the reference RX 9070 XT capture
+      had frame generation ON and 14,241 rows every one `Application`. §22.11 already settled that
+      the two are indistinguishable and the column's presence proves nothing, so both now reach
+      `no-frame-type-evidence` and a test asserts they are `toEqual`. Three shipped states, not four.
     - Result is a **discriminated union on `state`**, not a nullable summary: `available` |
       `no-frame-type-evidence` | `no-generated-frames` | `too-few-rendered-presents`. Precedent is
       `vramCapacitySchema` — "a discrete total, or a typed reason it is unavailable". The server
@@ -1051,8 +1067,9 @@ writeup:
     shape would correctly return `too-few-rendered-presents` instead of a rate. Both hand-computed
     rates are unchanged by the larger count: presented `1000×24/100.8` = 238.095, rendered
     `1000×11/92.4` = 119.048. The golden harness now asserts `renderedFrameAnalysis` whenever a
-    fixture declares one. The `no-generated-frames` branch is covered by the existing
-    application-only fixtures plus a unit test rather than a second CSV
+    fixture declares one. The application-only case is covered by a unit test asserting it is
+    `toEqual` the no-column case (see the `no-generated-frames` correction above) rather than a
+    second CSV
   - [x] Toggle absent — and said to be absent, as visible text — when the capture carries no
     frame-type evidence; busy overlay forced off with its reason in rendered mode. Plus the tile
     swap (Generated frames % → Interpolated presents) and all four readiness states

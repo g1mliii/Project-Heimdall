@@ -196,11 +196,20 @@ export function computeRenderedFrameAnalysis(
   const counts = { renderedCount, generatedCount, unknownCount };
 
   if (generatedCount === 0) {
-    // Nothing was ever labelled generated. Distinguish "the capture told us
-    // nothing at all" from "the capture told us, and the answer was none".
-    return renderedCount === 0
-      ? { state: "no-frame-type-evidence" }
-      : { state: "no-generated-frames", ...counts };
+    // Nothing was ever labelled generated — and that is ALL we know.
+    //
+    // Do NOT split this on `renderedCount === 0` to tell "no column at all"
+    // from "a column that read `Application` everywhere". The two are
+    // indistinguishable by construction (§22.11): a frame-type column is only
+    // populated where something instrumented Intel's provider, and AMD's driver
+    // does not, so the project's own reference capture — an RX 9070 XT running
+    // Cyberpunk 2077 with frame generation ON — produced 14,241 rows every one
+    // labelled `Application`. Treating that as "the capture looked and found
+    // none" would let the report tell a user with frame generation demonstrably
+    // on that their presented rate is already their rendered rate. Only an
+    // observed generated frame carries information; the column's PRESENCE
+    // carries none.
+    return { state: "no-frame-type-evidence" };
   }
   if (intervals.length < MIN_RENDERED_INTERVALS) {
     return { state: "too-few-rendered-presents", ...counts };
