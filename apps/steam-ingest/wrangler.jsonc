@@ -1,0 +1,26 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "heimdall-steam-ingest",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-13",
+  "workers_dev": false,
+  // Each cron maps to one lane in src/index.ts CRON_LANES. Changing an
+  // expression here without changing that map silently disables the lane.
+  //
+  // Player counts are the only fast lane, and the only one whose row count
+  // scales with cadence: 400 apps every 10 minutes is ~57k rows/day. Reviews,
+  // prices and catalog move slowly enough that polling them faster would buy
+  // duplicate rows, not resolution.
+  "triggers": {
+    "crons": [
+      "*/10 * * * *",
+      "7 * * * *",
+      "23 3,9,15,21 * * *",
+      "41 4 * * *"
+    ]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}

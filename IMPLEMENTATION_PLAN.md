@@ -54,6 +54,7 @@ missing sensors; visibility × validation gates every aggregate).
 apps/web/              Next.js hub: pages (/, /upload, /runs/[id], /games/[slug]) + API routes
 apps/desktop/          Tauri 2 Windows capture client (Phase 9) — React webview + Rust core
 apps/driver-curation/  scheduled driver-currency ingest (Phase 6.6)
+apps/steam-ingest/      Phase 8.7 Steam ingest worker (4 cron lanes -> Postgres)
 packages/shared/       zod schemas, types, visibility/integrity/comparability primitives, fixtures
 packages/parsers/      CapFrameX / PresentMon / MangoHud parsers, metrics, diagnostics rules
 packages/ui/           vendored design system (tokens + components) — §3a TS conversion still open
@@ -514,6 +515,156 @@ a custom domain (`clerk.<yourdomain>`) matches none of the current patterns — 
 added before going live, or this bug returns. **Outstanding:** `@visual`
 baselines (`run-page.png`, `game-page.png`) must be regenerated ONCE on CI ubuntu in a dedicated
 commit — local Windows renders are not valid baselines.
+
+---
+
+## Phase 8.7: Steam Ingest — the game-context dimension
+
+> Started 2026-09-02. `games` is a five-column hand-seeded dictionary, which is the staleness
+> treadmill `docs/driver-currency-curation.md` names ("the failure mode that rotted
+> FlightlessMango"). Phase 6.6 fixed that for drivers and left it unfixed for games. This phase is
+> the scheduled equivalent, reusing the `apps/driver-curation` shape: a Cloudflare Worker on cron
+> writing to Neon through `@neondatabase/serverless`.
+>
+> **The reason this phase exists is `steam_app_updates`, not the time series.** A run carries a
+> `captured_at`; an update carries a `posted_at`; joining them is what lets §25–§26 say "this title
+> patched between your two runs" instead of reporting an unexplained 6 FPS delta. No other
+> benchmark tool holds both halves. Player counts, prices and review trajectories are cheap to
+> collect alongside it and worth having, but they are context, not the reason.
+>
+> **Started before the UI exists on purpose.** Historical data is the one input that cannot be
+> backfilled later; every day of delay is a day of history this project will never have from its
+> own source. Nothing here is on the run-ingest hot path, and every consumer must tolerate all of
+> it being absent.
+
+- [x] 8.7.1 **Migration `0041_steam_ingest.sql`** — `steam_apps` (catalog + `poll_tier` cadence
+  control), `steam_player_counts`, `steam_review_snapshots`, `steam_price_snapshots`,
+  `steam_app_updates`, `steam_app_tags`, `steam_raw_snapshots`, `steam_app_changes`, and a nullable
+  `games.steam_appid` link (unique partial index, `on delete set null`). Every time-series key is
+  `(appid, bucket)` where `bucket` is the poll time floored to the lane cadence — a retried cron,
+  an overlapping invocation and a double deploy all collapse onto one row.
+- [x] 8.7.2 **`apps/steam-ingest` Worker**, four cron-dispatched lanes: players (10 min), reviews
+  (hourly), prices (4x daily), catalog (daily). `CRON_LANES` in `src/index.ts` maps each
+  expression; an unmapped cron logs rather than failing silently.
+- [x] 8.7.3 **Allowlisted fetch** (`api.steampowered.com`, `store.steampowered.com` only, redirects
+  revalidated, body cap, timeout) mirroring `driver-curation/src/fetch.ts`, plus a
+  bounded-concurrency mapper so one dead app cannot discard a batch and no invocation blows the
+  Worker subrequest budget.
+- [x] 8.7.4 **Every source is keyless.** Verified live 2026-09-02: `GetNumberOfCurrentPlayers`
+  (47 B), `appreviews?num_per_page=0` (199 B), `appdetails?filters=price_overview` (batches ~50
+  appids per subrequest), `appdetails`, `ISteamNews/GetNewsForApp` (tags items `patchnotes`), and
+  `featuredcategories` for discovery. `STEAM_API_KEY` is documented in `.env.example` but is
+  needed only for `IStoreService/GetAppList` bulk enumeration — see 8.7.8.
+- [x] 8.7.5 **Content-addressed raw retention.** `steam_raw_snapshots` is keyed
+  `(appid, source, payload_hash)`, so a year of byte-identical daily reads costs ONE row and only
+  advances `last_seen_at`, while a real change writes a new row. Storing every daily body instead
+  would be ~35 KB x apps x 365. Every unmodelled field (metacritic, platforms, dlc, packages,
+  requirement blobs) stays recoverable without a migration.
+- [x] 8.7.6 **Field-level change history** computed in the same statement as the metadata upsert:
+  a `prior` CTE reads the pre-update snapshot, so the diff cannot race a concurrent writer. A first
+  observation is not a change (no prior read), and a staler read never overwrites a fresher one.
+- [x] 8.7.7 **Self-suppressing everywhere.** A tag that vanishes upstream keeps its row with a
+  stale `last_seen_at` rather than being deleted; `is_patchnote` false means "no evidence", never
+  "not a patch", and is latched so a re-read cannot un-flag it; a null player count (most DLC and
+  tools) is a normal answer, not an error.
+
+### Explicitly NOT delivered by this phase — do not imply otherwise
+- **Engine and technology detection.** SteamDB infers "Unity"/"Unreal" from depot FILE LISTS. That
+  is depot access via the Steam network (SteamKit2 + PICS), not the Web API. `games.engine` stays
+  hand-curated.
+- **Build/depot/manifest change history.** SteamDB's change history is the PICS changelist stream.
+  `steam_app_changes` holds changes to the store metadata we observe, which is a strictly smaller
+  and honestly different thing. `steam_app_updates` (announcements) is the patch signal available
+  without PICS, and is the one §25–§26 actually needs.
+- **Community tags.** `steam_app_tags` carries genres and store categories from `appdetails`. The
+  user tags SteamDB shows are in the store page HTML, not any JSON endpoint — hence the `kind`
+  discriminator, which already reserves `'tag'`.
+- **Historical backfill.** The series starts 2026-09-02. There is no way to buy the missing years,
+  and SteamDB explicitly prohibits crawling, so this is a floor, not a gap to close.
+
+- [ ] 8.7.8 **Bulk catalog seed** using `STEAM_API_KEY` + `IStoreService/GetAppList` (403s without a
+  key; `ISteamApps/GetAppList` was REMOVED upstream — confirmed 404 "Method 'GetAppList' not found
+  in interface 'ISteamApps'" on 2026-09-02). Today's working set grows only from
+  `featuredcategories` (~56 appids/day). Until this lands, coverage is thin but real.
+- [ ] 8.7.9 **Wire `games.steam_appid`** — resolve existing canonical games to appids, so the run
+  corpus can join the update history. Reuse the conservative token-overlap matcher from
+  `driver-curation/src/db.ts` rather than inventing a second one.
+- [ ] 8.7.10 **Patch-annotated deltas** — the §25–§26 payoff: annotate a before/after comparison
+  with the updates that landed between the two captures.
+- [ ] 8.7.11 **Move the time series to ClickHouse (§28/Phase 12).** 400 apps at 10 min is ~57k
+  rows/day; the shapes here are deliberately narrow and additive so the copy is mechanical.
+
+- **Verify**: `pnpm --filter @heimdall/steam-ingest test` green including the real-Postgres suite;
+  `deploy:dry-run` clean; after deploy, confirm rows accumulate in `steam_player_counts` across two
+  consecutive cadence windows and that a re-run inside one window adds none.
+- **Regression**: unit suites for fetch allowlist/concurrency, every source parser against captured
+  fixtures, statement shape and row mapping; a real-Postgres suite covering migration shape,
+  per-bucket idempotency, the unknown-appid guard, change-log correctness, raw dedup, the
+  patch-note latch, and the `games` link constraints.
+
+### Phase 8.7 Regression Gate
+- `pnpm verify` green; 83 tests in `apps/steam-ingest` (15 of them against Postgres 17); the worker
+  builds under `wrangler deploy --dry-run`; no lane can exceed its per-invocation subrequest cap.
+
+**Phase 8.7 collectors implemented (2026-09-02).** Schema, worker and all four lanes landed with
+fixtures captured live the same day. 8.7.8-8.7.11 are open. **Deploy needs:** `DATABASE_URL` as a
+Worker secret, `pnpm migrate` against Neon, and a Workers PAID plan — `LANE_LIMITS` defaults assume
+the 1000-subrequest budget; the free plan's 50 requires dropping every cap by an order of
+magnitude, and the honest fix there is a smaller working set, not a higher cap.
+
+---
+
+## Phase 8.8: Build Identity — PICS changelists and local build pinning
+
+> Phase 8.7 deliberately stopped at store metadata. The thing it cannot reach is **build identity**:
+> which BUILD of a game a run was captured on. `steam_app_updates` (announcements) tells you a patch
+> was announced; a buildid tells you exactly what the player was running. For a benchmarking project
+> that is the difference between "something changed around then" and "these two runs are not
+> comparable, and here is the build that separates them".
+>
+> This is the SteamDB capability people actually mean by "change history" — the PICS changelist
+> stream over depots, manifests and build ids. It is NOT in the Web API and cannot be added to the
+> 8.7 worker: PICS needs a persistent authenticated connection to Steam's CM servers, which is a
+> long-lived process, not a cron-triggered Worker invocation.
+>
+> **The cheap half does not need PICS at all.** Steam writes
+> `steamapps/appmanifest_<appid>.acf` on the player's own disk, and it contains `buildid` for the
+> installed build. The desktop client is already on that machine at capture time.
+
+### 8.8a — Local build pinning (no PICS, no new infrastructure)
+- [ ] 8.8a.1 Desktop client reads `buildid` (and the branch) from `appmanifest_<appid>.acf` in the
+  library folder that holds the captured game; resolve the library via `libraryfolders.vdf`. Pure
+  file parsing in the Rust half, so both platform runners test it.
+- [ ] 8.8a.2 Carry it through the §11 ingest contract onto `runs`, alongside the existing
+  `gameBuild` methodology field — which is today a free-text user claim, not an observed fact.
+  Keep them distinct: one is declared, one is observed. Never overwrite the declaration.
+- [ ] 8.8a.3 Comparability: two runs on different buildids of the same title are a named,
+  displayable reason a delta may not be like-for-like. Follow the existing rule —
+  `packages/shared/src/comparability.ts` owns this predicate, and nothing re-derives it.
+- **Why this first:** it is strictly local, needs no new deployment target, and delivers the exact
+  fact §25-§26 wants. It self-suppresses cleanly: a non-Steam game or an unreadable library folder
+  yields null, and null must never degrade a run.
+
+### 8.8b — PICS collector (new deployment target — decide before building)
+- [ ] 8.8b.1 A long-lived process subscribing to the PICS changelist stream and recording, per app:
+  buildid per branch, depot list, and the changenumber/timestamp of each change. **Anonymous login
+  is sufficient** for public appinfo — no Steam account credentials, so there is no credential to
+  leak or get limited. Verify the exact client API surface before committing to a library:
+  `steam-user` (Node, keeps the stack in TypeScript) or SteamKit2 (C#, the reference
+  implementation).
+- [ ] 8.8b.2 Writes to the SAME Neon database as 8.7, into `steam_app_builds` (new) — not into
+  `steam_app_changes`, which is honestly scoped to store-metadata diffs and should stay that way.
+- [ ] 8.8b.3 Engine and technology detection, which is downstream of depot access rather than a
+  separate feature: it is inferred from depot FILE LISTS (a `UnityPlayer.dll` in the manifest).
+  Only worth doing once 8.8b.1 is running; would finally let `games.engine` stop being hand-curated.
+- **Deployment reality:** this cannot run on Cloudflare Workers. It needs a small always-on
+  container (Fly.io / Railway / a VPS). That is a second deployment target for the project, so it
+  is a decision, not an implementation detail. 8.8a delivers most of the benchmarking value without
+  it.
+
+### Phase 8.8 Regression Gate
+- ACF parsing covered by fixtures for both a normal library and a Flatpak/alternate library path;
+  a missing or malformed manifest yields null and never fails a capture; `pnpm verify` green.
 
 ---
 

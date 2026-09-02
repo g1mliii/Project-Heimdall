@@ -61,6 +61,7 @@ Intel PresentMon · MangoHud · pnpm workspaces.
 ```
 apps/web/        Next.js dashboard + API route handlers
 apps/desktop/    Tauri 2 capture client (Rust)
+apps/steam-ingest/ scheduled Steam ingest worker (player counts, prices, reviews, patch notes)
 packages/shared/ cross-app types, zod schemas, fixtures
 packages/parsers/ CapFrameX / PresentMon / MangoHud log parsers + metrics
 infra/db/        Postgres migrations

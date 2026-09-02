@@ -11,7 +11,7 @@ dist
 .next
 *.tsbuildinfo
 
-# Wrangler-generated types (apps/driver-curation)
+# Wrangler-generated types (apps/driver-curation, apps/steam-ingest)
 worker-configuration.d.ts
 .wrangler
 
