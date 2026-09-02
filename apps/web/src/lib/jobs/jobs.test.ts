@@ -97,6 +97,15 @@ describe.skipIf(!canRun)("verification worker (§11.5)", () => {
 
   beforeAll(async () => {
     db = await createTestDb();
+    // `driver-update-available` self-suppresses once the catalog row falls out
+    // of its 30-day freshness window, and migration 0023 seeds a FIXED
+    // `fetched_at` on purpose so unrefreshed rows age out instead of looking
+    // current. That makes any assertion on this diagnostic a time bomb: it
+    // passes until 30 days after the seed date and then fails forever, with
+    // nothing about the test or the rule having changed. Pin the seed to now,
+    // the way games.test.ts already does, so the suite tests the rule rather
+    // than the wall clock.
+    await db.pool.query("update driver_catalog set fetched_at = now()");
   }, 240_000);
 
   afterAll(async () => {

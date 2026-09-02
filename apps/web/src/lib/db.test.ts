@@ -103,6 +103,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0037_phase_8_online_indexes.sql",
       "0038_phase_8_validate_constraints.sql",
       "0039_canonical_graphics_api.sql",
+      "0040_frame_analysis.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
