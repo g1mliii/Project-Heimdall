@@ -694,9 +694,32 @@ macOS is untouched.
   implementation).
 - [x] 8.8b.2 Writes to the SAME Neon database as 8.7, into `steam_app_builds` (new) — not into
   `steam_app_changes`, which is honestly scoped to store-metadata diffs and should stay that way.
-- [ ] 8.8b.3 Engine and technology detection, which is downstream of depot access rather than a
-  separate feature: it is inferred from depot FILE LISTS (a `UnityPlayer.dll` in the manifest).
-  Only worth doing once 8.8b.1 is running; would finally let `games.engine` stop being hand-curated.
+- ~~8.8b.3 Engine and technology detection.~~ **DROPPED 2026-09-03 — blocked, not
+  deferred.** SteamDB infers the engine from depot FILE LISTS, and reading those needs
+  a depot decryption key plus a manifest request code. Probed anonymously against live
+  Steam:
+
+  | | free app (CS2 730) | paid app (Cyberpunk 1091500) |
+  | --- | --- | --- |
+  | `getDepotDecryptionKey` | OK | **AccessDenied** |
+  | `getManifestRequestCode` | OK | **AccessDenied** |
+
+  An anonymous account reaches depot content only for what it owns, which is
+  free-to-play only. Unblocking it means signing in as an account that OWNS every
+  tracked title — a real credential in CI and a large purchase — to populate one
+  advisory column. Not worth it.
+
+  Also checked first, and worth recording so nobody retries it: PICS appinfo carries
+  NO engine field. A naive grep appears to find "unity" in both Counter-Strike 2 and
+  Dota 2 — it is matching inside the word "com**munity**", and both are Source 2.
+
+  A local variant (scan the resolved `installdir` for `UnityPlayer.dll`,
+  `*-Win64-Shipping.exe`, …) would sidestep ownership entirely, since the player
+  already installed the game. Considered and declined: `games.engine` drives nothing
+  today, so it is a column in search of a consumer. `steam_app_depot_manifests` still
+  records manifest gids, so depot CONTENT CHANGES remain visible — it is only the
+  file-level inference that is gone.
+
 - **Deployment reality:** this cannot run on Cloudflare Workers. It needs a small always-on
   container (Fly.io / Railway / a VPS). That is a second deployment target for the project, so it
   is a decision, not an implementation detail. 8.8a delivers most of the benchmarking value without
@@ -724,11 +747,10 @@ First production run: 184 apps -> 524 builds, 2026 depots, 9001 manifests, 0 fai
 batches, cursor 38557998. Real patch history landed immediately (ARK: Survival
 Ascended build 25089967 at 01:26Z).
 
-**Still open:** 8.8a (local ACF `buildid` pinning in the desktop client) is the half
-that makes a RUN comparable, and is untouched. 8.8b gives the catalog-side history
-it will join against. Engine detection stays out of scope: it needs depot FILE
-lists, which means downloading manifests, not just recording their gids —
-`steam_app_depot_manifests` is the table that would make it possible later.
+**Engine detection was dropped, not deferred** — see 8.8b.3 for the probe results.
+Depot file lists need ownership, and an anonymous account is AccessDenied on every
+paid title. `steam_app_depot_manifests` still records manifest gids, so depot
+CONTENT CHANGES stay visible; only the file-level inference is gone.
 
 ### Phase 8.8 Regression Gate
 - ACF parsing covered by fixtures for both a normal library and a Flatpak/alternate library path;
