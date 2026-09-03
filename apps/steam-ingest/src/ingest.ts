@@ -1,4 +1,6 @@
 import {
+  demoteInactiveApps,
+  readKnownAppIds,
   readStaleCatalogApps,
   readTrackedApps,
   upsertTrackedApps,
@@ -13,8 +15,10 @@ import { mapWithConcurrency } from "./fetch";
 import {
   bucketFor,
   fetchAppMetadata,
+  fetchAppName,
   fetchAppUpdates,
   fetchFeaturedApps,
+  fetchTopAppIds,
   fetchPlayerCount,
   fetchPriceBatch,
   fetchReviewSummary,
@@ -49,6 +53,10 @@ export interface LaneLimits {
   reviewApps: number;
   catalogApps: number;
   concurrency: number;
+  /** Names cost one subrequest each and cannot be batched — cap per run. */
+  nameLookups: number;
+  /** Peak players over the last week below which a discovered app is parked. */
+  inactivePlayerThreshold: number;
 }
 
 export const LANE_LIMITS: LaneLimits = {
@@ -56,6 +64,8 @@ export const LANE_LIMITS: LaneLimits = {
   reviewApps: 300,
   catalogApps: 80,
   concurrency: 6,
+  nameLookups: 60,
+  inactivePlayerThreshold: 50,
 };
 
 /** Widen deliberately: every added country multiplies the price lane's rows. */
@@ -174,15 +184,48 @@ async function runCatalogLane(deps: ResolvedDeps): Promise<LaneReport> {
 
   // Discovery first, so a newly trending title is already tracked by the time
   // the staleness rotation below picks its slice.
+  //
+  // Charts before featured, deliberately. Featured ranks what the store is
+  // PROMOTING; the charts rank what people are PLAYING. Seeding from featured
+  // alone filled ~half the working set with titles that never reported more
+  // than single digits, each costing a subrequest every ten minutes.
+  let appsDiscovered = 0;
+  try {
+    const ranked = await fetchTopAppIds({ fetchImpl });
+    const known = await readKnownAppIds(execute, ranked);
+    // Names are one subrequest each and cannot be batched, so only ever pay for
+    // appids we do not already carry. Steady state is the handful that entered
+    // the charts today; the first run pays once.
+    const unknown = ranked.filter((appid) => !known.has(appid)).slice(0, limits.nameLookups);
+    const resolved = await mapWithConcurrency(unknown, limits.concurrency, async (appid) => ({
+      appid,
+      name: await fetchAppName(appid, { fetchImpl }),
+    }));
+    const seeds = resolved
+      .filter((r) => r.ok && r.value.name)
+      .map((r) => ({
+        appid: (r as { value: { appid: number; name: string } }).value.appid,
+        name: (r as { value: { appid: number; name: string } }).value.name,
+        pollTier: 1,
+        trackingReason: "charts",
+      }));
+    if (seeds.length > 0) appsDiscovered += await upsertTrackedApps(execute, seeds);
+  } catch (error) {
+    logger.warn("steam charts discovery failed", { error: errorSummary(error) });
+  }
+
+  // Featured stays as a SECOND source at a lower tier: it surfaces a release on
+  // day one, before it has any chance to chart. The demotion pass below is what
+  // keeps that from accumulating dead weight.
   try {
     const featured = await fetchFeaturedApps({ fetchImpl });
     if (featured.length > 0) {
-      await upsertTrackedApps(
+      appsDiscovered += await upsertTrackedApps(
         execute,
         featured.map((app) => ({
           appid: app.appid,
           name: app.name,
-          pollTier: 1,
+          pollTier: 2,
           trackingReason: "featured",
         })),
       );
@@ -191,6 +234,13 @@ async function runCatalogLane(deps: ResolvedDeps): Promise<LaneReport> {
     // Discovery is additive. Losing it costs new coverage, never existing rows,
     // so the refresh below still runs.
     logger.warn("steam featured discovery failed", { error: errorSummary(error) });
+  }
+
+  let appsParked = 0;
+  try {
+    appsParked = await demoteInactiveApps(execute, limits.inactivePlayerThreshold);
+  } catch (error) {
+    logger.warn("steam inactive demotion failed", { error: errorSummary(error) });
   }
 
   const apps = await readStaleCatalogApps(execute, limits.catalogApps);
@@ -222,6 +272,8 @@ async function runCatalogLane(deps: ResolvedDeps): Promise<LaneReport> {
       metadataReport.upserted + metadataReport.tags + metadataReport.rawSnapshots + updateRows,
     appsFailed,
     changesRecorded: metadataReport.changes,
+    appsDiscovered,
+    appsParked,
   };
 }
 

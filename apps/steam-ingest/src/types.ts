@@ -95,6 +95,10 @@ export interface LaneReport {
   appsFailed: number;
   /** Catalog lane only: field-level metadata changes recorded this run. */
   changesRecorded?: number;
+  /** Catalog lane only: apps newly added to the working set. */
+  appsDiscovered?: number;
+  /** Catalog lane only: apps parked at tier 0 for never drawing players. */
+  appsParked?: number;
 }
 
 export interface IngestLogger {

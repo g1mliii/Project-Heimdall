@@ -32,6 +32,40 @@ export const STALE_CATALOG_APPS_SQL = `select appid
  order by metadata_fetched_at asc nulls first, appid asc
  limit $1::integer`;
 
+/** Which of these appids do we already carry? Drives name-lookup cost. */
+export const KNOWN_APPIDS_SQL = `select a.appid
+  from steam_apps a
+  join jsonb_array_elements_text($1::jsonb) as x(appid) on a.appid = x.appid::bigint`;
+
+/**
+ * Park apps that have proven they are not worth a slot.
+ *
+ * Featured discovery pulls in whatever the store is promoting, which is mostly
+ * tiny new releases: the first seeding run added ~40 apps that never reported
+ * more than single-digit players, and each cost a subrequest every ten minutes
+ * forever. Without this the working set only grows, and it grows with noise.
+ *
+ * Parking is tier 0, never deletion — the collected history stays, and an app
+ * that takes off is re-promoted by the charts source the moment it charts.
+ * Deliberate choices are exempt: a curated benchmark title is tracked because
+ * someone decided it matters, not because it was busy this week.
+ */
+export const DEMOTE_INACTIVE_APPS_SQL = `update steam_apps a
+   set poll_tier = 0
+ where a.poll_tier > 0
+   and coalesce(a.tracking_reason, '') not in ('curated-benchmark', 'charts')
+   -- Only judge an app we have actually watched for a day; a new entrant must
+   -- not be parked before it has had a chance to report anything.
+   and exists (
+     select 1 from steam_player_counts p
+      where p.appid = a.appid and p.bucket <= now() - interval '24 hours'
+   )
+   and coalesce((
+     select max(p.players) from steam_player_counts p
+      where p.appid = a.appid and p.bucket >= now() - interval '7 days'
+   ), 0) < $1::integer
+returning a.appid`;
+
 export const UPSERT_APPS_SQL = `insert into steam_apps (appid, name, poll_tier, tracking_reason)
 select appid, name, poll_tier, tracking_reason
   from jsonb_to_recordset($1::jsonb) as x(
@@ -289,14 +323,40 @@ export async function readStaleCatalogApps(
   return rows.map((row) => Number(row.appid)).filter((appid) => Number.isSafeInteger(appid));
 }
 
+export async function readKnownAppIds(
+  execute: SqlExecutor,
+  appids: readonly number[],
+): Promise<Set<number>> {
+  if (appids.length === 0) return new Set();
+  const rows = await execute<{ appid: string | number }>(KNOWN_APPIDS_SQL, [JSON.stringify(appids)]);
+  return new Set(rows.map((row) => Number(row.appid)).filter((id) => Number.isSafeInteger(id)));
+}
+
+export async function demoteInactiveApps(
+  execute: SqlExecutor,
+  minPlayers: number,
+): Promise<number> {
+  if (!Number.isInteger(minPlayers) || minPlayers < 0) {
+    throw new Error("minPlayers must be a non-negative integer");
+  }
+  const rows = await execute<{ appid: string }>(DEMOTE_INACTIVE_APPS_SQL, [minPlayers]);
+  return rows.length;
+}
+
 export function upsertTrackedApps(
   execute: SqlExecutor,
   seeds: readonly TrackedAppSeed[],
 ): Promise<number> {
+  // `insert ... on conflict do update` REFUSES a batch that touches one row
+  // twice — Postgres raises "ON CONFLICT DO UPDATE command cannot affect row a
+  // second time" and the whole batch is lost. Discovery sources overlap (a title
+  // can be both charted and featured), so collapse duplicates here rather than
+  // trusting every caller to. Last entry wins, matching the callers' priority.
+  const deduped = [...new Map(seeds.map((seed) => [seed.appid, seed])).values()];
   return writeBatch(
     execute,
     UPSERT_APPS_SQL,
-    seeds.map((seed) => ({
+    deduped.map((seed) => ({
       appid: seed.appid,
       name: seed.name,
       poll_tier: seed.pollTier,

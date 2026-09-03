@@ -6,10 +6,12 @@ import {
   bucketFor,
   fetchAppMetadata,
   fetchAppUpdates,
+  fetchAppName,
   fetchFeaturedApps,
   fetchPlayerCount,
   fetchPriceBatch,
   fetchReviewSummary,
+  fetchTopAppIds,
   LANE_CADENCE_MS,
   parseReleaseDate,
   payloadHash,
@@ -289,5 +291,73 @@ describe("payloadHash", () => {
     const a = await payloadHash({ developers: ["Valve", "Hidden Path"] });
     const b = await payloadHash({ developers: ["Hidden Path", "Valve"] });
     expect(a).not.toBe(b);
+  });
+});
+
+describe("charts discovery", () => {
+  /** Serves the CCU chart first, then the weekly chart, as the source does. */
+  const bothCharts = async () => {
+    const ccu = await fixture("charts-concurrent.json");
+    const weekly = await fixture("charts-mostplayed.json");
+    return vi.fn(async (input: URL | RequestInfo) =>
+      new Response(String(input).includes("GetGamesByConcurrentPlayers") ? ccu : weekly, {
+        status: 200,
+      }),
+    ) as unknown as typeof fetch;
+  };
+
+  it("unions both charts, de-duplicated, in rank order", async () => {
+    const fetchImpl = await bothCharts();
+    const ranked = await fetchTopAppIds({ fetchImpl });
+    expect(ranked.length).toBeGreaterThan(100);
+    expect(new Set(ranked).size).toBe(ranked.length);
+    // The live-CCU chart is queried first, so its #1 leads the union.
+    expect(ranked[0]).toBe(730);
+    for (const appid of ranked) expect(Number.isSafeInteger(appid)).toBe(true);
+  });
+
+  it("still returns the other chart when one is down", async () => {
+    const ccu = await fixture("charts-concurrent.json");
+    const fetchImpl = vi.fn(async (input: URL | RequestInfo) => {
+      if (String(input).includes("GetMostPlayedGames")) throw new Error("upstream 503");
+      return new Response(ccu, { status: 200 });
+    }) as unknown as typeof fetch;
+    await expect(fetchTopAppIds({ fetchImpl })).resolves.toHaveLength(100);
+  });
+
+  it("returns nothing rather than throwing when both are down", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("upstream 503");
+    }) as unknown as typeof fetch;
+    await expect(fetchTopAppIds({ fetchImpl })).resolves.toEqual([]);
+  });
+});
+
+describe("fetchAppName", () => {
+  it("reads a name from the single-app basic form", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ "730": { success: true, data: { type: "Game", name: "Counter-Strike 2" } } }), {
+          status: 200,
+        }),
+    ) as unknown as typeof fetch;
+    await expect(fetchAppName(730, { fetchImpl })).resolves.toBe("Counter-Strike 2");
+  });
+
+  it("accepts either casing of `type`, which Steam is inconsistent about", async () => {
+    // Confirmed live: appid 570 answers "game", appid 730 answers "Game".
+    for (const type of ["game", "Game"]) {
+      const fetchImpl = vi.fn(
+        async () => new Response(JSON.stringify({ "570": { success: true, data: { type, name: "Dota 2" } } }), { status: 200 }),
+      ) as unknown as typeof fetch;
+      await expect(fetchAppName(570, { fetchImpl })).resolves.toBe("Dota 2");
+    }
+  });
+
+  it("rejects a non-game so hardware and soundtracks never enter the working set", async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response(JSON.stringify({ "1": { success: true, data: { type: "Music", name: "CS2 Soundtrack" } } }), { status: 200 }),
+    ) as unknown as typeof fetch;
+    await expect(fetchAppName(1, { fetchImpl })).resolves.toBeNull();
   });
 });

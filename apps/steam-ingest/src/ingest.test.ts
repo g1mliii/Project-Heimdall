@@ -17,6 +17,12 @@ function stubDb(trackedApps: number[]) {
   const calls: Recorded[] = [];
   const execute = vi.fn(async (text: string, params: readonly unknown[]) => {
     calls.push({ text, params });
+    if (text.trimStart().startsWith("update steam_apps")) return []; // demotion: nothing parked
+    if (text.includes("jsonb_array_elements_text")) {
+      // known-appid lookup: everything already tracked is "known".
+      const asked = JSON.parse(String(params[0])) as number[];
+      return asked.filter((a) => trackedApps.includes(a)).map((appid) => ({ appid: String(appid) }));
+    }
     if (text.includes("from steam_apps") && text.trimStart().startsWith("select")) {
       const limit = typeof params[0] === "number" ? params[0] : trackedApps.length;
       return trackedApps.slice(0, limit).map((appid) => ({ appid: String(appid) }));
@@ -212,6 +218,7 @@ describe("catalog lane", () => {
   it("discovers, then refreshes the stalest slice", async () => {
     const db = stubDb([730]);
     const fetchImpl = routedFetch({
+      ISteamChartsService: { response: { ranks: [{ rank: 1, appid: 730 }] } },
       featuredcategories: { top_sellers: { items: [{ id: 730, name: "Counter-Strike 2" }] } },
       appdetails: metadata,
       GetNewsForApp: news,
@@ -232,6 +239,7 @@ describe("catalog lane", () => {
     const db = stubDb([730]);
     const warn = vi.fn();
     const fetchImpl = routedFetch({
+      ISteamChartsService: { response: { ranks: [] } },
       featuredcategories: () => {
         throw new Error("upstream 503");
       },
@@ -252,6 +260,7 @@ describe("catalog lane", () => {
   it("bounds its subrequests by the catalog cap", async () => {
     const db = stubDb([1, 2, 3, 4]);
     const fetchImpl = routedFetch({
+      ISteamChartsService: { response: { ranks: [] } },
       featuredcategories: {},
       appdetails: { "1": { success: false } },
       GetNewsForApp: { appnews: { newsitems: [] } },
@@ -278,5 +287,93 @@ describe("errorSummary", () => {
 
   it("never leaks a non-Error throw verbatim", () => {
     expect(errorSummary({ secret: "value" })).toBe("unknown ingest error");
+  });
+});
+
+describe("charts discovery in the catalog lane", () => {
+  it("resolves names only for appids it does not already track", async () => {
+    const db = stubDb([730]); // 730 known; 570 and 999 are new
+    const names: number[] = [];
+    const fetchImpl = vi.fn(async (input: URL | RequestInfo) => {
+      const url = String(input);
+      if (url.includes("ISteamChartsService")) {
+        return new Response(
+          JSON.stringify({ response: { ranks: [{ appid: 730 }, { appid: 570 }, { appid: 999 }] } }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("filters=basic")) {
+        const appid = Number(new URL(url).searchParams.get("appids"));
+        names.push(appid);
+        return new Response(
+          JSON.stringify({ [appid]: { success: true, data: { type: "game", name: `Game ${appid}` } } }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("featuredcategories")) return new Response("{}", { status: 200 });
+      if (url.includes("appdetails")) return new Response(JSON.stringify({ "730": { success: false } }), { status: 200 });
+      return new Response(JSON.stringify({ appnews: { newsitems: [] } }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const report = await runLane("catalog", { execute: db.execute, fetchImpl, logger: silentLogger, now });
+    // 730 was already tracked, so no name lookup was paid for it.
+    expect(names.sort()).toEqual([570, 999]);
+    expect(report.appsDiscovered).toBeGreaterThan(0);
+    const seeded = db.written("steam_apps").filter((r) => r.tracking_reason === "charts");
+    expect(seeded.map((r) => r.appid).sort()).toEqual([570, 999]);
+    expect(seeded.every((r) => r.poll_tier === 1)).toBe(true);
+  });
+
+  it("caps name lookups so one run cannot exhaust the subrequest budget", async () => {
+    const db = stubDb([]);
+    let lookups = 0;
+    const fetchImpl = vi.fn(async (input: URL | RequestInfo) => {
+      const url = String(input);
+      if (url.includes("ISteamChartsService")) {
+        return new Response(
+          JSON.stringify({ response: { ranks: Array.from({ length: 50 }, (_, i) => ({ appid: 1000 + i })) } }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("filters=basic")) {
+        lookups++;
+        const appid = Number(new URL(url).searchParams.get("appids"));
+        return new Response(JSON.stringify({ [appid]: { success: true, data: { type: "game", name: "x" } } }), { status: 200 });
+      }
+      if (url.includes("featuredcategories")) return new Response("{}", { status: 200 });
+      return new Response(JSON.stringify({ appnews: { newsitems: [] } }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await runLane("catalog", {
+      execute: db.execute,
+      fetchImpl,
+      logger: silentLogger,
+      now,
+      limits: { nameLookups: 5 },
+    });
+    expect(lookups).toBe(5);
+  });
+
+  it("still refreshes metadata when both discovery sources fail", async () => {
+    const db = stubDb([730]);
+    const warn = vi.fn();
+    const fetchImpl = routedFetch({
+      ISteamChartsService: () => {
+        throw new Error("upstream 503");
+      },
+      featuredcategories: () => {
+        throw new Error("upstream 503");
+      },
+      appdetails: { "730": { success: true, data: { type: "game", name: "Counter-Strike 2" } } },
+      GetNewsForApp: { appnews: { newsitems: [] } },
+    });
+    const report = await runLane("catalog", {
+      execute: db.execute,
+      fetchImpl,
+      logger: { ...silentLogger, warn },
+      now,
+    });
+    expect(report.appsPolled).toBe(1);
+    expect(report.appsDiscovered).toBe(0);
   });
 });

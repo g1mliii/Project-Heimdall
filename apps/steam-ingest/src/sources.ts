@@ -222,6 +222,67 @@ export async function fetchPriceBatch(
   return samples;
 }
 
+/**
+ * The two keyless Steam charts endpoints, unioned.
+ *
+ * This is the RIGHT discovery source, and featuredcategories is not. Featured
+ * ranks what the store is promoting, which on any given day is mostly tiny new
+ * releases — the first seeding run pulled in ~40 apps with a single-digit
+ * player count, which cost a subrequest every ten minutes to learn nothing.
+ * These two rank by players: `GetGamesByConcurrentPlayers` is live CCU and
+ * `GetMostPlayedGames` is the weekly peak, so the union is "currently busy" and
+ * "reliably busy" rather than "currently advertised".
+ *
+ * Both return appids only, never names — see `fetchAppName`.
+ */
+export async function fetchTopAppIds(deps: SourceDeps = {}): Promise<number[]> {
+  const endpoints = [
+    "https://api.steampowered.com/ISteamChartsService/GetGamesByConcurrentPlayers/v1/",
+    "https://api.steampowered.com/ISteamChartsService/GetMostPlayedGames/v1/",
+  ];
+  const ranked: number[] = [];
+  const seen = new Set<number>();
+  // Sequential and failure-tolerant: one chart being down must not cost the
+  // other, and rank order is meaningful so the first list wins ties.
+  for (const endpoint of endpoints) {
+    let body: unknown;
+    try {
+      body = await fetchJson(endpoint, deps);
+    } catch {
+      continue;
+    }
+    if (!isRecord(body) || !isRecord(body.response) || !Array.isArray(body.response.ranks)) continue;
+    for (const entry of body.response.ranks) {
+      if (!isRecord(entry)) continue;
+      const appid = nonNegativeInt(entry.appid);
+      if (!appid || seen.has(appid)) continue;
+      seen.add(appid);
+      ranked.push(appid);
+    }
+  }
+  return ranked;
+}
+
+/**
+ * One app's name. `filters=basic` does NOT accept a comma-separated list the
+ * way `filters=price_overview` does — every batch size tested returns HTTP 400 —
+ * so this is unavoidably one subrequest per app. Callers must therefore resolve
+ * names only for appids they do not already know, which keeps the steady-state
+ * cost to the handful of titles that entered the charts that day.
+ */
+export async function fetchAppName(appid: number, deps: SourceDeps = {}): Promise<string | null> {
+  const url = `https://store.steampowered.com/api/appdetails?appids=${appid}&cc=us&l=en&filters=basic`;
+  const body = await fetchJson(url, deps);
+  if (!isRecord(body)) return null;
+  const entry = body[String(appid)];
+  if (!isRecord(entry) || entry.success !== true || !isRecord(entry.data)) return null;
+  // Steam is inconsistent about case here: appid 570 reports "game" and 730
+  // reports "Game" in the same response shape. Compare case-insensitively.
+  const type = boundedString(entry.data.type, 32)?.toLowerCase();
+  if (type && type !== "game") return null;
+  return boundedString(entry.data.name, MAX_NAME_LENGTH);
+}
+
 export interface FeaturedApp {
   appid: number;
   name: string;
