@@ -16,6 +16,7 @@ import type {
   CaptureTarget,
   Environment,
   HotkeyState,
+  SteamBuild,
 } from "./ipc";
 
 /**
@@ -62,6 +63,8 @@ export interface State {
   hotkey: HotkeyState | null;
   target: CaptureTarget | null;
   antiCheat: string | null;
+  /** Observed Steam build (§8.8a); null means unknown, not "not on Steam". */
+  steamBuild: SteamBuild | null;
   /** Set while `screen === "armed"`; carries the folders being watched. */
   armed: CaptureArmed | null;
   /** Milliseconds since the capture started; the timer ticks it. */
@@ -96,6 +99,7 @@ export const initialState: State = {
   hotkey: null,
   target: null,
   antiCheat: null,
+  steamBuild: null,
   armed: null,
   elapsedMs: 0,
   frames: 0,
@@ -158,6 +162,7 @@ export function reducer(state: State, action: Action): State {
         armed: action.armed,
         target: null,
         antiCheat: null,
+        steamBuild: null,
         elapsedMs: 0,
         frames: 0,
         capture: null,
@@ -176,6 +181,7 @@ export function reducer(state: State, action: Action): State {
         armed: null,
         target: { pid: action.started.pid, process: action.started.process },
         antiCheat: action.started.antiCheat ?? null,
+        steamBuild: action.started.steamBuild ?? null,
         elapsedMs: 0,
         frames: 0,
         capture: null,

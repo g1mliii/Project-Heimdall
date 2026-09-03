@@ -369,6 +369,17 @@ export function App() {
       // Omitted entirely when unknown: an undeclared field is honest, a
       // fabricated "disabled" is not.
       ...(hags === undefined ? {} : { hags: hags ? "enabled" : "disabled" }),
+      // OBSERVED build identity (§8.8a), read from the local Steam install at
+      // capture time. It sits beside the uploader's `gameBuild` claim and never
+      // replaces it: one is what they said, this is what was installed. Omitted
+      // when unknown, for the same reason `hags` is.
+      ...(state.steamBuild === null
+        ? {}
+        : {
+            steamAppId: state.steamBuild.appid,
+            steamBuildId: state.steamBuild.buildid,
+            ...(state.steamBuild.branch ? { steamBranch: state.steamBuild.branch } : {}),
+          }),
     } as Omit<MethodologyManifest, "version" | "frameGeneration">;
 
     dispatch({ type: "upload", phase: { status: "running", label: "Preparing" } });
