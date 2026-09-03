@@ -55,6 +55,7 @@ apps/web/              Next.js hub: pages (/, /upload, /runs/[id], /games/[slug]
 apps/desktop/          Tauri 2 Windows capture client (Phase 9) — React webview + Rust core
 apps/driver-curation/  scheduled driver-currency ingest (Phase 6.6)
 apps/steam-ingest/      Phase 8.7 Steam ingest worker (4 cron lanes -> Postgres)
+apps/steam-pics/        Phase 8.8b PICS build-identity collector (GitHub Actions job)
 packages/shared/       zod schemas, types, visibility/integrity/comparability primitives, fixtures
 packages/parsers/      CapFrameX / PresentMon / MangoHud parsers, metrics, diagnostics rules
 packages/ui/           vendored design system (tokens + components) — §3a TS conversion still open
@@ -661,6 +662,34 @@ magnitude, and the honest fix there is a smaller working set, not a higher cap.
   container (Fly.io / Railway / a VPS). That is a second deployment target for the project, so it
   is a decision, not an implementation detail. 8.8a delivers most of the benchmarking value without
   it.
+
+**Phase 8.8b implemented (2026-09-03).** `apps/steam-pics` + migration
+`0042_steam_builds.sql`. Verified live before any code was written: anonymous login
+returns public appinfo in **587 ms**, so this is a JOB, not a service — no VPS, no
+container, no second deployment target. It runs hourly on GitHub Actions and needs
+exactly one secret, `DATABASE_URL`; there is no Steam credential to store.
+
+Two measured findings shaped the design, both worth keeping:
+- **The changelist silently truncates.** `getProductChanges(cur - 500)` returns 381
+  app changes; `cur - 20000` returns ZERO apps, with no error and no
+  `forceFullUpdate`. A collector that followed the changelist alone would go blind
+  after any gap. So every run refreshes the FULL tracked set and the changelist is
+  provenance only — missing one costs nothing, because each branch carries its own
+  `timeupdated`. That is also why cadence affects discovery latency but never
+  timestamp accuracy.
+- **Manifest gids overflow a JS number.** `6967806384656644903` becomes
+  `6967806384656645000` through `Number()`. Gids are text end to end and cast by
+  Postgres, never by the collector; a regression test pins it.
+
+First production run: 184 apps -> 524 builds, 2026 depots, 9001 manifests, 0 failed
+batches, cursor 38557998. Real patch history landed immediately (ARK: Survival
+Ascended build 25089967 at 01:26Z).
+
+**Still open:** 8.8a (local ACF `buildid` pinning in the desktop client) is the half
+that makes a RUN comparable, and is untouched. 8.8b gives the catalog-side history
+it will join against. Engine detection stays out of scope: it needs depot FILE
+lists, which means downloading manifests, not just recording their gids —
+`steam_app_depot_manifests` is the table that would make it possible later.
 
 ### Phase 8.8 Regression Gate
 - ACF parsing covered by fixtures for both a normal library and a Flatpak/alternate library path;

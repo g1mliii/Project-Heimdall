@@ -1,0 +1,57 @@
+name: Steam PICS collection
+
+# Phase 8.8b — build identity from the Steam PICS product-info stream.
+#
+# WHY A SCHEDULED JOB AND NOT A SERVICE. PICS needs a connection to Steam's CM
+# servers rather than the Web API, which is why it cannot live in the 8.7
+# Cloudflare Worker. It does NOT need an always-on host: anonymous login is
+# measured at well under a second, and `collectOnce` refreshes the full tracked
+# set every run, so correctness does not depend on staying connected.
+#
+# WHY THE CADENCE DOES NOT AFFECT ACCURACY. Each branch carries its own
+# `timeupdated`, so the recorded patch time comes from Steam, not from when we
+# happened to look. Polling less often delays DISCOVERY, never the timestamp.
+# (This is also why the changelist is not the source of truth: asking for
+# changes since a changenumber a few thousand behind returns an empty app list
+# with no error, so a collector that trusted it would silently go blind after
+# any gap.)
+
+on:
+  schedule:
+    # Hourly, offset off the hour so it does not pile onto every other cron on
+    # the runner fleet at :00.
+    - cron: "19 * * * *"
+  workflow_dispatch: # so a human can force a run after a schedule outage
+
+# A second run while one is in flight would duplicate every PICS call for no
+# new data. Queue rather than cancel: a partially-written run should finish.
+concurrency:
+  group: steam-pics
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    name: Collect build identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm --filter @heimdall/steam-pics build
+
+      - name: Collect
+        working-directory: apps/steam-pics
+        env:
+          # Repository secret. The collector needs no Steam credential — public
+          # appinfo is reachable anonymously — so this is the only secret here.
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: node dist/index.js

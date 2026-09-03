@@ -73,16 +73,21 @@ describe.skipIf(!canRun)("steam ingest persistence", () => {
         where table_schema = current_schema() and table_name like 'steam\\_%'
         order by table_name`,
     );
-    expect(rows.map((row) => row.table_name)).toEqual([
-      "steam_app_changes",
-      "steam_app_tags",
-      "steam_app_updates",
-      "steam_apps",
-      "steam_player_counts",
-      "steam_price_snapshots",
-      "steam_raw_snapshots",
-      "steam_review_snapshots",
-    ]);
+    // Subset, not equality: this test owns 0041, and later migrations legitimately
+    // add more `steam_` tables (0042 adds the PICS build-identity ones). An
+    // exhaustive assertion here fails every future migration for no defect.
+    expect(rows.map((row) => row.table_name)).toEqual(
+      expect.arrayContaining([
+        "steam_app_changes",
+        "steam_app_tags",
+        "steam_app_updates",
+        "steam_apps",
+        "steam_player_counts",
+        "steam_price_snapshots",
+        "steam_raw_snapshots",
+        "steam_review_snapshots",
+      ]),
+    );
     const { rows: linked } = await db.pool.query(
       `select column_name from information_schema.columns
         where table_schema = current_schema() and table_name = 'games'

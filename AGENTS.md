@@ -50,6 +50,7 @@ apps/web/               Next.js hub — pages (/, /upload, /runs/[id], /games/[s
   src/lib/upload/       browser-held benchmark-set capability (the §11 flow itself lives in packages/ingest-client)
 apps/driver-curation/   scheduled driver-currency ingest (Phase 6.6)
 apps/steam-ingest/      scheduled Steam catalog/player/price/patch-note ingest (Phase 8.7)
+apps/steam-pics/        scheduled Steam PICS build-identity collector (Phase 8.8b, Node job)
 apps/desktop/           Tauri 2 capture client — React webview (src/) + Rust core (src-tauri/);
                         two cfg-selected backends: PresentMon sidecar (Windows), MangoHud watcher (Linux)
 packages/shared/        zod schemas, types, visibility/integrity/comparability — single source of truth
