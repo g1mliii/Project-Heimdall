@@ -678,14 +678,21 @@ install from and the field is absent there. The PARSING is pure and both CI runn
 test it; only the resolver has no Linux caller, hence the `cfg_attr` dead-code guard.
 macOS is untouched.
 
-### 8.8b — PICS collector (new deployment target — decide before building)
-- [ ] 8.8b.1 A long-lived process subscribing to the PICS changelist stream and recording, per app:
+### 8.8b — PICS collector (~~new deployment target~~ NO new infrastructure)
+
+> **The heading's premise was wrong and is kept here as the correction.** This was
+> written assuming PICS needs a persistent connection, so it needs an always-on host,
+> so it needs Fly.io/Railway/a VPS. Measuring it before building disproved that:
+> anonymous login to a Steam CM completes in **587 ms**, and because every run does a
+> full refresh (the changelist truncates silently), correctness never depended on
+> staying connected. It is a GitHub Actions job with one secret.
+- [x] 8.8b.1 ~~A long-lived process~~ **A scheduled job** subscribing to the PICS changelist stream and recording, per app:
   buildid per branch, depot list, and the changenumber/timestamp of each change. **Anonymous login
   is sufficient** for public appinfo — no Steam account credentials, so there is no credential to
   leak or get limited. Verify the exact client API surface before committing to a library:
   `steam-user` (Node, keeps the stack in TypeScript) or SteamKit2 (C#, the reference
   implementation).
-- [ ] 8.8b.2 Writes to the SAME Neon database as 8.7, into `steam_app_builds` (new) — not into
+- [x] 8.8b.2 Writes to the SAME Neon database as 8.7, into `steam_app_builds` (new) — not into
   `steam_app_changes`, which is honestly scoped to store-metadata diffs and should stay that way.
 - [ ] 8.8b.3 Engine and technology detection, which is downstream of depot access rather than a
   separate feature: it is inferred from depot FILE LISTS (a `UnityPlayer.dll` in the manifest).
