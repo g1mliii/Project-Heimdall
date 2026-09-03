@@ -25,7 +25,7 @@ export * from "./statistics";
 export * from "./assessment";
 export * from "./stream";
 
-export { PHYSICS, reconcileGeneratedFrameTech } from "./integrity";
+export { FRAME_GENERATION_EVIDENCE, PHYSICS, reconcileGeneratedFrameTech } from "./integrity";
 export {
   RUN_VISIBILITY,
   RUN_STATUS,

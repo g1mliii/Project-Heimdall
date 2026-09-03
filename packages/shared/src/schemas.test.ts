@@ -7,6 +7,7 @@ import {
   gameSubmissionMethodologySchema,
   MAX_INDEXED_METADATA_TEXT_LENGTH,
   preAuthRunVisibilitySchema,
+  renderedFrameAnalysisSchema,
   runResponseSchema,
   runSummarySchema,
   hardwareSnapshotSchema,
@@ -21,7 +22,13 @@ import {
 } from "./fixtures";
 import { RUN_VISIBILITY } from "./visibility";
 import { CURRENT_SCHEMA_VERSION } from "./constants";
-import type { Diagnostic, FrameSample, HardwareSnapshot, RunSummary } from "./types";
+import type {
+  Diagnostic,
+  FrameSample,
+  HardwareSnapshot,
+  RenderedFrameAnalysis,
+  RunSummary,
+} from "./types";
 
 describe("schema accept/reject (§3.1)", () => {
   it("accepts a well-formed create request", () => {
@@ -354,6 +361,98 @@ describe("schema/type drift guards (compile-time)", () => {
   it("CreateRunRequest infers to the exported type", () => {
     const req: CreateRunRequest = createRunRequestSchema.parse(validCreateRunRequest);
     expect(req.parserVersion).toBeTruthy();
+  });
+
+  it("RenderedFrameAnalysis stays in sync with renderedFrameAnalysisSchema", () => {
+    const available = renderedFrameAnalysisSchema.parse({
+      state: "available",
+      summary: fixtures.validSummary,
+      renderedCount: 120,
+      generatedCount: 120,
+      unknownCount: 0,
+    });
+    const asDomain: RenderedFrameAnalysis = available;
+    const back: import("./schemas").RenderedFrameAnalysisDto = asDomain;
+    expect(back).toEqual(available);
+  });
+});
+
+describe("renderedFrameAnalysis on the wire (§22.12)", () => {
+  /**
+   * The failure mode this pins: `runResponseSchema.parse(run)` runs at the run
+   * page's server boundary and zod STRIPS unknown keys. Forget the field here
+   * and the column plumbs all the way from Postgres to the page and then
+   * vanishes — no error, no type complaint, just a toggle that never appears.
+   */
+  it("survives runResponseSchema.parse instead of being stripped", () => {
+    const run = {
+      ...fixtures.validRun,
+      renderedFrameAnalysis: {
+        state: "available" as const,
+        summary: fixtures.validSummary,
+        renderedCount: 120,
+        generatedCount: 120,
+        unknownCount: 0,
+      },
+    };
+    const parsed = runResponseSchema.parse(run);
+    expect(parsed.renderedFrameAnalysis).toEqual(run.renderedFrameAnalysis);
+    expect(parsed.renderedFrameAnalysis?.state).toBe("available");
+  });
+
+  it("round-trips every unavailable state", () => {
+    const counts = { renderedCount: 10, generatedCount: 0, unknownCount: 2 };
+    for (const analysis of [
+      { state: "no-frame-type-evidence" as const },
+      { state: "too-few-rendered-presents" as const, ...counts },
+    ]) {
+      const parsed = runResponseSchema.parse({ ...fixtures.validRun, renderedFrameAnalysis: analysis });
+      expect(parsed.renderedFrameAnalysis).toEqual(analysis);
+    }
+  });
+
+  it("omits the analysis entirely for an unverified run", () => {
+    const parsed = runResponseSchema.parse(fixtures.validRun);
+    expect(parsed.renderedFrameAnalysis).toBeUndefined();
+  });
+
+  it("keeps presentTimeProfile OFF the wire (§22.13, §0.5)", () => {
+    // Evidence, never an accusation: the frame-generation suspicion statistics
+    // are stored for calibration and must not reach a viewer. If a future change
+    // adds them to the wire schema, this fails — which is the point.
+    const parsed = runResponseSchema.parse({
+      ...fixtures.validRun,
+      presentTimeProfile: { minFrameTimeMs: 0.32, medianOverMinRatio: 12.8 },
+    });
+    expect(parsed).not.toHaveProperty("presentTimeProfile");
+  });
+
+  it("drops an unknown state instead of throwing the run page away", () => {
+    // A stored blob written under an older FRAME_ANALYSIS_VERSION must not be
+    // able to 500 the page. `page.tsx` uses the throwing `.parse`, and 0040
+    // deliberately leaves rows unstamped until the reprocess lane reaches them,
+    // so the stale-vocabulary window is designed in. Degrade to "no analysis".
+    const parsed = runResponseSchema.parse({
+      ...fixtures.validRun,
+      renderedFrameAnalysis: { state: "probably-fine" },
+    });
+    expect(parsed.renderedFrameAnalysis).toBeUndefined();
+
+    // The union itself still rejects it — the tolerance lives at the wire
+    // boundary, not in the type.
+    expect(
+      renderedFrameAnalysisSchema.safeParse({ state: "probably-fine" }).success,
+    ).toBe(false);
+  });
+
+  it("still rejects a malformed AVAILABLE analysis rather than half-rendering it", () => {
+    // Tolerance is for unknown STATES, not for a known state missing its
+    // summary — that would reach the tiles as `undefined.avgFps`.
+    const parsed = runResponseSchema.parse({
+      ...fixtures.validRun,
+      renderedFrameAnalysis: { state: "available", renderedCount: 5 },
+    });
+    expect(parsed.renderedFrameAnalysis).toBeUndefined();
   });
 });
 

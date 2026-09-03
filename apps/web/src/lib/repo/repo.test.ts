@@ -25,6 +25,7 @@ import {
 import type { CapabilityManifest, DiagnosticFinding } from "@heimdall/shared";
 import { framesUploadObjectKey, stagingCleanupNotBefore } from "../r2";
 import { createTestDb, testDbAvailable, type TestDb } from "../testing/test-db";
+import type { FrameAnalysisResult } from "../db";
 import { consumeRateLimit, pruneRateLimits } from "./rate-limit";
 import {
   deleteRun,
@@ -48,6 +49,17 @@ const establishedCapability = deriveCapabilityManifest(
   validRun.captureSource,
   validRun.hardware,
 );
+
+/**
+ * §22.12 frame analysis for fixtures whose frames carry no frame-type column —
+ * which is all of them. The union's non-`available` arm IS the answer here, not
+ * a placeholder: `validFrames` never sets `generated`, so "the capture told us
+ * nothing" is the truthful state to store.
+ */
+const NO_FRAME_ANALYSIS: FrameAnalysisResult = {
+  renderedFrameAnalysis: { state: "no-frame-type-evidence" },
+  presentTimeProfile: undefined,
+};
 
 function pendingRun(id: string): Run {
   return {
@@ -324,6 +336,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
           capabilityManifest: null,
           methodologyManifest: null,
           generatedFrameTech: "none",
+          ...NO_FRAME_ANALYSIS,
         },
         claimed!,
         db.pool,
@@ -376,6 +389,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
           capabilityManifest: manifest,
           methodologyManifest: null,
           generatedFrameTech: "none",
+          ...NO_FRAME_ANALYSIS,
         },
         first!,
         db.pool,
@@ -409,6 +423,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
           capabilityManifest: null,
           methodologyManifest: null,
           generatedFrameTech: "none",
+          ...NO_FRAME_ANALYSIS,
         },
         second!,
         db.pool,
@@ -442,6 +457,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
           capabilityManifest: null,
           methodologyManifest: null,
           generatedFrameTech: "none",
+          ...NO_FRAME_ANALYSIS,
         },
         first!,
         db.pool,
@@ -460,6 +476,7 @@ describe.skipIf(!canRun)("repo layer (Phase 4)", () => {
           capabilityManifest: null,
           methodologyManifest: null,
           generatedFrameTech: "none",
+          ...NO_FRAME_ANALYSIS,
         },
         second!,
         db.pool,

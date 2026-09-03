@@ -54,6 +54,8 @@ missing sensors; visibility × validation gates every aggregate).
 apps/web/              Next.js hub: pages (/, /upload, /runs/[id], /games/[slug]) + API routes
 apps/desktop/          Tauri 2 Windows capture client (Phase 9) — React webview + Rust core
 apps/driver-curation/  scheduled driver-currency ingest (Phase 6.6)
+apps/steam-ingest/      Phase 8.7 Steam ingest worker (4 cron lanes -> Postgres)
+apps/steam-pics/        Phase 8.8b PICS build-identity collector (GitHub Actions job)
 packages/shared/       zod schemas, types, visibility/integrity/comparability primitives, fixtures
 packages/parsers/      CapFrameX / PresentMon / MangoHud parsers, metrics, diagnostics rules
 packages/ui/           vendored design system (tokens + components) — §3a TS conversion still open
@@ -517,6 +519,245 @@ commit — local Windows renders are not valid baselines.
 
 ---
 
+## Phase 8.7: Steam Ingest — the game-context dimension
+
+> Started 2026-09-02. `games` is a five-column hand-seeded dictionary, which is the staleness
+> treadmill `docs/driver-currency-curation.md` names ("the failure mode that rotted
+> FlightlessMango"). Phase 6.6 fixed that for drivers and left it unfixed for games. This phase is
+> the scheduled equivalent, reusing the `apps/driver-curation` shape: a Cloudflare Worker on cron
+> writing to Neon through `@neondatabase/serverless`.
+>
+> **The reason this phase exists is `steam_app_updates`, not the time series.** A run carries a
+> `captured_at`; an update carries a `posted_at`; joining them is what lets §25–§26 say "this title
+> patched between your two runs" instead of reporting an unexplained 6 FPS delta. No other
+> benchmark tool holds both halves. Player counts, prices and review trajectories are cheap to
+> collect alongside it and worth having, but they are context, not the reason.
+>
+> **Started before the UI exists on purpose.** Historical data is the one input that cannot be
+> backfilled later; every day of delay is a day of history this project will never have from its
+> own source. Nothing here is on the run-ingest hot path, and every consumer must tolerate all of
+> it being absent.
+
+- [x] 8.7.1 **Migration `0041_steam_ingest.sql`** — `steam_apps` (catalog + `poll_tier` cadence
+  control), `steam_player_counts`, `steam_review_snapshots`, `steam_price_snapshots`,
+  `steam_app_updates`, `steam_app_tags`, `steam_raw_snapshots`, `steam_app_changes`, and a nullable
+  `games.steam_appid` link (unique partial index, `on delete set null`). Every time-series key is
+  `(appid, bucket)` where `bucket` is the poll time floored to the lane cadence — a retried cron,
+  an overlapping invocation and a double deploy all collapse onto one row.
+- [x] 8.7.2 **`apps/steam-ingest` Worker**, four cron-dispatched lanes: players (10 min), reviews
+  (hourly), prices (4x daily), catalog (daily). `CRON_LANES` in `src/index.ts` maps each
+  expression; an unmapped cron logs rather than failing silently.
+- [x] 8.7.3 **Allowlisted fetch** (`api.steampowered.com`, `store.steampowered.com` only, redirects
+  revalidated, body cap, timeout) mirroring `driver-curation/src/fetch.ts`, plus a
+  bounded-concurrency mapper so one dead app cannot discard a batch and no invocation blows the
+  Worker subrequest budget.
+- [x] 8.7.4 **Every source is keyless.** Verified live 2026-09-02: `GetNumberOfCurrentPlayers`
+  (47 B), `appreviews?num_per_page=0` (199 B), `appdetails?filters=price_overview` (batches ~50
+  appids per subrequest), `appdetails`, `ISteamNews/GetNewsForApp` (tags items `patchnotes`), and
+  `featuredcategories` for discovery. `STEAM_API_KEY` is documented in `.env.example` but is
+  needed only for `IStoreService/GetAppList` bulk enumeration — see 8.7.8.
+- [x] 8.7.5 **Content-addressed raw retention.** `steam_raw_snapshots` is keyed
+  `(appid, source, payload_hash)`, so a year of byte-identical daily reads costs ONE row and only
+  advances `last_seen_at`, while a real change writes a new row. Storing every daily body instead
+  would be ~35 KB x apps x 365. Every unmodelled field (metacritic, platforms, dlc, packages,
+  requirement blobs) stays recoverable without a migration.
+- [x] 8.7.6 **Field-level change history** computed in the same statement as the metadata upsert:
+  a `prior` CTE reads the pre-update snapshot, so the diff cannot race a concurrent writer. A first
+  observation is not a change (no prior read), and a staler read never overwrites a fresher one.
+- [x] 8.7.7 **Self-suppressing everywhere.** A tag that vanishes upstream keeps its row with a
+  stale `last_seen_at` rather than being deleted; `is_patchnote` false means "no evidence", never
+  "not a patch", and is latched so a re-read cannot un-flag it; a null player count (most DLC and
+  tools) is a normal answer, not an error.
+
+### Explicitly NOT delivered by this phase — do not imply otherwise
+- **Engine and technology detection.** SteamDB infers "Unity"/"Unreal" from depot FILE LISTS. That
+  is depot access via the Steam network (SteamKit2 + PICS), not the Web API. `games.engine` stays
+  hand-curated.
+- **Build/depot/manifest change history.** SteamDB's change history is the PICS changelist stream.
+  `steam_app_changes` holds changes to the store metadata we observe, which is a strictly smaller
+  and honestly different thing. `steam_app_updates` (announcements) is the patch signal available
+  without PICS, and is the one §25–§26 actually needs.
+- **Community tags.** `steam_app_tags` carries genres and store categories from `appdetails`. The
+  user tags SteamDB shows are in the store page HTML, not any JSON endpoint — hence the `kind`
+  discriminator, which already reserves `'tag'`.
+- **Historical backfill.** The series starts 2026-09-02. There is no way to buy the missing years,
+  and SteamDB explicitly prohibits crawling, so this is a floor, not a gap to close.
+
+- [ ] 8.7.8 **Bulk catalog seed** using `STEAM_API_KEY` + `IStoreService/GetAppList` (403s without a
+  key; `ISteamApps/GetAppList` was REMOVED upstream — confirmed 404 "Method 'GetAppList' not found
+  in interface 'ISteamApps'" on 2026-09-02). Today's working set grows only from
+  `featuredcategories` (~56 appids/day). Until this lands, coverage is thin but real.
+- [ ] 8.7.9 **Wire `games.steam_appid`** — resolve existing canonical games to appids, so the run
+  corpus can join the update history. Reuse the conservative token-overlap matcher from
+  `driver-curation/src/db.ts` rather than inventing a second one.
+- [ ] 8.7.10 **Patch-annotated deltas** — the §25–§26 payoff: annotate a before/after comparison
+  with the updates that landed between the two captures.
+- [ ] 8.7.11 **Move the time series to ClickHouse (§28/Phase 12).** 400 apps at 10 min is ~57k
+  rows/day; the shapes here are deliberately narrow and additive so the copy is mechanical.
+
+- **Verify**: `pnpm --filter @heimdall/steam-ingest test` green including the real-Postgres suite;
+  `deploy:dry-run` clean; after deploy, confirm rows accumulate in `steam_player_counts` across two
+  consecutive cadence windows and that a re-run inside one window adds none.
+- **Regression**: unit suites for fetch allowlist/concurrency, every source parser against captured
+  fixtures, statement shape and row mapping; a real-Postgres suite covering migration shape,
+  per-bucket idempotency, the unknown-appid guard, change-log correctness, raw dedup, the
+  patch-note latch, and the `games` link constraints.
+
+### Phase 8.7 Regression Gate
+- `pnpm verify` green; 83 tests in `apps/steam-ingest` (15 of them against Postgres 17); the worker
+  builds under `wrangler deploy --dry-run`; no lane can exceed its per-invocation subrequest cap.
+
+**Phase 8.7 collectors implemented (2026-09-02).** Schema, worker and all four lanes landed with
+fixtures captured live the same day. 8.7.8-8.7.11 are open. **Deploy needs:** `DATABASE_URL` as a
+Worker secret, `pnpm migrate` against Neon, and a Workers PAID plan — `LANE_LIMITS` defaults assume
+the 1000-subrequest budget; the free plan's 50 requires dropping every cap by an order of
+magnitude, and the honest fix there is a smaller working set, not a higher cap.
+
+---
+
+## Phase 8.8: Build Identity — PICS changelists and local build pinning
+
+> Phase 8.7 deliberately stopped at store metadata. The thing it cannot reach is **build identity**:
+> which BUILD of a game a run was captured on. `steam_app_updates` (announcements) tells you a patch
+> was announced; a buildid tells you exactly what the player was running. For a benchmarking project
+> that is the difference between "something changed around then" and "these two runs are not
+> comparable, and here is the build that separates them".
+>
+> This is the SteamDB capability people actually mean by "change history" — the PICS changelist
+> stream over depots, manifests and build ids. It is NOT in the Web API and cannot be added to the
+> 8.7 worker: PICS needs a persistent authenticated connection to Steam's CM servers, which is a
+> long-lived process, not a cron-triggered Worker invocation.
+>
+> **The cheap half does not need PICS at all.** Steam writes
+> `steamapps/appmanifest_<appid>.acf` on the player's own disk, and it contains `buildid` for the
+> installed build. The desktop client is already on that machine at capture time.
+
+### 8.8a — Local build pinning (no PICS, no new infrastructure)
+- [x] 8.8a.1 Desktop client reads `buildid` (and the branch) from `appmanifest_<appid>.acf` in the
+  library folder that holds the captured game; resolve the library via `libraryfolders.vdf`. Pure
+  file parsing in the Rust half, so both platform runners test it.
+- [x] 8.8a.2 Carry it through the §11 ingest contract onto `runs`, alongside the existing
+  `gameBuild` methodology field — which is today a free-text user claim, not an observed fact.
+  Keep them distinct: one is declared, one is observed. Never overwrite the declaration.
+- [x] 8.8a.3 Comparability: two runs on different buildids of the same title are a named,
+  displayable reason a delta may not be like-for-like. Follow the existing rule —
+  `packages/shared/src/comparability.ts` owns this predicate, and nothing re-derives it.
+- **Why this first:** it is strictly local, needs no new deployment target, and delivers the exact
+  fact §25-§26 wants. It self-suppresses cleanly: a non-Steam game or an unreadable library folder
+  yields null, and null must never degrade a run.
+
+**Phase 8.8a implemented (2026-09-03).** `apps/desktop/src-tauri/src/steam.rs` — a
+small real VDF tokenizer (both Steam files are VDF, and `installdir` values contain
+spaces while Windows paths are backslash-escaped, so a regex was not viable),
+`libraryfolders.vdf` -> every library root, `appmanifest_<appid>.acf` -> appid, name,
+installdir, buildid and opted-in BetaKey.
+
+**Matching is PATH CONTAINMENT only, never a name guess.** The executable is resolved
+from the pid (`QueryFullProcessImageNameW` on Windows, `/proc/<pid>/exe` elsewhere)
+and matched against `<library>/steamapps/common/<installdir>` segment-wise — a plain
+string prefix would match "Portal 2 Demo" against "Portal 2", which a regression test
+pins. A wrong buildid is far worse than a missing one.
+
+**No migration.** `settings_json` has held the whole methodology manifest since 0017,
+which is explicit that only QUERYABLE comparability-key fields earn a column. The
+observed fields (`steamAppId`, `steamBuildId`, `steamBranch`) ride along; `gameBuild`
+stays the uploader's declared free-text claim and is never overwritten by an
+observation.
+
+**8.8a.3 is deliberately NOT a comparability key field.** Adding the buildid to
+`KEY_FIELDS` would give every title fresh buckets on every patch, and since outlier
+rejection and the bell curves are inert below the cold-start threshold (§17.4/§18.2),
+most distributions would silently stop rendering on patch day. Pooling ACROSS builds
+is what lets a distribution exist. `buildIdentityRelation` therefore returns a named
+reason for §25–§26 to display beside a delta, and a test asserts the key does not
+contain it.
+
+**Explicitly not delivered:** Linux build pinning. The MangoHud watcher reports pid 0
+— it sees a log file, not a process (§23.1) — so there is nothing to resolve an
+install from and the field is absent there. The PARSING is pure and both CI runners
+test it; only the resolver has no Linux caller, hence the `cfg_attr` dead-code guard.
+macOS is untouched.
+
+### 8.8b — PICS collector (~~new deployment target~~ NO new infrastructure)
+
+> **The heading's premise was wrong and is kept here as the correction.** This was
+> written assuming PICS needs a persistent connection, so it needs an always-on host,
+> so it needs Fly.io/Railway/a VPS. Measuring it before building disproved that:
+> anonymous login to a Steam CM completes in **587 ms**, and because every run does a
+> full refresh (the changelist truncates silently), correctness never depended on
+> staying connected. It is a GitHub Actions job with one secret.
+- [x] 8.8b.1 ~~A long-lived process~~ **A scheduled job** subscribing to the PICS changelist stream and recording, per app:
+  buildid per branch, depot list, and the changenumber/timestamp of each change. **Anonymous login
+  is sufficient** for public appinfo — no Steam account credentials, so there is no credential to
+  leak or get limited. Verify the exact client API surface before committing to a library:
+  `steam-user` (Node, keeps the stack in TypeScript) or SteamKit2 (C#, the reference
+  implementation).
+- [x] 8.8b.2 Writes to the SAME Neon database as 8.7, into `steam_app_builds` (new) — not into
+  `steam_app_changes`, which is honestly scoped to store-metadata diffs and should stay that way.
+- ~~8.8b.3 Engine and technology detection.~~ **DROPPED 2026-09-03 — blocked, not
+  deferred.** SteamDB infers the engine from depot FILE LISTS, and reading those needs
+  a depot decryption key plus a manifest request code. Probed anonymously against live
+  Steam:
+
+  | | free app (CS2 730) | paid app (Cyberpunk 1091500) |
+  | --- | --- | --- |
+  | `getDepotDecryptionKey` | OK | **AccessDenied** |
+  | `getManifestRequestCode` | OK | **AccessDenied** |
+
+  An anonymous account reaches depot content only for what it owns, which is
+  free-to-play only. Unblocking it means signing in as an account that OWNS every
+  tracked title — a real credential in CI and a large purchase — to populate one
+  advisory column. Not worth it.
+
+  Also checked first, and worth recording so nobody retries it: PICS appinfo carries
+  NO engine field. A naive grep appears to find "unity" in both Counter-Strike 2 and
+  Dota 2 — it is matching inside the word "com**munity**", and both are Source 2.
+
+  A local variant (scan the resolved `installdir` for `UnityPlayer.dll`,
+  `*-Win64-Shipping.exe`, …) would sidestep ownership entirely, since the player
+  already installed the game. Considered and declined: `games.engine` drives nothing
+  today, so it is a column in search of a consumer. `steam_app_depot_manifests` still
+  records manifest gids, so depot CONTENT CHANGES remain visible — it is only the
+  file-level inference that is gone.
+
+- **Deployment reality:** this cannot run on Cloudflare Workers. It needs a small always-on
+  container (Fly.io / Railway / a VPS). That is a second deployment target for the project, so it
+  is a decision, not an implementation detail. 8.8a delivers most of the benchmarking value without
+  it.
+
+**Phase 8.8b implemented (2026-09-03).** `apps/steam-pics` + migration
+`0042_steam_builds.sql`. Verified live before any code was written: anonymous login
+returns public appinfo in **587 ms**, so this is a JOB, not a service — no VPS, no
+container, no second deployment target. It runs hourly on GitHub Actions and needs
+exactly one secret, `DATABASE_URL`; there is no Steam credential to store.
+
+Two measured findings shaped the design, both worth keeping:
+- **The changelist silently truncates.** `getProductChanges(cur - 500)` returns 381
+  app changes; `cur - 20000` returns ZERO apps, with no error and no
+  `forceFullUpdate`. A collector that followed the changelist alone would go blind
+  after any gap. So every run refreshes the FULL tracked set and the changelist is
+  provenance only — missing one costs nothing, because each branch carries its own
+  `timeupdated`. That is also why cadence affects discovery latency but never
+  timestamp accuracy.
+- **Manifest gids overflow a JS number.** `6967806384656644903` becomes
+  `6967806384656645000` through `Number()`. Gids are text end to end and cast by
+  Postgres, never by the collector; a regression test pins it.
+
+First production run: 184 apps -> 524 builds, 2026 depots, 9001 manifests, 0 failed
+batches, cursor 38557998. Real patch history landed immediately (ARK: Survival
+Ascended build 25089967 at 01:26Z).
+
+**Engine detection was dropped, not deferred** — see 8.8b.3 for the probe results.
+Depot file lists need ownership, and an anonymous account is AccessDenied on every
+paid title. `steam_app_depot_manifests` still records manifest gids, so depot
+CONTENT CHANGES stay visible; only the file-level inference is gone.
+
+### Phase 8.8 Regression Gate
+- ACF parsing covered by fixtures for both a normal library and a Flatpak/alternate library path;
+  a missing or malformed manifest yields null and never fails a capture; `pnpm verify` green.
+
+---
+
 ## Phase 9: Desktop Capture Client — Windows (Tauri 2 + PresentMon) — §21–§22
 
 > The second product surface. Runbook: [`docs/desktop-client.md`](docs/desktop-client.md).
@@ -831,7 +1072,15 @@ writeup:
    presented frames underneath rendered numbers contradicts itself — and the rendered stream has its
    own median, so it has its own stutter threshold.
 
-- [ ] 22.12 **Dual summary where frame-type evidence exists.** Compute a second summary over
+> **Implementation status.** 22.12 and 22.13 are implemented on `phase-9.6-frame-generation`;
+> `pnpm verify` exits 0 across all 8 projects, `cargo test` is 108/108, `pnpm check:deps` passes.
+> Two numbers the plan left open were settled during implementation: `MIN_RENDERED_INTERVALS = 10`
+> (matching `INGEST_LIMITS.minFramesPerRun`), and `PHYSICS.recomputeTolerance` is KEPT with a
+> cross-reference comment at `floatsMatch` rather than deleted. Two corrections to the text below
+> are noted inline. Still outstanding: the DB-backed test tier and the e2e/`@visual` suites have
+> not been run (no Docker/`TEST_DATABASE_URL` on the dev box) — see the phase gate.
+
+- [x] 22.12 **Dual summary where frame-type evidence exists.** Compute a second summary over
   rendered presents only, and offer a toggle on the run report: "how fast did it render" vs "how
   smooth did it feel". Both are legitimate answers to different questions, which is why this is a
   toggle and not a replacement.
@@ -840,7 +1089,7 @@ writeup:
   - Presentation only. `frameGeneration` is already a comparability key, so declared-FG and
     declared-non-FG runs are in different buckets regardless; this does not touch pooling.
 
-  - [ ] **The coalescing rule — the crux, and the thing that is easy to get quietly wrong.** A
+  - [x] **The coalescing rule — the crux, and the thing that is easy to get quietly wrong.** A
     rendered summary is **not** a filter of `generated === false` rows. `frameTimeMs` is an interval,
     so dropping the generated rows drops their durations too and the rate is unchanged: on the
     measured capture, 7,120 rendered rows over their own 4.10 ms mean interval recompute to
@@ -863,10 +1112,24 @@ writeup:
       A `FrameType` column can only reach us on the v2 profile, so **gate `generatedColumn` on `isV2`**
       in `presentmon.ts:79` (today `findColumn(header, ["frametype"])` runs for every profile). One
       line, and it makes the convention structural instead of documentary.
+      - **Correction from code review — the gate was implemented and then REVERTED.** The coalescer
+        is not the column's only consumer: `reconcileGeneratedFrameTech` (§22.11) keys on a generated
+        frame having been seen, and `frameGenerationObserved` feeds the capability manifest. Neither
+        cares about the interval convention, so gating the parser bought the coalescer nothing it
+        needs — PresentMon only emits `FrameType` on v2 output anyway — while costing §22.11 the
+        evidence that stops a frame-generated run keeping a declared `none`. Losing that is the
+        §0.5-class failure. The column is read on every profile; the convention is documented where
+        it is applied, in `frame-generation.ts`. `presentmon` stays at **1.2.0** (the reverted gate
+        was the only behaviour change, so the 1.3.0 bump was withdrawn too).
     - Do **not** rederive intervals from `time_ms` deltas to dodge the convention.
       `computeFrameParquetSummary` drops `times` (`frame-metadata.ts:304`) to shed 4 MiB, and
       `buildFrameSeriesFromColumns` normalizes `times` **in place**, so server and browser would be
       working from different arrays — losing bit-identity exactly where it is needed.
+    - **Correction from implementation:** the "243.9 = 243.9" identity above holds only where
+      present durations are UNIFORM (which the measured AMD capture was, every row `Application`).
+      Where rendered and generated presents differ in duration, naive filtering lands on neither
+      rate — on an 8 ms / 0.4 ms stream it gives 125 FPS against 238.1 presented and 119.0
+      rendered. Filtering is wrong in a third direction, not merely a no-op. Both cases are tested.
     - Edge cases, all named constants and all tested: `generated === undefined` inside an
       evidence-bearing run is **absorbed** into the enclosing interval (the time elapsed; we just
       don't know what bounded it); fewer than `MIN_RENDERED_INTERVALS` rendered presents yields no
@@ -875,13 +1138,20 @@ writeup:
       coalescer returns `d[0..n−2]`, differing in the 3rd–4th significant figure. Two numbers claiming
       to be the same rate and disagreeing slightly is worse than one number.
 
-  - [ ] **New `packages/parsers/src/frame-generation.ts`.** `coalesceRenderedIntervals(frameTimesMs,
+  - [x] **New `packages/parsers/src/frame-generation.ts`.** `coalesceRenderedIntervals(frameTimesMs,
     presentTypes)` returning the intervals plus `startRows` (each interval's originating row, so the
     browser can rebuild the chart on the real time base), the three present-type counts, and
     `leadingMs`/`trailingMs` so the docs can show the accounting closes. Then
     `computeRenderedFrameAnalysis(...)` feeding those intervals straight into the **existing**
     `computeRunSummaryFromFrameTimes` — no percentile, low or stutter definition is rederived, which
     is what makes server/browser agreement structural rather than merely tested.
+    - **Correction from code review — `no-generated-frames` does NOT ship.** The plan's four-state
+      union splits "no frame-type column" from "a column that read `Application` everywhere", and
+      the second state licenses the copy "the presented rate is already the rendered rate". That
+      claim is false for exactly the captures this phase is about: the reference RX 9070 XT capture
+      had frame generation ON and 14,241 rows every one `Application`. §22.11 already settled that
+      the two are indistinguishable and the column's presence proves nothing, so both now reach
+      `no-frame-type-evidence` and a test asserts they are `toEqual`. Three shipped states, not four.
     - Result is a **discriminated union on `state`**, not a nullable summary: `available` |
       `no-frame-type-evidence` | `no-generated-frames` | `too-few-rendered-presents`. Precedent is
       `vramCapacitySchema` — "a discrete total, or a typed reason it is unavailable". The server
@@ -896,7 +1166,7 @@ writeup:
       already statically imports `stutterThresholdMs` from `@heimdall/parsers`. The comment at
       `frame-metadata.ts:307-310` implies otherwise and should be tightened while we are there.
 
-  - [ ] **Compute it in the existing Parquet pass — but not inside the chunk callback.**
+  - [x] **Compute it in the existing Parquet pass — but not inside the chunk callback.**
     `readFrameParquetColumn`'s own doc comment records that **row groups may arrive unordered**
     (hence its `seenRows` presence bitmap), so any accumulator in `onValue` would coalesce in
     delivery order and produce garbage on a multi-row-group file — nondeterministically, passing every
@@ -905,7 +1175,7 @@ writeup:
     `FRAME_PARQUET_COLUMN_NAMES` orders `frame_time_ms` before `generated`, so the frame times are
     already complete when that pass ends.
 
-  - [ ] **Migration `0040_frame_analysis.sql`** — `runs.rendered_frame_analysis jsonb`,
+  - [x] **Migration `0040_frame_analysis.sql`** — `runs.rendered_frame_analysis jsonb`,
     `runs.present_time_profile jsonb`, `runs.frame_analysis_version integer`, plus the nulls-first
     partial index, following `0030_diagnostics_watermark.sql`. `FRAME_ANALYSIS_VERSION = 1` in
     `packages/shared/src/constants.ts` next to `DIAGNOSTICS_RULE_GENERATION`.
@@ -915,7 +1185,7 @@ writeup:
       the lane that exists to reach it. Leave the watermark null and let `nulls first` make those
       rows highest-priority — the same reason 0030's own comment insists the predicate carry an
       `is null` branch.
-  - [ ] **Fourth lane in `FULL_REPROCESS_ENQUEUE_SQL`**, mirroring `diagnostics_generation_candidates`
+  - [x] **Fourth lane in `FULL_REPROCESS_ENQUEUE_SQL`**, mirroring `diagnostics_generation_candidates`
     verbatim, with `FRAME_ANALYSIS_VERSION` as `$6`. Write paths that must stamp:
     `applyVerificationResult` and `applyReprocessResult` (so `ReprocessResult` gains fields);
     `failVerificationJob` never stamps, which is exactly the population the `is null` branch reaches;
@@ -929,7 +1199,7 @@ writeup:
       diagnostics arrays rather than renumbering — that class of bug writes the wrong value into the
       right column with no type error and no test failure.
 
-  - [ ] **Wire + UI.** `renderedFrameAnalysisSchema` as a `z.discriminatedUnion("state", …)` added to
+  - [x] **Wire + UI.** `renderedFrameAnalysisSchema` as a `z.discriminatedUnion("state", …)` added to
     `runResponseSchema`; `RUN_WITH_SUMMARY_SELECT` + `RunRow` + `rowToRun` in `db.ts` (two single-row
     callers only, so no list-query cost).
     - **`present_time_profile` stays off the wire.** §22.13 ships with no user-visible annotation;
@@ -938,6 +1208,8 @@ writeup:
     - `page.tsx:60` does `runResponseSchema.parse(run)` and zod strips unknown keys — forget the
       schema field and the column plumbs all the way from Postgres to the page boundary and then
       vanishes with no error. Pin it with a schema-test assertion.
+    - **Correction:** `busy-readiness.ts` lives in `apps/web/src/components/run/`, not `lib/run/`;
+      `rendered-rate-readiness.ts` sits beside it there.
     - New `rendered-rate-readiness.ts`, a structural copy of `busy-readiness.ts`: one module owns the
       verdict and its reason string, shared by the toggle, the caption and the tests. A `Segmented`
       (`Presented` | `Rendered`) in a header row above `RunStatTiles` — not in the chart header, which
@@ -969,7 +1241,7 @@ writeup:
       phase is about. `generateMetadata`'s share-card FPS stays on the canonical presented value;
       record that choice in the docs.
 
-- [ ] 22.13 **Physics-based frame-generation evidence — characterisation only, no rule.** Detect
+- [x] 22.13 **Physics-based frame-generation evidence — characterisation only, no rule.** Detect
   undeclared frame generation from WITHIN a run, not by comparing it to an aggregate.
   - The signal: sub-millisecond presents. The two captures above showed a 0.32 ms minimum with
     frame generation on versus 3.11 ms with it off. A 0.32 ms present is not a plausible rendered
@@ -981,7 +1253,7 @@ writeup:
     generation is 3–4x, and the multiplier drifts with base framerate). Comparability keys control
     resolution/preset/upscaler/scene, but settings vary within a preset and a CPU-bound section
     moves FPS more than frame generation does.
-  - [ ] Store a `present_time_profile` from the same Parquet pass: `minFrameTimeMs`, the low-tail
+  - [x] Store a `present_time_profile` from the same Parquet pass: `minFrameTimeMs`, the low-tail
     nearest-rank percentiles (`p0_1`/`p1`/`p5` — free, `summarizeSortedFrameTimes` already sorts
     ascending), `subMillisecondPresentCount`/`Fraction`, `adjacentSubMillisecondPairFraction`, and
     **`medianOverMinRatio`**. Threshold as a named constant
@@ -992,12 +1264,12 @@ writeup:
       that the multiplier drifts. On the measured pair it separates 5x: 4.10/0.32 = **12.8** with
       frame generation on against 7.65/3.11 = **2.46** with it off. On n = 1 it is still worth
       nothing, and the doc must say that in those words.
-  - [ ] **No rule, no annotation, nothing on the wire.** The statistics accumulate from real uploads
+  - [x] **No rule, no annotation, nothing on the wire.** The statistics accumulate from real uploads
     until they can be calibrated on more than one vendor. **Evidence, never an accusation** (§0.5):
     telling an honest uploader their run looks like cheating is a worse failure than missing a
     dishonest one, and a false positive is unfalsifiable from the uploader's side. A threshold fitted
     to one GPU, one title and one resolution cannot carry that weight.
-  - [ ] `docs/frame-generation.md`: what the pipeline can and cannot see (only PresentMon v2
+  - [x] `docs/frame-generation.md`: what the pipeline can and cannot see (only PresentMon v2
     `--track_frame_type`, and why AMD cannot); the measured RX 9070 XT table with capture conditions;
     the coalescing definition with the worked arithmetic (243.9 presented → 121.9 rendered vs 130.7
     measured FG-off, and why −6.7% is expected); why naive filtering is wrong, with the 243.9 = 243.9
@@ -1006,11 +1278,11 @@ writeup:
     idle sections); and the explicit statement that no rule ships and no run is annotated. Cross-link
     from wanted-list item 9 in the fixtures README.
 
-- [ ] **Housekeeping this phase must not leave behind.**
-  - [ ] `packages/parsers/fixtures/README.md:80-81` still claims "`generatedFramePct` is always 0 and
+- [x] **Housekeeping this phase must not leave behind.**
+  - [x] `packages/parsers/fixtures/README.md:80-81` still claims "`generatedFramePct` is always 0 and
     `generatedFrameTech` always resolves to `none`" — §22.11 already invalidated that and this phase's
     fixtures invalidate it twice over.
-  - [ ] Settle `PHYSICS.recomputeTolerance` (`integrity.ts:30-33`), dead except for its own test.
+  - [x] Settle `PHYSICS.recomputeTolerance` (`integrity.ts:30-33`), dead except for its own test.
     **Do not** wire it into `verify-run.ts`: `floatsMatch` uses a `1e-6` relative epsilon, so adopting
     `0.01` would loosen the integrity gate by four orders of magnitude. Either delete it with its
     test, or comment at `floatsMatch` that `summaryMismatch` deliberately does not use it and why.
@@ -1020,31 +1292,46 @@ writeup:
   switches the tiles, the smoothness bars and the chart together; a capture with no frame-type
   evidence shows the toggle disabled with its reason as visible text; `present_time_profile` is
   populated on both members of the measured RX 9070 XT pair and appears nowhere in the API response
+  - [ ] **Not performed on a real capture, and not performable here.** No frame-generated capture
+    with frame-type evidence is obtainable on the available AMD hardware (§22.6) — the same block
+    that has held wanted-list item 9 open. The synthetic fixture below is the acceptance path;
+    the real-capture verification lands with that fixture, not with this phase
 - **Regression**:
-  - [ ] New `frame-generation.test.ts`: forward-convention coalescing on a hand-built stream; the
+  - [x] New `frame-generation.test.ts`: forward-convention coalescing on a hand-built stream; the
     `renderedCount − 1` invariant; `Σ intervals = t[last] − t[first]`; leading/trailing accounting;
-    `undefined` rows absorbed; each of the three unavailable states. Property test (fast-check is
-    already a parsers devDependency): an all-`false` stream yields `d[0..n−2]`, proving the
-    "it would just duplicate the presented summary" assumption false
-  - [ ] Dual-summary golden fixtures (hand-computed, both rates) — synthetic, per the `fixtures/README.md`
-    16a.1 procedure, since no real FG capture is obtainable on AMD hardware (§22.6). Suggested shape:
-    12 rows alternating rendered `d = 8 ms` / generated `d = 0.4 ms`, so presented avg = `1000×12/50.4`
-    and rendered avg = `1000×5/42.0` = 119.05 — both checkable by hand. Plus an
-    application-only fixture for the `no-generated-frames` branch
-  - [ ] Toggle absent — and said to be absent, as visible text — when the capture carries no
-    frame-type evidence; busy overlay forced off with its reason in rendered mode
-  - [ ] `verify-run.unit.test.ts`: **`summaryMismatch` is unchanged by a frame-generated run**, and the
+    `undefined` rows absorbed; each of the **four** unavailable/available states. Property test
+    (fast-check is already a parsers devDependency): an all-`false` stream yields `d[0..n−2]`,
+    proving the "it would just duplicate the presented summary" assumption false
+  - [x] Dual-summary golden fixture: `presentmon/v2-frame-generation.csv`, synthetic per the
+    `fixtures/README.md` 16a.1 procedure. **12 PAIRS, not the 12 rows the plan suggested** — 6
+    rendered presents bound only 5 intervals, below `MIN_RENDERED_INTERVALS` (10), so the suggested
+    shape would correctly return `too-few-rendered-presents` instead of a rate. Both hand-computed
+    rates are unchanged by the larger count: presented `1000×24/100.8` = 238.095, rendered
+    `1000×11/92.4` = 119.048. The golden harness now asserts `renderedFrameAnalysis` whenever a
+    fixture declares one. The application-only case is covered by a unit test asserting it is
+    `toEqual` the no-column case (see the `no-generated-frames` correction above) rather than a
+    second CSV
+  - [x] Toggle absent — and said to be absent, as visible text — when the capture carries no
+    frame-type evidence; busy overlay forced off with its reason in rendered mode. Plus the tile
+    swap (Generated frames % → Interpolated presents) and all four readiness states
+  - [x] `verify-run.unit.test.ts`: **`summaryMismatch` is unchanged by a frame-generated run**, and the
     rendered analysis never influences the validated/flagged verdict. This is decision 1's guarantee
     and the one a future reader is most likely to "fix"
   - [ ] Reprocess: the fourth lane enqueues a null-watermark run and skips a current-version one
     (mirroring the §17.8.0 case), both write paths stamp, and the new lane is proven index-backed by
-    the existing EXPLAIN assertion
-  - [ ] Functional e2e (non-`@visual`): `makeSyntheticFrames` already emits three-state `generated`
-    (40% true / 60% false) in a non-alternating 3-of-5 pattern, so the fixture run gets a real toggle
-    and exercises the off-by-one — but `global-setup.ts` must seed the new columns directly
+    the existing EXPLAIN assertion — **NOT RUN: needs Postgres.** Partially compensated by
+    `repo/frame-analysis-params.unit.test.ts`, which runs on the DB-free tier and asserts the
+    highest `$n` each write statement references equals the parameters supplied, that the two jsonb
+    values are appended last, that neither is `coalesce`d, and that the lane binds `$6` with no
+    unreferenced gap. Verified by mutation. The EXPLAIN assertion still needs
+    `runs_frame_analysis_version_idx` added and a real run
+  - [ ] Functional e2e (non-`@visual`): `global-setup.ts` now seeds the three columns directly (since
+    `insertRun` deliberately does not), and the fixture's analysis was confirmed `available` —
+    4,320 rendered / 2,880 generated, 68.99 rendered FPS against 114.96 presented, exercising the
+    off-by-one on a non-alternating stream. **The suite itself has NOT been run: needs Docker**
   - [ ] `@visual` baselines will churn: the toggle changes the run-page header region. Use the
     one-click **Regenerate visual baselines** `workflow_dispatch`, planned rather than discovered in CI
-  - [ ] Physics rule fires on a known-FG capture and stays silent on the matched non-FG one —
+  - [x] Physics rule fires on a known-FG capture and stays silent on the matched non-FG one —
     **deferred with the rule** (decision 2). No rule ships this phase, so there is nothing to assert
 
 ### Phase 9.6 Regression Gate
@@ -1053,6 +1340,10 @@ writeup:
   implying either
 - `RunSummary`, `summaryMismatch` and the client upload contract are byte-for-byte unchanged — the
   §11.5 recompute gate did not move to accommodate this phase
+- **Outstanding before this phase can be called done:** the DB-backed vitest tier (reprocess lane,
+  `repo.test.ts`, the EXPLAIN index assertion), the functional e2e suite, and the `@visual`
+  regeneration. All three need Docker or a `TEST_DATABASE_URL`, neither of which was available on
+  the dev box — they have not been run, not merely not been written. CI covers all three.
 - The frame-generation signature is characterised, stored and documented, and **no run is annotated
   or auto-rejected for it**; the calibration gap is written down rather than papered over with a
   threshold fitted to one machine

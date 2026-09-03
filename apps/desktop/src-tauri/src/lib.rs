@@ -40,6 +40,12 @@ mod mangohud;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod presentmon;
 mod signing;
+// §8.8a build pinning resolves an install from the captured process, and only
+// the Windows backend has a pid — the MangoHud watcher sees a log file, not a
+// process. The parsing is deliberately pure so BOTH runners still test it (see
+// AGENTS.md); it is only the resolver that has no caller on Linux.
+#[cfg_attr(not(windows), allow(dead_code))]
+mod steam;
 mod stream;
 mod upload;
 #[cfg_attr(not(windows), allow(dead_code))]

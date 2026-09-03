@@ -173,6 +173,24 @@ export const CAPABILITY_MANIFEST_VERSION = 1;
 export const DIAGNOSTICS_RULE_GENERATION = 1;
 
 /**
+ * Frame-analysis algorithm version (§22.12). A run stores the version its
+ * rendered-frame analysis and present-time profile were computed under
+ * (`runs.frame_analysis_version`), so the reprocess full lane can recompute
+ * every run when the coalescing algorithm changes — the same run-level
+ * watermark shape as {@link DIAGNOSTICS_RULE_GENERATION}.
+ *
+ * Unlike the diagnostics watermark, this one is deliberately NOT backfilled by
+ * its migration: no existing row has ever had a frame analysis computed, so
+ * stamping them would permanently hide the historical corpus from the lane that
+ * exists to reach it. Unstamped rows sort `nulls first` and are the
+ * highest-priority candidates.
+ *
+ * Bump whenever the coalescing definition, the stored statistics, or the
+ * unavailable-state vocabulary changes.
+ */
+export const FRAME_ANALYSIS_VERSION = 1;
+
+/**
  * Closed metric vocabulary persisted inside `DiagnosticEvidence` (§16b.2).
  * Additions are shared-contract changes: the rules engine, wire schema, and
  * human-label map must move together so no raw or silently dropped key reaches

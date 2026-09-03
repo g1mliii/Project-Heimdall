@@ -13,7 +13,12 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom/vitest";
 import { computeRunSummary } from "@heimdall/parsers";
-import { makeSyntheticFrames, RUN_STATUS, syntheticRunBase } from "@heimdall/shared";
+import {
+  makeSyntheticFrames,
+  presentFrameTypeCode,
+  RUN_STATUS,
+  syntheticRunBase,
+} from "@heimdall/shared";
 import type { CapabilityManifest, MethodologyManifest, Run } from "@heimdall/shared";
 import type { ApiResult } from "@/lib/api/client";
 import { buildFrameSeries, type FrameSeries } from "@/lib/run/frame-series";
@@ -489,7 +494,7 @@ describe("Busy-time overlay gating (§8.6.8)", () => {
       />,
     );
     await screen.findByRole("img", { name: "Frame-time progression chart" });
-    expect(loader).toHaveBeenCalledWith(run.id, expect.anything(), { busyColumns: true });
+    expect(loader).toHaveBeenCalledWith(run.id, expect.anything(), { busyColumns: true, generatedColumn: false });
 
     const toggle = screen.getByRole("switch", { name: "Busy time" });
     expect(toggle).toBeEnabled();
@@ -636,7 +641,7 @@ describe("Busy-time overlay gating (§8.6.8)", () => {
     render(<RunPageClient run={{ ...run, capabilityManifest: absent }} loadFrames={loader} />);
     await screen.findByRole("img", { name: "Frame-time progression chart" });
 
-    expect(loader).toHaveBeenCalledWith(run.id, expect.anything(), { busyColumns: false });
+    expect(loader).toHaveBeenCalledWith(run.id, expect.anything(), { busyColumns: false, generatedColumn: false });
   });
 });
 
@@ -734,5 +739,232 @@ describe("RunStatTiles", () => {
     expect(screen.getByText("14.2")).toBeInTheDocument();
     expect(screen.getByText("Stutter events")).toBeInTheDocument();
     expect(screen.getByText("12")).toBeInTheDocument();
+  });
+});
+
+describe("Rendered-rate toggle (§22.12)", () => {
+  /**
+   * A capture with real frame-type evidence: alternating rendered/generated
+   * presents, 8 ms / 0.4 ms, so the two rates are far enough apart to tell
+   * which one a surface is showing.
+   */
+  const fgFrames = Array.from({ length: 60 }, (_, i) => ({
+    timeMs: i * 4.2,
+    frameTimeMs: i % 2 === 0 ? 8 : 0.4,
+    generated: i % 2 !== 0,
+  }));
+  const fgSeries = buildFrameSeries(fgFrames);
+  // Through the codec, not raw 2/1 literals — a fixture that hardcodes the
+  // wire values keeps passing if PRESENT_FRAME_TYPE is ever renumbered.
+  const fgPresentTypes = Uint8Array.from(fgFrames, (frame) =>
+    presentFrameTypeCode(frame.generated),
+  );
+  const fgLoader: FramesLoader = () =>
+    Promise.resolve({ ok: true, data: { ...fgSeries, presentTypes: fgPresentTypes } });
+
+  /** 30 rendered presents → 29 intervals of 8.4 ms → 1000 × 29 / 243.6. */
+  const RENDERED_AVG_FPS = ((1000 * 29) / 243.6).toFixed(1);
+
+  function fgRun(): Run {
+    return {
+      ...run,
+      summary: computeRunSummary(fgFrames),
+      renderedFrameAnalysis: {
+        state: "available",
+        summary: computeRunSummary(
+          Array.from({ length: 29 }, (_, i) => ({ timeMs: i * 8.4, frameTimeMs: 8.4 })),
+        ),
+        renderedCount: 30,
+        generatedCount: 30,
+        unknownCount: 0,
+      },
+    };
+  }
+
+  it("switches the tiles, the bars and the chart together", async () => {
+    render(<RunPageClient run={fgRun()} loadFrames={fgLoader} />);
+    await screen.findByRole("img", { name: "Frame-time progression chart" });
+
+    const toggle = screen.getByRole("button", { name: "Rendered" });
+    await userEvent.click(toggle);
+
+    // The rendered rate replaces the presented one everywhere it appears — the
+    // tile and the smoothness bar both read from one source.
+    expect(screen.getAllByText(RENDERED_AVG_FPS).length).toBeGreaterThan(0);
+    // And the presented rate is gone, rather than left beside it.
+    expect(screen.queryByText(computeRunSummary(fgFrames).avgFps.toFixed(1))).not.toBeInTheDocument();
+  });
+
+  it("replaces the generated-frames tile instead of reporting 0%", async () => {
+    // Fed a rendered summary, `generatedFramePct` is 0 by construction — the
+    // exact false claim §22.11 removed. The tile must become a count.
+    render(<RunPageClient run={fgRun()} loadFrames={fgLoader} />);
+    await screen.findByRole("img", { name: "Frame-time progression chart" });
+    expect(screen.getByText("Generated frames")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Rendered" }));
+
+    expect(screen.queryByText("Generated frames")).not.toBeInTheDocument();
+    expect(screen.getByText("Interpolated presents")).toBeInTheDocument();
+    expect(screen.getByText("30")).toBeInTheDocument();
+  });
+
+  it("forces the busy overlay off in rendered mode, with its reason visible", async () => {
+    render(
+      <RunPageClient
+        run={{ ...fgRun(), capabilityManifest: busyCapableManifest() }}
+        loadFrames={() =>
+          Promise.resolve({
+            ok: true,
+            data: {
+              ...fgSeries,
+              presentTypes: fgPresentTypes,
+              cpuBusyMs: Float64Array.from(fgFrames, () => 4),
+              gpuBusyMs: Float64Array.from(fgFrames, () => 5),
+            },
+          })
+        }
+      />,
+    );
+    await screen.findByRole("img", { name: "Frame-time progression chart" });
+    expect(screen.getByRole("switch", { name: "Busy time" })).toBeEnabled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Rendered" }));
+
+    expect(screen.getByRole("switch", { name: "Busy time" })).toBeDisabled();
+    expect(screen.getByText(/do not survive coalescing/)).toBeVisible();
+  });
+
+  it("decodes the frame-type column only when an analysis exists", async () => {
+    const loader = vi.fn<FramesLoader>(fgLoader);
+    render(<RunPageClient run={fgRun()} loadFrames={loader} />);
+    await screen.findByRole("img", { name: "Frame-time progression chart" });
+    expect(loader).toHaveBeenCalledWith(run.id, expect.anything(), {
+      busyColumns: false,
+      generatedColumn: true,
+    });
+  });
+
+  it("disables the toggle and NAMES the reason when the capture has no frame type", async () => {
+    // The §22.12 rule: stated, not silently omitted. A hidden control would
+    // leave a frame-generated run's presented numbers looking like the whole
+    // story.
+    render(
+      <RunPageClient
+        run={{ ...run, renderedFrameAnalysis: { state: "no-frame-type-evidence" } }}
+        loadFrames={okLoader}
+      />,
+    );
+    await screen.findByRole("img", { name: "Frame-time progression chart" });
+
+    expect(screen.getByRole("button", { name: "Rendered" })).toBeDisabled();
+    expect(screen.getByText(/Capture does not report frame type/)).toBeVisible();
+    // Names WHY it cannot, so "fix your capture" is not the implied advice.
+    expect(screen.getByText(/Intel-PresentMon provider/)).toBeVisible();
+  });
+
+  it("never claims the presented rate is already the rendered rate (§22.11)", async () => {
+    // An all-`Application` capture reaches `no-frame-type-evidence`, so the
+    // page must say the capture cannot report frame type — NOT that the two
+    // rates coincide. The reference AMD capture had frame generation on and
+    // every row labelled `Application`; telling that uploader their presented
+    // 243.9 FPS is already their rendered rate is the false claim this phase
+    // exists to remove.
+    render(
+      <RunPageClient
+        run={{ ...run, renderedFrameAnalysis: { state: "no-frame-type-evidence" } }}
+        loadFrames={okLoader}
+      />,
+    );
+    await screen.findByRole("img", { name: "Frame-time progression chart" });
+
+    expect(screen.getByRole("button", { name: "Rendered" })).toBeDisabled();
+    expect(screen.getByText(/Capture does not report frame type/)).toBeVisible();
+    expect(screen.queryByText(/already the rendered rate/)).not.toBeInTheDocument();
+  });
+
+  it("names the count when too few presents were labelled rendered", async () => {
+    render(
+      <RunPageClient
+        run={{
+          ...run,
+          renderedFrameAnalysis: {
+            state: "too-few-rendered-presents",
+            renderedCount: 4,
+            generatedCount: 96,
+            unknownCount: 0,
+          },
+        }}
+        loadFrames={okLoader}
+      />,
+    );
+    await screen.findByRole("img", { name: "Frame-time progression chart" });
+    expect(screen.getByText(/Only 4 presents were labelled as rendered/)).toBeVisible();
+  });
+
+  it("coalesces once per capture, not once per toggle click", async () => {
+    // The memo this replaced was keyed on the toggle, so its cache was thrown
+    // away exactly when it was about to be reused. Coalescing is O(n) over up
+    // to 500k frames, so a reader flipping back and forth must not pay it more
+    // than once.
+    const built: number[] = [];
+    const countingSeries = {
+      ...fgSeries,
+      presentTypes: fgPresentTypes,
+      get frameTimes() {
+        built.push(1);
+        return fgSeries.frameTimes;
+      },
+    };
+    render(
+      <RunPageClient
+        run={fgRun()}
+        loadFrames={() => Promise.resolve({ ok: true, data: countingSeries as FrameSeries })}
+      />,
+    );
+    await screen.findByRole("img", { name: "Frame-time progression chart" });
+
+    const before = built.length;
+    await userEvent.click(screen.getByRole("button", { name: "Rendered" }));
+    const afterFirst = built.length;
+    expect(afterFirst).toBeGreaterThan(before);
+
+    await userEvent.click(screen.getByRole("button", { name: "Presented" }));
+    await userEvent.click(screen.getByRole("button", { name: "Rendered" }));
+    // The second switch reuses the cache: no further reads of the source column.
+    expect(built.length).toBe(afterFirst);
+  });
+
+  it("names a reason while the frames are still loading", async () => {
+    // Previously the one arm where the control was disabled with no title and
+    // no caption — the §8.6.6 failure `rendered-rate-readiness` claims to avoid.
+    render(
+      <RunPageClient run={fgRun()} loadFrames={() => new Promise<never>(() => {})} />,
+    );
+    expect(screen.getByRole("button", { name: "Rendered" })).toBeDisabled();
+    expect(screen.getByText(/once the frame data finishes loading/)).toBeVisible();
+  });
+
+  it("stays on the presented view when the decoded frames cannot be coalesced", async () => {
+    // Server says `available`, but the decode carries no present-type column.
+    // The page must not switch the tiles and leave the trace behind.
+    render(
+      <RunPageClient run={fgRun()} loadFrames={() => Promise.resolve({ ok: true, data: fgSeries })} />,
+    );
+    await screen.findByRole("img", { name: "Frame-time progression chart" });
+    await userEvent.click(screen.getByRole("button", { name: "Rendered" }));
+
+    expect(screen.getByText(/no usable frame-type column/)).toBeVisible();
+    // Presented numbers intact; the interpolated-presents tile never appears.
+    expect(screen.getByText("Generated frames")).toBeInTheDocument();
+    expect(screen.queryByText("Interpolated presents")).not.toBeInTheDocument();
+  });
+
+  it("says the rate is pending rather than deficient on an unverified run", async () => {
+    render(<RunPageClient run={run} loadFrames={okLoader} />);
+    await screen.findByRole("img", { name: "Frame-time progression chart" });
+
+    expect(screen.getByRole("button", { name: "Rendered" })).toBeDisabled();
+    expect(screen.getByText(/appears once verification recomputes/)).toBeVisible();
   });
 });

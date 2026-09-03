@@ -468,6 +468,64 @@ describe("complete screen", () => {
     expect(await screen.findByText("Uploaded")).toBeInTheDocument();
   });
 
+  it("uploads the OBSERVED Steam build beside the declared game build (§8.8a)", async () => {
+    // The capture reports a build; the uploader declares nothing about it.
+    ipc.startCapture.mockImplementation(async () => {
+      const started = {
+        pid: 42,
+        process: "Cyberpunk2077.exe",
+        steamBuild: {
+          appid: 1091500,
+          buildid: "20383525",
+          branch: "public-beta",
+          appName: "Cyberpunk 2077",
+        },
+      };
+      handlers.get("capture://started")?.(started);
+      return started;
+    });
+    uploadCaptureBytes.mockResolvedValue({
+      ok: true,
+      runId: "run_build",
+      managementToken: "t",
+      captureSource: "presentmon",
+      summary: {},
+      warnings: [],
+    });
+    await reachComplete();
+    await userEvent.click(screen.getByRole("button", { name: /Upload & share/ }));
+
+    await waitFor(() => expect(uploadCaptureBytes).toHaveBeenCalled());
+    const [, options] = uploadCaptureBytes.mock.calls[0]!;
+    expect(options.methodology.steamAppId).toBe(1091500);
+    // A STRING: Steam identifiers are not arithmetic values.
+    expect(options.methodology.steamBuildId).toBe("20383525");
+    expect(options.methodology.steamBranch).toBe("public-beta");
+    // Observed never becomes declared — the user typed no game build.
+    expect(options.methodology.gameBuild).toBeUndefined();
+  });
+
+  it("omits the build fields entirely when nothing was observed", async () => {
+    // Non-Steam title, or any Linux capture. Absent must read as unknown, and a
+    // fabricated value would be indistinguishable from a real observation.
+    uploadCaptureBytes.mockResolvedValue({
+      ok: true,
+      runId: "run_nobuild",
+      managementToken: "t",
+      captureSource: "presentmon",
+      summary: {},
+      warnings: [],
+    });
+    await reachComplete();
+    await userEvent.click(screen.getByRole("button", { name: /Upload & share/ }));
+
+    await waitFor(() => expect(uploadCaptureBytes).toHaveBeenCalled());
+    const [, options] = uploadCaptureBytes.mock.calls[0]!;
+    expect(options.methodology.steamAppId).toBeUndefined();
+    expect(options.methodology.steamBuildId).toBeUndefined();
+    expect(options.methodology.steamBranch).toBeUndefined();
+  });
+
   it("retains ambiguous-finalize recovery until the claim page opens", async () => {
     uploadCaptureBytes.mockResolvedValue({
       ok: false,

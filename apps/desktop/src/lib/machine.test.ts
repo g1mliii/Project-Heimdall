@@ -355,3 +355,43 @@ describe("formatElapsed", () => {
     expect(formatElapsed(-5)).toBe("00:00");
   });
 });
+
+describe("observed Steam build (§8.8a)", () => {
+  const started = (extra: Record<string, unknown>) => ({
+    type: "capture-started" as const,
+    started: { pid: 1, process: "cs2.exe", ...extra },
+  });
+
+  it("carries the build from the started event into state", () => {
+    const state = run([
+      started({
+        steamBuild: {
+          appid: 730,
+          buildid: "25000182",
+          branch: "csgo_legacy",
+          appName: "Counter-Strike 2",
+        },
+      }),
+    ]);
+    expect(state.steamBuild).toEqual({
+      appid: 730,
+      buildid: "25000182",
+      branch: "csgo_legacy",
+      appName: "Counter-Strike 2",
+    });
+  });
+
+  it("is null, not undefined, when the capture observed no Steam install", () => {
+    // A non-Steam title, or a Linux capture where the watcher has no pid.
+    expect(run([started({})]).steamBuild).toBeNull();
+  });
+
+  it("clears a previous capture's build when a new watcher arms", () => {
+    const withBuild = run([started({ steamBuild: { appid: 730, buildid: "1" } })]);
+    const armed = run(
+      [{ type: "capture-armed", armed: ARMED }],
+      withBuild,
+    );
+    expect(armed.steamBuild).toBeNull();
+  });
+});

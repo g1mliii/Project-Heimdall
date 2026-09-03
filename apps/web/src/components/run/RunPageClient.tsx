@@ -14,6 +14,7 @@ import { RUN_STATUS, type Run } from "@heimdall/shared";
 import type { BenchmarkSetStats } from "@heimdall/parsers";
 import { loadRunFrames, type ApiResult, type FrameDecodeOptions } from "@/lib/api/client";
 import type { FrameSeries } from "@/lib/run/frame-series";
+import { buildRenderedSeries } from "@/lib/run/rendered-series";
 import { findStutterIndices, medianFrameTimeMs } from "@/lib/run/stutters";
 import { CHART_UNITS, type ChartUnit } from "@/lib/run/units";
 import { CAPTION_STYLE } from "../primitives";
@@ -24,6 +25,15 @@ import {
   hagsQualification,
   type BusyReadiness,
 } from "./busy-readiness";
+import {
+  BUSY_RENDERED_MODE_REASON,
+  RATE_MODE,
+  SERIES_UNAVAILABLE_REASON,
+  renderedRateCaption,
+  renderedRateReadiness,
+  renderedRateToggleReadiness,
+  type RateMode,
+} from "./rendered-rate-readiness";
 import { RunHeader } from "./RunHeader";
 import { RunStatTiles } from "./RunStatTiles";
 import { SmoothnessBars } from "./SmoothnessBars";
@@ -112,11 +122,82 @@ export function RunPageClient({
   const [attempt, setAttempt] = React.useState(0);
   const [unit, setUnit] = React.useState<ChartUnit>("ms");
   const [busyOverlay, setBusyOverlay] = React.useState(false);
+  const [rateMode, setRateMode] = React.useState<RateMode>(RATE_MODE.presented);
   const [claimToken, setClaimToken] = React.useState<string>();
 
   React.useEffect(() => {
     setClaimToken(consumeClaimHandoff(run.id, claimable));
   }, [run.id, claimable]);
+
+  // §22.12 rate toggle. The verdict is server-decided; this only reads it.
+  const rateReadiness = renderedRateReadiness(run.renderedFrameAnalysis);
+  const serverAnalysis = rateReadiness.kind === "ready" ? rateReadiness.analysis : undefined;
+
+  // Coalescing up to 500k frames is a visible hang, so it happens at most ONCE
+  // per loaded capture: lazily (nothing is paid by a reader who never switches)
+  // and cached in a ref keyed on the series identity (so the second, third and
+  // tenth switch are free). A `useMemo` keyed on the toggle cannot do this —
+  // its cache is discarded the moment the toggle flips back, which is exactly
+  // when it would need to be kept.
+  const renderedCacheRef = React.useRef<{
+    source: FrameSeries;
+    series: FrameSeries | undefined;
+    stutterIndices: Uint32Array | undefined;
+  }>(undefined);
+  // Whether the control may be offered — server verdict plus loaded frames.
+  const toggleReadiness = renderedRateToggleReadiness(rateReadiness, frames.kind === "ready");
+  const rateToggleable = toggleReadiness.kind === "ready";
+  const wantsRendered = rateToggleable && rateMode === RATE_MODE.rendered;
+
+  // `serverAnalysis` is non-null whenever `wantsRendered` is — both derive from
+  // `rateReadiness.kind === "ready"` — but naming it in the guard is what lets
+  // the compiler see that, and it documents the dependency besides.
+  if (
+    wantsRendered &&
+    serverAnalysis &&
+    frames.kind === "ready" &&
+    renderedCacheRef.current?.source !== frames.series
+  ) {
+    const series = buildRenderedSeries(frames.series);
+    renderedCacheRef.current = {
+      source: frames.series,
+      series,
+      // The rendered stream has its own median, hence its own stutter
+      // threshold — reusing the presented one would mark the wrong frames.
+      stutterIndices: series
+        ? findStutterIndices(series.frameTimes, serverAnalysis.summary.frameTimeP50Ms)
+        : undefined,
+    };
+  }
+  const cachedRendered =
+    frames.kind === "ready" && renderedCacheRef.current?.source === frames.series
+      ? renderedCacheRef.current
+      : undefined;
+
+  // Rendered mode requires the series to have ACTUALLY built. Every rendered
+  // surface reads `renderedAnalysis`/`showRendered`, so a coalesce that yields
+  // nothing keeps the whole page on the presented view instead of switching the
+  // numbers and leaving the trace behind.
+  const renderedSeries = wantsRendered ? cachedRendered?.series : undefined;
+  const showRendered = wantsRendered && renderedSeries !== undefined;
+  const renderedSeriesFailed = wantsRendered && renderedSeries === undefined;
+  const renderedStutterIndices = showRendered ? cachedRendered?.stutterIndices : undefined;
+  const renderedAnalysis = showRendered ? serverAnalysis : undefined;
+
+  // What the tiles, bars and chart all read. One source, so they cannot drift
+  // into showing a rendered chart under presented numbers.
+  const activeSummary = renderedAnalysis ? renderedAnalysis.summary : run.summary;
+
+  // The single line under the toggle, resolved once so the three cases stay
+  // mutually exclusive and none of them can go unstated.
+  const rateCaption =
+    toggleReadiness.kind === "unavailable"
+      ? toggleReadiness.reason
+      : renderedSeriesFailed
+        ? SERIES_UNAVAILABLE_REASON
+        : renderedAnalysis
+          ? renderedRateCaption(renderedAnalysis)
+          : undefined;
 
   // The manifest verdict, derived once: it gates both the overlay control and
   // whether the busy columns are worth decoding at all.
@@ -125,13 +206,23 @@ export function RunPageClient({
     declaredReadiness,
     frames.kind === "ready" ? frames.series : undefined,
   );
-  const busyToggleable = unavailableReason === undefined && unit === "ms" && frames.kind === "ready";
+  // Busy time is forced off in rendered mode: `cpuBusyMs`/`gpuBusyMs` are
+  // per-present and do not survive coalescing, so drawing them against rendered
+  // intervals would be a fabricated trace.
+  const busyToggleable =
+    unavailableReason === undefined &&
+    unit === "ms" &&
+    !showRendered &&
+    frames.kind === "ready";
   const busyDrawn = busyToggleable && busyOverlay;
   // Why the toggle is off, as text the reader can actually see. The Switch
   // forwards `title` to its visible label for pointer users, but a tooltip alone
   // is still insufficient — the same visible-text rule §8.6.6 applies to the
   // smoothness sample count.
-  const busyOffReason = unavailableReason ?? (unit !== "ms" ? BUSY_UNIT_REASON : undefined);
+  const busyOffReason =
+    unavailableReason ??
+    (showRendered ? BUSY_RENDERED_MODE_REASON : undefined) ??
+    (unit !== "ms" ? BUSY_UNIT_REASON : undefined);
 
   // Decode busy columns in the same pass only for a manifest that can expose
   // the overlay. Deferring until the first toggle would require retaining up to
@@ -139,12 +230,19 @@ export function RunPageClient({
   // object a second time; two bounded column passes during the existing decode
   // are the cheaper and lower-memory trade-off (§8.6.8).
   const busyDeclared = declaredReadiness.kind === "ready";
+  // Same trade-off for the frame-type column: decode it during the existing
+  // pass only when the stored analysis says a rendered rate exists, so a run
+  // that will never offer the toggle pays nothing.
+  const generatedDeclared = rateReadiness.kind === "ready";
 
   React.useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
     setFrames({ kind: "loading" });
-    void loadFrames(run.id, controller.signal, { busyColumns: busyDeclared })
+    void loadFrames(run.id, controller.signal, {
+      busyColumns: busyDeclared,
+      generatedColumn: generatedDeclared,
+    })
       .then((result) => {
         if (cancelled) return;
         if (result.ok) {
@@ -175,7 +273,15 @@ export function RunPageClient({
       cancelled = true;
       controller.abort();
     };
-  }, [run.id, run.status, run.summary.frameTimeP50Ms, loadFrames, busyDeclared, attempt]);
+  }, [
+    run.id,
+    run.status,
+    run.summary.frameTimeP50Ms,
+    loadFrames,
+    busyDeclared,
+    generatedDeclared,
+    attempt,
+  ]);
 
   return (
     <main id="main-content" tabIndex={-1} className={styles.page}>
@@ -190,7 +296,35 @@ export function RunPageClient({
           }}
         />
       )}
-      <RunStatTiles summary={run.summary} />
+      {/* §22.12 rate toggle. Above the tiles rather than in the chart header,
+          which would imply chart-only scope — it switches the tiles, the
+          smoothness bars and the trace together. Disabled with a VISIBLE
+          reason, the same rule the busy Switch follows. */}
+      <div className={styles.rateHeader}>
+        <div className={styles.rateSwitch}>
+          <span className="heimdall-overline">Rate</span>
+          <Segmented
+            value={showRendered ? RATE_MODE.rendered : RATE_MODE.presented}
+            onChange={(value) => setRateMode(value as RateMode)}
+            options={[
+              { value: RATE_MODE.presented, label: "Presented" },
+              { value: RATE_MODE.rendered, label: "Rendered" },
+            ]}
+            disabled={!rateToggleable}
+            title={toggleReadiness.kind === "unavailable" ? toggleReadiness.reason : undefined}
+          />
+        </div>
+        {/* Exactly one of: why the control is off, why the rendered view could
+            not be drawn, or what the rendered numbers mean. Never nothing while
+            the control is disabled — that is the §8.6.6 rule. */}
+        {rateCaption === undefined ? null : <p style={CAPTION_STYLE}>{rateCaption}</p>}
+      </div>
+      <RunStatTiles
+        summary={activeSummary}
+        {...(showRendered && renderedAnalysis
+          ? { interpolatedPresents: renderedAnalysis.generatedCount }
+          : {})}
+      />
 
       <div className={styles.mainGrid}>
         {/* Frame-time chart card */}
@@ -267,10 +401,12 @@ export function RunPageClient({
                 )}
                 {frames.kind === "ready" && (
                   <FrameTimeChart
-                    series={frames.series}
-                    stutterIndices={frames.stutterIndices}
+                    series={renderedSeries ?? frames.series}
+                    stutterIndices={renderedStutterIndices ?? frames.stutterIndices}
                     unit={unit}
-                    avgFps={run.summary.avgFps}
+                    // Drives the good-zone band, so it must be the rate the
+                    // trace is actually drawn from.
+                    avgFps={activeSummary.avgFps}
                     showBusy={busyDrawn}
                   />
                 )}
@@ -293,7 +429,10 @@ export function RunPageClient({
               >
                 Smoothness tiers
               </span>
-              <SmoothnessBars summary={run.summary} />
+              {/* Derived from the same three FPS numbers as the tiles, so it
+                  switches with them — leaving it on presented values directly
+                  beneath a rendered chart is the inconsistency §22.12 is about. */}
+              <SmoothnessBars summary={activeSummary} />
             </div>
           </Card.Body>
         </Card>

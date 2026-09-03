@@ -21,11 +21,12 @@ import {
 import {
   query,
   getPool,
-  diagnosticInsertColumns,
   diagnosticInsertSql,
+  frameAnalysisUpdateSql,
   RETRY_BACKOFF_SECS_SQL,
-  summaryColumns,
+  SqlParams,
   summaryUpdateSql,
+  type FrameAnalysisResult,
   type Queryable,
 } from "../db";
 
@@ -40,7 +41,7 @@ export interface ClaimedJob {
 }
 
 /** Canonical worker output committed together after a successful verification. */
-export interface VerificationResult {
+export interface VerificationResult extends FrameAnalysisResult {
   summary: RunSummary;
   runStatus: "validated" | "flagged";
   signatureValid: boolean | null;
@@ -197,50 +198,62 @@ export async function applyVerificationResult(
   // job retry replaces the prior run's findings rather than duplicating them
   // (idempotent across the ≤5 attempts). Empty arrays clear findings and insert
   // none — a run that used to warn and no longer does ends clean.
+  const params = new SqlParams();
+  const runIdParam = params.add(runId);
+  const jobId = params.add(claim.id);
+  const attempts = params.add(claim.attempts);
+  const status = params.add(result.runStatus);
+  const signatureValid = params.add(result.signatureValid);
+  const generatedFrameTech = params.add(result.generatedFrameTech);
+  const capabilityManifest = params.add(
+    result.capabilityManifest ? JSON.stringify(result.capabilityManifest) : null,
+  );
+  const settingsJson = params.add(
+    result.methodologyManifest ? JSON.stringify(result.methodologyManifest) : null,
+  );
+  // Each fragment appends its own values and reports back the placeholders it
+  // bound, so adding one here can no longer silently shift another's offsets.
+  const guard = "exists (select 1 from run_update)";
+  const frameAnalysis = frameAnalysisUpdateSql(params, result);
+  const summaryUpdate = summaryUpdateSql(params, runIdParam, result.summary, guard);
+  const diagnosticInsert = diagnosticInsertSql(params, runIdParam, result.diagnostics, guard);
+
   await db.query(
     `with job_claim as (
         select 1
          from verification_jobs
-        where id = $16
-          and run_id = $1
+        where id = ${jobId}
+          and run_id = ${runIdParam}
           and status = 'running'
-          and attempts = $17
+          and attempts = ${attempts}
      ), run_update as (
        update runs
-          set status = $13, signature_valid = $14,
-              generated_frame_tech = $15,
-              capability_manifest = $18::jsonb,
-              capability_manifest_version = ($18::jsonb ->> 'version')::integer,
-              settings_json = $19::jsonb,
-              methodology_manifest_version = ($19::jsonb ->> 'version')::integer,
+          set status = ${status}, signature_valid = ${signatureValid},
+              generated_frame_tech = ${generatedFrameTech},
+              capability_manifest = ${capabilityManifest}::jsonb,
+              capability_manifest_version = (${capabilityManifest}::jsonb ->> 'version')::integer,
+              settings_json = ${settingsJson}::jsonb,
+              methodology_manifest_version = (${settingsJson}::jsonb ->> 'version')::integer,
               -- These findings were evaluated at the current diagnostics rule
               -- generation, so stamp the §17.8.0 watermark; a freshly verified
               -- run is never re-enqueued by the generation lane.
               diagnostics_rule_generation = ${DIAGNOSTICS_RULE_GENERATION},
-              diagnostics_evaluated_at = now()
-        where id = $1
+              diagnostics_evaluated_at = now(),
+              -- §22.12: this recompute produced a frame analysis at the current
+              -- algorithm version, so stamp the watermark.
+              ${frameAnalysis}
+        where id = ${runIdParam}
           and ${writableRunStatusSql()}
           and exists (select 1 from job_claim)
         returning id
      ), summary_update as (
-       ${summaryUpdateSql(1, 2, "exists (select 1 from run_update)")}
+       ${summaryUpdate}
      ), diagnostics_delete as (
        delete from diagnostics
-        where run_id = $1
-          and exists (select 1 from run_update)
+        where run_id = ${runIdParam}
+          and ${guard}
      )
-     ${diagnosticInsertSql(1, 20, "exists (select 1 from run_update)")}`,
-    [
-      runId,
-      ...summaryColumns(result.summary),
-      result.runStatus,
-      result.signatureValid,
-      result.generatedFrameTech,
-      claim.id,
-      claim.attempts,
-      result.capabilityManifest ? JSON.stringify(result.capabilityManifest) : null,
-      result.methodologyManifest ? JSON.stringify(result.methodologyManifest) : null,
-      ...diagnosticInsertColumns(result.diagnostics),
-    ],
+     ${diagnosticInsert}`,
+    params.all,
   );
 }

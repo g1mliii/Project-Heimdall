@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "allowJs": true,
+    "types": ["./worker-configuration.d.ts", "node"]
+  },
+  "include": ["src/**/*.ts", "worker-configuration.d.ts"]
+}

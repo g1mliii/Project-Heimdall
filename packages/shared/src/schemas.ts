@@ -175,6 +175,33 @@ export const runSummarySchema = z.object({
   durationSeconds: z.number().positive(),
 });
 
+/**
+ * Rendered-only rate under frame generation, or the typed reason there is none
+ * (§22.12).
+ *
+ * A discriminated union rather than an optional summary, mirroring
+ * `vramCapacitySchema`: "stated, not silently omitted" becomes structural
+ * instead of a copy convention every surface has to remember. The counts ride
+ * along on the unavailable arms too, so the UI can say "only N presents were
+ * labelled as rendered" without a second query.
+ */
+const presentTypeCountsShape = {
+  renderedCount: z.number().int().nonnegative(),
+  generatedCount: z.number().int().nonnegative(),
+  unknownCount: z.number().int().nonnegative(),
+};
+
+export const renderedFrameAnalysisSchema = z.discriminatedUnion("state", [
+  z.object({
+    state: z.literal("available"),
+    summary: runSummarySchema,
+    ...presentTypeCountsShape,
+  }),
+  z.object({ state: z.literal("no-frame-type-evidence") }),
+  z.object({ state: z.literal("too-few-rendered-presents"), ...presentTypeCountsShape }),
+]);
+export type RenderedFrameAnalysisDto = z.infer<typeof renderedFrameAnalysisSchema>;
+
 /* ── Capability manifest (§16a.3/§16a.4) ─────────────────────────────────── */
 
 export const presentationModeSchema = z.enum([
@@ -243,6 +270,14 @@ export const framePacingSchema = z.object({
 export const methodologyManifestSchema = z.object({
   version: z.number().int().positive().default(METHODOLOGY_MANIFEST_VERSION),
   gameBuild: metadataTextSchema.optional(),
+  // §8.8a observed build identity. The buildid stays a decimal STRING — Steam
+  // identifiers are not arithmetic, and a JSON number would be a double.
+  steamAppId: z.number().int().positive().optional(),
+  steamBuildId: z
+    .string()
+    .regex(/^[0-9]{1,20}$/, "steamBuildId must be a decimal string")
+    .optional(),
+  steamBranch: metadataTextSchema.optional(),
   scene: indexedMetadataTextSchema.optional(),
   sceneType: sceneTypeSchema,
   settingsPreset: indexedMetadataTextSchema.optional(),
@@ -745,6 +780,28 @@ export const runResponseSchema = z.object({
   methodologyManifest: methodologyManifestSchema.optional(),
   benchmarkSetId: metadataTextSchema.optional(),
   isWarmup: z.boolean().optional(),
+  /**
+   * §22.12. Optional because an unverified run has no analysis yet — the run
+   * page says "rendered rate appears once verification recomputes this run"
+   * rather than implying either rate.
+   *
+   * `.catch(undefined)` is load-bearing, not defensive noise. This value is
+   * stored jsonb written under whatever `FRAME_ANALYSIS_VERSION` was current at
+   * the time, migration 0040 deliberately leaves the watermark null so old rows
+   * persist until the reprocess lane drains, and `page.tsx` parses with the
+   * THROWING `.parse`. Without the catch, any future change to the state
+   * vocabulary — the collapse of `no-generated-frames` in this very phase was
+   * one — turns every un-reprocessed run page into a 500 until the backlog
+   * clears. With it, an unrecognised blob degrades to "no analysis yet", which
+   * is both true and self-correcting.
+   *
+   * `presentTimeProfile` is deliberately NOT here, for the same reason
+   * `ownerId` is not: it exists internally (§22.13 calibration) and no viewer
+   * needs it. Shipping an unexposed frame-generation suspicion score to every
+   * reader of every run is precisely what §0.5 warns against — evidence, never
+   * an accusation. Do not add it without a reason a viewer needs it.
+   */
+  renderedFrameAnalysis: renderedFrameAnalysisSchema.optional().catch(undefined),
 });
 export type RunResponse = z.infer<typeof runResponseSchema>;
 

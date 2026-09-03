@@ -251,6 +251,14 @@ export function getFramesUrl(
  */
 export interface FrameDecodeOptions {
   busyColumns?: boolean;
+  /**
+   * §22.12 — decode the `generated` column into present-type codes so the
+   * rendered-rate toggle can rebuild the chart. Defaults to FALSE and is
+   * threaded only when the run's stored analysis is `available`, the same
+   * rationale as `busyColumns`: a run with no frame-type evidence must not pay
+   * an extra full column pass for a control it will never offer.
+   */
+  generatedColumn?: boolean;
 }
 
 /** Fetch the signed Parquet URL and decode it directly into chart columns. */

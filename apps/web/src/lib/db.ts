@@ -11,7 +11,11 @@
  */
 
 import pg from "pg";
-import { DIAGNOSTICS, normalizeMethodologyManifest } from "@heimdall/shared";
+import {
+  DIAGNOSTICS,
+  FRAME_ANALYSIS_VERSION,
+  normalizeMethodologyManifest,
+} from "@heimdall/shared";
 import type {
   CapabilityManifest,
   ConfidenceLevel,
@@ -25,6 +29,8 @@ import type {
 import type {
   DiagnosticsDriverCatalog,
   DiagnosticsDriverPlatform,
+  PresentTimeProfile,
+  RenderedFrameAnalysis,
 } from "@heimdall/parsers";
 import { DIAGNOSTIC_RULES } from "@heimdall/parsers";
 import { getDbEnv } from "./env";
@@ -169,6 +175,8 @@ interface RunRow extends pg.QueryResultRow {
   settings_json: MethodologyManifest | null;
   benchmark_set_id: string | null;
   is_warmup: boolean;
+  /** §22.12; null until the verify worker has recomputed the run. */
+  rendered_frame_analysis: RenderedFrameAnalysis | null;
   schema_version: number;
   parser_version: string;
   created_at: Date;
@@ -191,7 +199,7 @@ const RUN_WITH_SUMMARY_SELECT = `select r.id, r.user_id, r.game_raw, r.gpu_hardw
         r.cpu_model, r.gpu_model, r.gpu_vendor, r.gpu_driver, r.gpu_vram_total_mb,
         r.ram_gb, r.ram_rated_mtps, r.ram_actual_mtps, r.os_build, r.resolution,
         r.generated_frame_tech, r.frames_object_key, r.capability_manifest, r.settings_json,
-        r.benchmark_set_id, r.is_warmup,
+        r.benchmark_set_id, r.is_warmup, r.rendered_frame_analysis,
         r.schema_version, r.parser_version, r.created_at,
         s.avg_fps, s.p1_low_fps, s.p01_low_fps,
         s.frametime_p50_ms, s.frametime_p95_ms, s.frametime_p99_ms,
@@ -249,6 +257,11 @@ function rowToRun(row: RunRow, diagnostics: Diagnostic[]): Run {
     methodologyManifest: row.settings_json ?? undefined,
     ...(row.benchmark_set_id === null ? {} : { benchmarkSetId: row.benchmark_set_id }),
     ...(row.is_warmup ? { isWarmup: true } : {}),
+    // §22.12. Null until verification recomputes the run; `present_time_profile`
+    // is deliberately NOT selected or mapped — it never leaves the database.
+    ...(row.rendered_frame_analysis === null
+      ? {}
+      : { renderedFrameAnalysis: row.rendered_frame_analysis }),
   };
 }
 
@@ -283,6 +296,45 @@ const SUMMARY_COLUMNS = [
 ] as const;
 
 /**
+ * Positional-parameter accumulator for a hand-written statement.
+ *
+ * Postgres parameters are positional, and this codebase assembles several large
+ * CTEs from reusable SQL fragments. Those fragments used to take the index they
+ * should start numbering from — `summaryUpdateSql(1, 2)`,
+ * `diagnosticInsertSql(1, 20)` — which the caller computed by counting an array
+ * built fifty lines further down. Insert a value anywhere but the end and every
+ * later offset is silently wrong: the statement still runs, the parameter count
+ * still matches, and the wrong value lands in the right column with no type
+ * error and nothing for a row-inspecting test to catch.
+ *
+ * With this, a fragment ASKS for a placeholder as it appends the value behind
+ * it, so the two cannot disagree. No `$n` is written by hand anywhere, and
+ * inserting a value is safe by construction rather than by careful counting.
+ *
+ * A value referenced in several places is added ONCE and its placeholder
+ * reused — see how `runId` threads through the callers below.
+ */
+export class SqlParams {
+  private readonly values: unknown[] = [];
+
+  /** Append one value; returns the `$n` that now refers to it. */
+  add(value: unknown): string {
+    this.values.push(value);
+    return `$${this.values.length}`;
+  }
+
+  /** Append several values in order; returns their placeholders in order. */
+  addAll(values: readonly unknown[]): string[] {
+    return values.map((value) => this.add(value));
+  }
+
+  /** The bound values, in the order their placeholders were handed out. */
+  get all(): unknown[] {
+    return this.values;
+  }
+}
+
+/**
  * Transpose a summary into positional parameters in {@link SUMMARY_COLUMNS}
  * order.
  *
@@ -307,8 +359,8 @@ export function summaryColumns(summary: RunSummary): (number | ConfidenceLevel)[
 }
 
 /** `$n, $n+1, …` for the summary values, for the insert form. */
-export function summaryValuesSql(firstSummaryParameter: number): string {
-  return SUMMARY_COLUMNS.map((_, i) => `$${firstSummaryParameter + i}`).join(", ");
+export function summaryValuesSql(params: SqlParams, summary: RunSummary): string {
+  return params.addAll(summaryColumns(summary)).join(", ");
 }
 
 /** The `run_summaries` column list, for the insert form. */
@@ -317,21 +369,54 @@ export function summaryInsertColumnsSql(): string {
 }
 
 /**
- * The complete `run_summaries` update. `runIdParameter` and
- * `firstSummaryParameter` make it usable from any CTE without restating the
- * column order; `guardSql` gates the write on the caller's claim.
+ * The complete `run_summaries` update, usable from any CTE without restating
+ * the column order. `guardSql` gates the write on the caller's claim.
  */
 export function summaryUpdateSql(
-  runIdParameter: number,
-  firstSummaryParameter: number,
+  params: SqlParams,
+  runIdPlaceholder: string,
+  summary: RunSummary,
   guardSql?: string,
 ): string {
+  const values = summaryColumns(summary);
   const assignments = SUMMARY_COLUMNS.map(
-    (column, i) => `${column} = $${firstSummaryParameter + i}`,
+    (column, i) => `${column} = ${params.add(values[i])}`,
   ).join(", ");
   return `update run_summaries
           set ${assignments}
-        where run_id = $${runIdParameter}${guardSql ? `\n          and ${guardSql}` : ""}`;
+        where run_id = ${runIdPlaceholder}${guardSql ? `\n          and ${guardSql}` : ""}`;
+}
+
+/**
+ * §22.12/§22.13 frame-analysis output, committed alongside a recompute.
+ *
+ * One definition shared by `VerificationResult` and `ReprocessResult`: both
+ * write paths stamp the same three columns, and a copy in each would be a copy
+ * to drift. `insertRun` deliberately does NOT write these — see the comment
+ * there.
+ */
+export interface FrameAnalysisResult {
+  renderedFrameAnalysis: RenderedFrameAnalysis;
+  /** Never reaches the wire; stored for §22.13 calibration only. */
+  presentTimeProfile: PresentTimeProfile | undefined;
+}
+
+/**
+ * The `runs` assignments that stamp a frame analysis, for use inside a CTE.
+ *
+ * Deliberately NOT wrapped in `coalesce(...)` the way the nullable columns
+ * around it are: a run whose analysis becomes unavailable under a new algorithm
+ * version must LOSE the stored value, not silently keep a stale one that no
+ * longer describes any computation we would perform today.
+ */
+export function frameAnalysisUpdateSql(params: SqlParams, result: FrameAnalysisResult): string {
+  const [rendered, profile] = params.addAll([
+    JSON.stringify(result.renderedFrameAnalysis),
+    result.presentTimeProfile ? JSON.stringify(result.presentTimeProfile) : null,
+  ]);
+  return `rendered_frame_analysis = ${rendered}::jsonb,
+              present_time_profile = ${profile}::jsonb,
+              frame_analysis_version = ${FRAME_ANALYSIS_VERSION}`;
 }
 
 /**
@@ -373,26 +458,23 @@ export function diagnosticInsertColumns(
 }
 
 /**
- * The complete diagnostics insert/unnest shape. `runIdParameter` and
- * `firstFindingParameter` make it usable in both a standalone write and a
- * larger CTE without duplicating column order, aliases, or casts. The evidence
- * text[] is cast to jsonb per row so a null element stays a SQL null.
+ * The complete diagnostics insert/unnest shape, usable in both a standalone
+ * write and a larger CTE without duplicating column order, aliases, or casts.
+ * The evidence text[] is cast to jsonb per row so a null element stays a SQL
+ * null.
  */
 export function diagnosticInsertSql(
-  runIdParameter: number,
-  firstFindingParameter: number,
+  params: SqlParams,
+  runIdPlaceholder: string,
+  diagnostics: readonly DiagnosticFinding[],
   guardSql?: string,
 ): string {
-  const codeParameter = firstFindingParameter;
-  const severityParameter = codeParameter + 1;
-  const titleParameter = codeParameter + 2;
-  const detailParameter = codeParameter + 3;
-  const evidenceParameter = codeParameter + 4;
-  const ruleVersionParameter = codeParameter + 5;
-  const confidenceParameter = codeParameter + 6;
+  const [code, severity, title, detail, evidence, ruleVersion, confidence] = params.addAll(
+    diagnosticInsertColumns(diagnostics),
+  );
   return `insert into diagnostics (run_id, code, severity, title, detail, evidence, rule_version, confidence, evaluated_at)
-     select $${runIdParameter}, code, severity, title, detail, evidence::jsonb, rule_version, confidence, now()
-       from unnest($${codeParameter}::text[], $${severityParameter}::text[], $${titleParameter}::text[], $${detailParameter}::text[], $${evidenceParameter}::text[], $${ruleVersionParameter}::text[], $${confidenceParameter}::text[])
+     select ${runIdPlaceholder}, code, severity, title, detail, evidence::jsonb, rule_version, confidence, now()
+       from unnest(${code}::text[], ${severity}::text[], ${title}::text[], ${detail}::text[], ${evidence}::text[], ${ruleVersion}::text[], ${confidence}::text[])
          as finding(code, severity, title, detail, evidence, rule_version, confidence)${guardSql ? `\n      where ${guardSql}` : ""}`;
 }
 
@@ -408,10 +490,9 @@ export async function insertDiagnostics(
   db: Queryable = getPool(),
 ): Promise<void> {
   if (diagnostics.length === 0) return;
-  await db.query(
-    diagnosticInsertSql(1, 2),
-    [runId, ...diagnosticInsertColumns(diagnostics)],
-  );
+  const params = new SqlParams();
+  const sql = diagnosticInsertSql(params, params.add(runId), diagnostics);
+  await db.query(sql, params.all);
 }
 
 /** Read a run's diagnostics in insertion order (stable render order). */
@@ -496,6 +577,15 @@ export interface InsertRunOptions {
  * cannot be claimed by a separate request between check and insert. This
  * remains one network round trip on the app's primary write path (Neon is
  * remote; an explicit begin/insert/insert/commit would cost 4 RTTs).
+ *
+ * This deliberately does NOT write `rendered_frame_analysis`,
+ * `present_time_profile` or `frame_analysis_version` (§22.12). That is not an
+ * oversight to be tidied up: there is no client contract for a rendered
+ * summary, and inventing one would make an uploader's claim about frame
+ * generation load-bearing — exactly the trust violation this phase removes. The
+ * columns stay null until the verify worker computes them from the stored
+ * Parquet, and a null watermark is precisely what makes the run visible to the
+ * frame-analysis reprocess lane.
  */
 export async function insertRun(
   run: Run,
@@ -522,18 +612,66 @@ export async function insertRun(
     run.generatedFrameTech,
   );
   const resolution = methodologyManifest?.resolution ?? hw.resolution ?? null;
+  // Each placeholder is named beside the value it binds, so the column list and
+  // the parameter array cannot drift apart. This statement carries fifty-odd
+  // parameters and reuses several (`benchmarkSetId` three times); numbering it
+  // by hand meant every insertion renumbered everything after it.
+  const p = new SqlParams();
+  const id = p.add(run.id);
+  const userId = p.add(run.ownerId ?? null);
+  const gameRaw = p.add(run.game);
+  const gpuHardwareId = p.add(canonicalIdParam(hw.canonicalGpuId, "canonicalGpuId"));
+  const cpuHardwareId = p.add(canonicalIdParam(hw.canonicalCpuId, "canonicalCpuId"));
+  const captureSource = p.add(run.captureSource);
+  const visibility = p.add(run.visibility);
+  const status = p.add(run.status);
+  const signatureValid = p.add(run.signatureValid ?? null);
+  const cpuModel = p.add(hw.cpu);
+  const gpuModel = p.add(hw.gpu);
+  const gpuVendor = p.add(hw.gpuVendor ?? null);
+  const gpuDriver = p.add(hw.gpuDriver ?? null);
+  const ramGb = p.add(hw.ramGb ?? null);
+  const ramRatedMtps = p.add(hw.ramRatedSpeedMtps ?? null);
+  const ramActualMtps = p.add(hw.ramSpeedMtps ?? null);
+  const osBuild = p.add(hw.os ?? null);
+  const resolutionParam = p.add(resolution);
+  const generatedFrameTech = p.add(run.generatedFrameTech);
+  const framesObjectKey = p.add(run.framesObjectKey ?? null);
+  const schemaVersion = p.add(run.schemaVersion);
+  const parserVersion = p.add(run.parserVersion);
+  const createdAt = p.add(run.createdAt);
+  const gpuVramTotalMb = p.add(hw.gpuVramTotalMb ?? null);
+  const capabilityManifest = p.add(
+    run.capabilityManifest ? JSON.stringify(run.capabilityManifest) : null,
+  );
+  const capabilityManifestVersion = p.add(run.capabilityManifest?.version ?? null);
+  const settingsJson = p.add(methodologyManifest ? JSON.stringify(methodologyManifest) : null);
+  const methodologyManifestVersion = p.add(methodologyManifest?.version ?? null);
+  const upscaler = p.add(methodologyManifest?.upscaler ?? null);
+  const rayTracing = p.add(methodologyManifest?.rayTracing ?? null);
+  const framePacingCap = p.add(methodologyManifest?.framePacing.capFps ?? null);
+  const vsync = p.add(methodologyManifest?.framePacing.vsync ?? null);
+  const vrr = p.add(methodologyManifest?.framePacing.vrr ?? null);
+  const sceneType = p.add(methodologyManifest?.sceneType ?? null);
+  const benchmarkSetId = p.add(run.benchmarkSetId ?? null);
+  const isWarmup = p.add(run.isWarmup ?? false);
+  const benchmarkSetSecret = p.add(benchmarkSetSecretHash ?? null);
+  const graphicsApi = p.add(methodologyManifest?.graphicsApi ?? null);
+  const scene = p.add(methodologyManifest?.scene ?? null);
+  const settingsPreset = p.add(methodologyManifest?.settingsPreset ?? null);
+  const summaryValues = summaryValuesSql(p, summary);
   const rows = await query<{ run_id: string | null; owner_writable: boolean }>(
     `with owner_writable as materialized (
-       select $2::text is null or exists (
+       select ${userId}::text is null or exists (
          select 1
            from users
-          where id = $2
+          where id = ${userId}
             and erasure_requested_at is null
        ) as allowed
      ), benchmark_set as (
        insert into benchmark_sets (id, secret_hash)
-       select $46::text, $48::text
-        where $46::text is not null
+       select ${benchmarkSetId}::text, ${benchmarkSetSecret}::text
+        where ${benchmarkSetId}::text is not null
        on conflict (id) do update
          set secret_hash = excluded.secret_hash
        where benchmark_sets.secret_hash = excluded.secret_hash
@@ -551,51 +689,30 @@ export async function insertRun(
          upscaler, ray_tracing, frame_pacing_cap, vsync, vrr, scene_type,
          benchmark_set_id, is_warmup, graphics_api, scene, settings_preset
        ) select
-         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-         $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
-         $36::jsonb, $37,
-         $38::jsonb, $39, $40, $41, $42, $43, $44, $45, $46, $47, $49, $50, $51
-       where ($46::text is null or exists (select 1 from benchmark_set))
+         ${id}, ${userId}, ${gameRaw}, ${gpuHardwareId}, ${cpuHardwareId},
+         ${captureSource}, ${visibility}, ${status}, ${signatureValid},
+         ${cpuModel}, ${gpuModel}, ${gpuVendor}, ${gpuDriver},
+         ${ramGb}, ${ramRatedMtps}, ${ramActualMtps}, ${osBuild}, ${resolutionParam},
+         ${generatedFrameTech}, ${framesObjectKey},
+         ${schemaVersion}, ${parserVersion}, ${createdAt}, ${gpuVramTotalMb},
+         ${capabilityManifest}::jsonb, ${capabilityManifestVersion},
+         ${settingsJson}::jsonb, ${methodologyManifestVersion},
+         ${upscaler}, ${rayTracing}, ${framePacingCap}, ${vsync}, ${vrr}, ${sceneType},
+         ${benchmarkSetId}, ${isWarmup}, ${graphicsApi}, ${scene}, ${settingsPreset}
+       where (${benchmarkSetId}::text is null or exists (select 1 from benchmark_set))
          and (select allowed from owner_writable)
        returning id
      ), inserted as (
        insert into run_summaries (
        run_id, ${summaryInsertColumnsSql()}
-      ) select $1, ${summaryValuesSql(25)}
+      ) select ${id}, ${summaryValues}
           from run_row
         returning run_id
       )
       select inserted.run_id, owner_writable.allowed as owner_writable
         from owner_writable
        left join inserted on true`,
-    [
-      run.id, run.ownerId ?? null, run.game,
-      canonicalIdParam(hw.canonicalGpuId, "canonicalGpuId"),
-      canonicalIdParam(hw.canonicalCpuId, "canonicalCpuId"),
-      run.captureSource, run.visibility, run.status, run.signatureValid ?? null,
-      hw.cpu, hw.gpu, hw.gpuVendor ?? null, hw.gpuDriver ?? null,
-      hw.ramGb ?? null, hw.ramRatedSpeedMtps ?? null, hw.ramSpeedMtps ?? null,
-      hw.os ?? null, resolution,
-      run.generatedFrameTech, run.framesObjectKey ?? null,
-      run.schemaVersion, run.parserVersion, run.createdAt, hw.gpuVramTotalMb ?? null,
-      ...summaryColumns(summary),
-      run.capabilityManifest ? JSON.stringify(run.capabilityManifest) : null,
-      run.capabilityManifest?.version ?? null,
-      methodologyManifest ? JSON.stringify(methodologyManifest) : null,
-      methodologyManifest?.version ?? null,
-      methodologyManifest?.upscaler ?? null,
-      methodologyManifest?.rayTracing ?? null,
-      methodologyManifest?.framePacing.capFps ?? null,
-      methodologyManifest?.framePacing.vsync ?? null,
-      methodologyManifest?.framePacing.vrr ?? null,
-      methodologyManifest?.sceneType ?? null,
-      run.benchmarkSetId ?? null,
-      run.isWarmup ?? false,
-      benchmarkSetSecretHash ?? null,
-      methodologyManifest?.graphicsApi ?? null,
-      methodologyManifest?.scene ?? null,
-      methodologyManifest?.settingsPreset ?? null,
-    ],
+    p.all,
     db,
   );
   const result = rows[0];

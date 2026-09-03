@@ -168,6 +168,36 @@ export function parseOptionalFrameParquetGenerated(
   return value;
 }
 
+/**
+ * Tri-state present type as a compact code (§22.12).
+ *
+ * The rendered-rate coalescer needs to tell "this present was rendered" from
+ * "this present was interpolated" from "we were never told" — three states, one
+ * per row, for up to `INGEST_LIMITS.maxFramesPerRun` rows. A boxed
+ * `(boolean | null)[]` would rebuild exactly the object graph the columnar path
+ * exists to avoid, so the codes live in a `Uint8Array` instead.
+ *
+ * This lives in shared rather than parsers because the browser decoder
+ * (`decodeFrameParquetToSeries`) fills the same array and must not import
+ * parsers — the same reason `parseOptionalFrameParquetGenerated` is here.
+ */
+export const PRESENT_FRAME_TYPE = {
+  /** No frame-type information for this row. Never "rendered" by default. */
+  unknown: 0,
+  /** The capture labelled this present as application-rendered. */
+  rendered: 1,
+  /** The capture labelled this present as engine-generated (interpolated). */
+  generated: 2,
+} as const;
+
+export type PresentFrameType = (typeof PRESENT_FRAME_TYPE)[keyof typeof PRESENT_FRAME_TYPE];
+
+/** Map a nullable `generated` flag to its {@link PRESENT_FRAME_TYPE} code. */
+export function presentFrameTypeCode(generated: boolean | undefined): PresentFrameType {
+  if (generated === undefined) return PRESENT_FRAME_TYPE.unknown;
+  return generated ? PRESENT_FRAME_TYPE.generated : PRESENT_FRAME_TYPE.rendered;
+}
+
 /** Validate one nullable numeric sensor value from a frame-Parquet column. */
 export function parseOptionalFrameParquetNumber(
   name: string,

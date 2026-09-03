@@ -66,6 +66,13 @@ pub struct CaptureStarted {
     /// Advisory anti-cheat notice (§24.4) — never a reason to refuse capture.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anti_cheat: Option<String>,
+    /// Observed Steam build for the captured process (§8.8a).
+    ///
+    /// Absent for a non-Steam game, an unfindable Steam install, and every
+    /// Linux capture (the watcher reports pid 0, so there is no process to
+    /// resolve). Absent must read as "unknown", never as "not on Steam".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub steam_build: Option<crate::steam::SteamBuild>,
 }
 
 /// The watcher is live but MangoHud has not written a log yet (§23.1).
@@ -577,6 +584,9 @@ mod backend {
             source_found: true,
             start: CaptureStart::Started(CaptureStarted {
                 pid: target.pid,
+                // One file read against the local Steam install; nothing here
+                // touches the network, and every failure yields None.
+                steam_build: crate::steam::detect(target.pid),
                 process: target.process,
                 anti_cheat,
             }),
@@ -862,6 +872,10 @@ mod backend {
                             pid: 0,
                             process,
                             anti_cheat: None,
+                            // The watcher sees a log file, not a process, so
+                            // there is no pid to resolve an install from.
+                            // Build pinning does not apply on this backend.
+                            steam_build: None,
                         },
                     );
                     continue;
@@ -989,11 +1003,15 @@ mod tests {
             pid: 4242,
             process: "Cyberpunk2077.exe".into(),
             anti_cheat: None,
+            steam_build: None,
         }))
         .unwrap();
         assert_eq!(started["state"], "started");
         assert_eq!(started["pid"], 4242);
         assert!(started.get("antiCheat").is_none());
+        // Absent, not null: the webview must read a missing build as "unknown"
+        // rather than as a positive "this is not a Steam game".
+        assert!(started.get("steamBuild").is_none());
 
         let armed = serde_json::to_value(CaptureStart::Armed(CaptureArmed {
             log_dirs: vec!["/home/player/mangologs".into()],

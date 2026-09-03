@@ -103,6 +103,9 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0037_phase_8_online_indexes.sql",
       "0038_phase_8_validate_constraints.sql",
       "0039_canonical_graphics_api.sql",
+      "0040_frame_analysis.sql",
+      "0041_steam_ingest.sql",
+      "0042_steam_builds.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
@@ -133,6 +136,18 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
         "runs",
         "schema_migrations",
         "staging_cleanup_jobs",
+        "steam_app_builds",
+        "steam_app_changes",
+        "steam_app_depot_manifests",
+        "steam_app_depots",
+        "steam_app_tags",
+        "steam_app_updates",
+        "steam_apps",
+        "steam_pics_cursor",
+        "steam_player_counts",
+        "steam_price_snapshots",
+        "steam_raw_snapshots",
+        "steam_review_snapshots",
         "users",
         "verification_jobs",
         "verifications",

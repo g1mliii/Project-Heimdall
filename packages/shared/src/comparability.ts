@@ -225,3 +225,44 @@ export function missingComparabilityProfileFields(
     return value === undefined || value === "";
   });
 }
+
+/**
+ * How two runs' OBSERVED build identity relates (§8.8a, for the §25–§26
+ * before/after validator).
+ *
+ * DELIBERATELY NOT A COMPARABILITY KEY FIELD, and that is the load-bearing
+ * decision here. Adding the buildid to `KEY_FIELDS` would give every title a
+ * fresh set of buckets on every patch — and since outlier rejection and the
+ * bell curves are inert below the cold-start threshold (§17.4/§18.2), most
+ * distributions would silently stop rendering the day a game updated. Pooling
+ * across builds is what makes a distribution exist at all.
+ *
+ * So a build difference is a REASON, surfaced next to a delta, not a wall that
+ * splits the corpus. "Your two runs are on different builds" is exactly the
+ * sentence a before/after comparison needs; "this game has no distribution any
+ * more" is not.
+ *
+ * `unknown` is the honest answer whenever either side lacks an observation —
+ * a non-Steam title, a Linux capture, a browser upload, or two different apps —
+ * and callers must render it as unknown, never as "same".
+ */
+export type BuildIdentityRelation = "same-build" | "different-build" | "unknown";
+
+/** The subset of a manifest this predicate reads. */
+export type BuildIdentityInput = Pick<
+  MethodologyManifest,
+  "steamAppId" | "steamBuildId"
+> | null | undefined;
+
+export function buildIdentityRelation(
+  left: BuildIdentityInput,
+  right: BuildIdentityInput,
+): BuildIdentityRelation {
+  const leftBuild = left?.steamBuildId;
+  const rightBuild = right?.steamBuildId;
+  if (!leftBuild || !rightBuild) return "unknown";
+  // Two different apps are not a build difference; that is a different-game
+  // problem and belongs to whatever compared them, not here.
+  if (left?.steamAppId !== right?.steamAppId) return "unknown";
+  return leftBuild === rightBuild ? "same-build" : "different-build";
+}

@@ -70,8 +70,25 @@ export interface CaptureTarget {
   process: string;
 }
 
+/**
+ * Observed Steam build for the captured process (§8.8a), read by the Rust half
+ * from the local `appmanifest_<appid>.acf`.
+ *
+ * Absent for a non-Steam title, an unfindable Steam install, and every Linux
+ * capture (the MangoHud watcher reports pid 0, so there is no process to
+ * resolve). Absent means UNKNOWN, never "not on Steam".
+ */
+export interface SteamBuild {
+  appid: number;
+  /** Decimal string: a Steam identifier, never an arithmetic value. */
+  buildid: string;
+  branch?: string;
+  appName?: string;
+}
+
 export interface CaptureStarted extends CaptureTarget {
   antiCheat?: string;
+  steamBuild?: SteamBuild;
 }
 
 /**
