@@ -633,18 +633,50 @@ magnitude, and the honest fix there is a smaller working set, not a higher cap.
 > installed build. The desktop client is already on that machine at capture time.
 
 ### 8.8a — Local build pinning (no PICS, no new infrastructure)
-- [ ] 8.8a.1 Desktop client reads `buildid` (and the branch) from `appmanifest_<appid>.acf` in the
+- [x] 8.8a.1 Desktop client reads `buildid` (and the branch) from `appmanifest_<appid>.acf` in the
   library folder that holds the captured game; resolve the library via `libraryfolders.vdf`. Pure
   file parsing in the Rust half, so both platform runners test it.
-- [ ] 8.8a.2 Carry it through the §11 ingest contract onto `runs`, alongside the existing
+- [x] 8.8a.2 Carry it through the §11 ingest contract onto `runs`, alongside the existing
   `gameBuild` methodology field — which is today a free-text user claim, not an observed fact.
   Keep them distinct: one is declared, one is observed. Never overwrite the declaration.
-- [ ] 8.8a.3 Comparability: two runs on different buildids of the same title are a named,
+- [x] 8.8a.3 Comparability: two runs on different buildids of the same title are a named,
   displayable reason a delta may not be like-for-like. Follow the existing rule —
   `packages/shared/src/comparability.ts` owns this predicate, and nothing re-derives it.
 - **Why this first:** it is strictly local, needs no new deployment target, and delivers the exact
   fact §25-§26 wants. It self-suppresses cleanly: a non-Steam game or an unreadable library folder
   yields null, and null must never degrade a run.
+
+**Phase 8.8a implemented (2026-09-03).** `apps/desktop/src-tauri/src/steam.rs` — a
+small real VDF tokenizer (both Steam files are VDF, and `installdir` values contain
+spaces while Windows paths are backslash-escaped, so a regex was not viable),
+`libraryfolders.vdf` -> every library root, `appmanifest_<appid>.acf` -> appid, name,
+installdir, buildid and opted-in BetaKey.
+
+**Matching is PATH CONTAINMENT only, never a name guess.** The executable is resolved
+from the pid (`QueryFullProcessImageNameW` on Windows, `/proc/<pid>/exe` elsewhere)
+and matched against `<library>/steamapps/common/<installdir>` segment-wise — a plain
+string prefix would match "Portal 2 Demo" against "Portal 2", which a regression test
+pins. A wrong buildid is far worse than a missing one.
+
+**No migration.** `settings_json` has held the whole methodology manifest since 0017,
+which is explicit that only QUERYABLE comparability-key fields earn a column. The
+observed fields (`steamAppId`, `steamBuildId`, `steamBranch`) ride along; `gameBuild`
+stays the uploader's declared free-text claim and is never overwritten by an
+observation.
+
+**8.8a.3 is deliberately NOT a comparability key field.** Adding the buildid to
+`KEY_FIELDS` would give every title fresh buckets on every patch, and since outlier
+rejection and the bell curves are inert below the cold-start threshold (§17.4/§18.2),
+most distributions would silently stop rendering on patch day. Pooling ACROSS builds
+is what lets a distribution exist. `buildIdentityRelation` therefore returns a named
+reason for §25–§26 to display beside a delta, and a test asserts the key does not
+contain it.
+
+**Explicitly not delivered:** Linux build pinning. The MangoHud watcher reports pid 0
+— it sees a log file, not a process (§23.1) — so there is nothing to resolve an
+install from and the field is absent there. The PARSING is pure and both CI runners
+test it; only the resolver has no Linux caller, hence the `cfg_attr` dead-code guard.
+macOS is untouched.
 
 ### 8.8b — PICS collector (new deployment target — decide before building)
 - [ ] 8.8b.1 A long-lived process subscribing to the PICS changelist stream and recording, per app:

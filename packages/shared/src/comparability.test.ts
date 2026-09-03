@@ -8,6 +8,7 @@ import {
   comparabilityProfileSql,
   comparabilitySelectSql,
   type ComparabilityInput,
+  buildIdentityRelation,
 } from "./comparability";
 
 const base: ComparabilityInput = {
@@ -189,5 +190,38 @@ describe("comparabilityProfileSql", () => {
     ]) {
       expect(sql).toContain(`${column} is not null`);
     }
+  });
+});
+
+describe("buildIdentityRelation (§8.8a)", () => {
+  const on = (steamAppId: number, steamBuildId: string) => ({ steamAppId, steamBuildId });
+
+  it("names a real build difference between two runs of one game", () => {
+    expect(buildIdentityRelation(on(730, "25000182"), on(730, "25089218"))).toBe("different-build");
+  });
+
+  it("recognises two runs on the same build", () => {
+    expect(buildIdentityRelation(on(730, "25000182"), on(730, "25000182"))).toBe("same-build");
+  });
+
+  it("is unknown when either side never observed a build", () => {
+    // A browser upload, a non-Steam title, or a Linux capture (pid 0).
+    expect(buildIdentityRelation(on(730, "25000182"), undefined)).toBe("unknown");
+    expect(buildIdentityRelation(undefined, on(730, "25000182"))).toBe("unknown");
+    expect(buildIdentityRelation(on(730, "25000182"), {})).toBe("unknown");
+    expect(buildIdentityRelation(null, null)).toBe("unknown");
+  });
+
+  it("does not call two different apps a build difference", () => {
+    expect(buildIdentityRelation(on(730, "1"), on(570, "2"))).toBe("unknown");
+  });
+
+  it("stays OUT of the pooling key, so a patch cannot shatter a distribution", () => {
+    // The whole point: pooling across builds is what lets a distribution exist.
+    // If this ever becomes a key field, every game's buckets reset on patch day
+    // and fall below the cold-start threshold (§17.4/§18.2).
+    expect(Object.keys(base)).not.toContain("steamBuildId");
+    expect(Object.keys(base)).not.toContain("steamAppId");
+    expect(comparabilityKeySql()).not.toContain("steam_build");
   });
 });

@@ -216,8 +216,21 @@ export interface FramePacing {
 export interface MethodologyManifest {
   /** The {@link METHODOLOGY_MANIFEST_VERSION} this manifest was declared under. */
   version: number;
-  /** Game build/patch string (e.g. "2.1"). */
+  /** Game build/patch string (e.g. "2.1"). DECLARED — a free-text user claim. */
   gameBuild?: string;
+  /**
+   * OBSERVED Steam build identity (§8.8a), read by the desktop client from the
+   * local `appmanifest_<appid>.acf`. Deliberately separate from `gameBuild`:
+   * one is what the uploader says, this is what the machine had installed, and
+   * an observation must never overwrite a declaration. Absent means "unknown"
+   * — a non-Steam title, a Linux capture (the MangoHud watcher has no pid to
+   * resolve), or a browser upload — never "not on Steam".
+   */
+  steamAppId?: number;
+  /** Steam buildid as a STRING: an identifier, never an arithmetic value. */
+  steamBuildId?: string;
+  /** Opted-in beta branch; absent means the public branch. */
+  steamBranch?: string;
   /** Scene/route name within the game. */
   scene?: string;
   sceneType: SceneType;

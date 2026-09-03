@@ -270,6 +270,14 @@ export const framePacingSchema = z.object({
 export const methodologyManifestSchema = z.object({
   version: z.number().int().positive().default(METHODOLOGY_MANIFEST_VERSION),
   gameBuild: metadataTextSchema.optional(),
+  // §8.8a observed build identity. The buildid stays a decimal STRING — Steam
+  // identifiers are not arithmetic, and a JSON number would be a double.
+  steamAppId: z.number().int().positive().optional(),
+  steamBuildId: z
+    .string()
+    .regex(/^[0-9]{1,20}$/, "steamBuildId must be a decimal string")
+    .optional(),
+  steamBranch: metadataTextSchema.optional(),
   scene: indexedMetadataTextSchema.optional(),
   sceneType: sceneTypeSchema,
   settingsPreset: indexedMetadataTextSchema.optional(),
