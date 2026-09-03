@@ -11,13 +11,22 @@
 import type { ParseWarning } from "@heimdall/parsers";
 import type { RunSummary } from "@heimdall/shared";
 import type {
+  CaptureArmed,
   CaptureStarted,
   CaptureTarget,
   Environment,
   HotkeyState,
 } from "./ipc";
 
-export type Screen = "onboarding" | "ready" | "capturing" | "complete";
+/**
+ * `armed` is Linux-only (§23.1): the MangoHud watcher is live but the user has
+ * not pressed MangoHud's own logging hotkey yet, so no rows exist. It sits
+ * between `ready` and `capturing` because it is genuinely neither — showing
+ * `capturing` would run a timer over a capture that has not started, and staying
+ * on `ready` would hide the fact that Heimdall is now waiting on the user.
+ * Windows goes straight from `ready` to `capturing` and never enters it.
+ */
+export type Screen = "onboarding" | "ready" | "armed" | "capturing" | "complete";
 
 export interface AnalyzedCapture {
   /**
@@ -53,6 +62,8 @@ export interface State {
   hotkey: HotkeyState | null;
   target: CaptureTarget | null;
   antiCheat: string | null;
+  /** Set while `screen === "armed"`; carries the folders being watched. */
+  armed: CaptureArmed | null;
   /** Milliseconds since the capture started; the timer ticks it. */
   elapsedMs: number;
   frames: number;
@@ -68,6 +79,7 @@ export type Action =
   | { type: "environment"; environment: Environment }
   | { type: "hotkey-state"; hotkey: HotkeyState }
   | { type: "continue-from-onboarding" }
+  | { type: "capture-armed"; armed: CaptureArmed }
   | { type: "capture-started"; started: CaptureStarted }
   | { type: "capture-rows"; frames: number }
   | { type: "tick"; deltaMs: number }
@@ -84,6 +96,7 @@ export const initialState: State = {
   hotkey: null,
   target: null,
   antiCheat: null,
+  armed: null,
   elapsedMs: 0,
   frames: 0,
   capture: null,
@@ -95,13 +108,18 @@ export const initialState: State = {
 /**
  * Onboarding is shown until the machine can actually capture.
  *
- * Both checks must be affirmatively true. `performanceLogUsers` is nullable
- * because membership can fail to resolve, and an unknown is treated as "show
- * the setup screen": sending someone to a capture button that will fail with a
- * permissions error is worse than one extra click.
+ * Reads the checks Rust produced rather than named booleans, so a platform or a
+ * check can be added without touching this file (§23.1). Only `blocking` checks
+ * count: a missing MangoHud sensor parameter costs diagnostics, and diagnostics
+ * skip rather than fail — sending someone to a setup screen over it would be
+ * wrong.
+ *
+ * `unknown` is treated as "show the setup screen", exactly as before: sending
+ * someone to a capture button that will fail with a permissions error, or to a
+ * watcher that can never fire, is worse than one extra click.
  */
 export function needsOnboarding(environment: Environment): boolean {
-  return environment.performanceLogUsers !== true || !environment.sidecarPresent;
+  return environment.checks.some((check) => check.blocking && check.state !== "ok");
 }
 
 export function reducer(state: State, action: Action): State {
@@ -111,9 +129,13 @@ export function reducer(state: State, action: Action): State {
         ...state,
         environment: action.environment,
         hotkey: action.environment.hotkey,
-        // Never bounce a user mid-capture back to onboarding on a refresh.
+        // Never bounce a user mid-capture back to onboarding on a refresh —
+        // `armed` included: the watcher is live and a re-check must not silently
+        // drop it.
         screen:
-          state.screen === "capturing" || state.screen === "complete"
+          state.screen === "armed" ||
+          state.screen === "capturing" ||
+          state.screen === "complete"
             ? state.screen
             : needsOnboarding(action.environment)
               ? "onboarding"
@@ -126,10 +148,32 @@ export function reducer(state: State, action: Action): State {
     case "continue-from-onboarding":
       return { ...state, screen: "ready" };
 
+    case "capture-armed":
+      // Linux (§23.1). The watcher is running; MangoHud has written nothing yet.
+      // No timer starts here — elapsed time measures the capture, not how long
+      // the user took to press MangoHud's hotkey.
+      return {
+        ...state,
+        screen: "armed",
+        armed: action.armed,
+        target: null,
+        antiCheat: null,
+        elapsedMs: 0,
+        frames: 0,
+        capture: null,
+        upload: { status: "idle" },
+        notice: null,
+        analyzing: false,
+      };
+
     case "capture-started":
       return {
         ...state,
         screen: "capturing",
+        // The watcher has found its log, so the armed state is spent. Its
+        // fields are cleared rather than left behind for a later render to
+        // read as though the client were still waiting.
+        armed: null,
         target: { pid: action.started.pid, process: action.started.process },
         antiCheat: action.started.antiCheat ?? null,
         elapsedMs: 0,
@@ -180,6 +224,7 @@ export function reducer(state: State, action: Action): State {
       return {
         ...state,
         screen: "ready",
+        armed: null,
         analyzing: false,
         capture: null,
         notice: action.message,
@@ -189,6 +234,7 @@ export function reducer(state: State, action: Action): State {
       return {
         ...state,
         screen: "ready",
+        armed: null,
         capture: null,
         frames: 0,
         elapsedMs: 0,
@@ -208,9 +254,14 @@ export function reducer(state: State, action: Action): State {
  * Uploading is deliberately NOT a toggle target: pressing the hotkey while a
  * run is being uploaded must not silently start a second capture over the top
  * of it.
+ *
+ * `armed` toggles to `disarm`, not `stop`: there is no capture to stop, and
+ * routing it through `stop_capture` would surface `no-capture-log` as an error
+ * for a user who simply changed their mind (§23.1).
  */
-export function toggleIntent(state: State): "start" | "stop" | "ignore" {
+export function toggleIntent(state: State): "start" | "stop" | "disarm" | "ignore" {
   if (state.screen === "capturing") return state.analyzing ? "ignore" : "stop";
+  if (state.screen === "armed") return state.analyzing ? "ignore" : "disarm";
   if (state.screen === "ready") return "start";
   return "ignore";
 }

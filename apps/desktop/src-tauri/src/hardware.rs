@@ -147,6 +147,9 @@ pub fn memory_fields(modules: &[MemoryModule]) -> (Option<f64>, Option<u32>, Opt
 /// reports unknown rather than defaulting to "off", because a wrong
 /// declaration here is worse than a missing one: methodology fields feed
 /// comparability, and a fabricated value would silently split runs.
+/// Windows only — HAGS has no Linux counterpart, and `linux.rs` reports it as
+/// unknown rather than reading anything (§23.2).
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn hags_state(hw_sch_mode: Option<u32>) -> Option<bool> {
     match hw_sch_mode {
         Some(2) => Some(true),
@@ -165,6 +168,10 @@ pub fn resolution_label(width: u32, height: u32) -> Option<String> {
 }
 
 /// `Win32_OperatingSystem` caption + build → one display string.
+///
+/// Windows only. Linux folds the kernel release into `os` instead, which is a
+/// different format for a different reason — see `linux::os_label`.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn os_label(caption: &str, build: &str) -> Option<String> {
     let caption = caption.trim();
     let build = build.trim();

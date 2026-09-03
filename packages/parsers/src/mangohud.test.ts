@@ -11,7 +11,7 @@ describe("parseMangoHud (§8)", () => {
   it("parses frame rows below the sysinfo block", () => {
     const { value, warnings } = parseOk(readFixture("mangohud/nvidia-basic.csv"));
     expect(value.source).toBe("mangohud");
-    expect(value.parserVersion).toBe("mangohud@1.0.0");
+    expect(value.parserVersion).toBe("mangohud@1.1.0");
     expect(value.frames).toHaveLength(10);
     expect(warnings).toEqual([]);
     expectClose(value.frames[0], {
@@ -66,6 +66,25 @@ describe("parseMangoHud (§8)", () => {
     const rows = ["fps,frametime", "100,10", "100,10", "33.3,30", "100,10"];
     const { value } = parseOk(rows.join("\n"));
     expect(value.frames.map((f) => f.timeMs)).toEqual([0, 10, 20, 50]);
+  });
+
+  it("reports every sensor as polled, because MangoHud has no per-present columns", () => {
+    // §16a.3. MangoHud samples sensors on its own timer and the logger repeats
+    // the last sample beside each row, so no value describes the frame it sits
+    // next to. Claiming alignment here is what would let `cpu-bottleneck` fire
+    // on a smoothed utilization average — the exact misuse `frameAligned`
+    // exists to prevent.
+    const { value } = parseOk(readFixture("mangohud/nvidia-basic.csv"));
+    expect(value.sensorAlignment).toEqual({
+      gpuLoadPct: false,
+      gpuClockMhz: false,
+      gpuPowerW: false,
+      vramUsedMb: false,
+      cpuLoadPct: false,
+    });
+    // Not one exception: MangoHud logs no CPUBusy/GPUBusy equivalent, so there
+    // is nothing here that IS measured per present.
+    expect(Object.values(value.sensorAlignment ?? {})).not.toContain(true);
   });
 
   it("returns typed errors on junk", () => {

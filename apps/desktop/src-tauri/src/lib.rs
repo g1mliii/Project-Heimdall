@@ -11,13 +11,38 @@ mod capture;
 mod commands;
 mod crash;
 mod driver;
+mod env;
 mod error;
+// Windows-only in effect: PresentMon supplies no GPU telemetry so the client
+// samples PDH counters itself (§22.2), whereas MangoHud logs its own columns.
+// Compiled everywhere for its pure aggregation tests and for `GpuTelemetry`,
+// which `stream.rs` needs on both platforms — so off Windows the sampler and its
+// PDH helpers have no caller, which is the intended state.
+#[cfg_attr(not(windows), allow(dead_code))]
 mod gpu_telemetry;
 mod hardware;
 mod hotkey;
+// Phase 9.5: two cfg-selected capture backends behind one session contract.
+// `win`/`presentmon` and `linux`/`mangohud` each keep a "not available" stub for
+// the other platform so a checkout of either builds, lints and tests whole —
+// including the watcher's pure rules, which run on the Windows CI job.
+//
+// The `allow(dead_code)` is what buys that. These modules are deliberately
+// compiled on every platform for their tests, so off their own platform most of
+// their surface has no caller — which is the intended state, not an oversight,
+// and `cargo clippy -- -D warnings` would otherwise reject it. The alternative
+// is `#[cfg]`-ing the modules out entirely and losing the test coverage on the
+// runner that has it.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod linux;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod mangohud;
+#[cfg_attr(not(windows), allow(dead_code))]
 mod presentmon;
 mod signing;
+mod stream;
 mod upload;
+#[cfg_attr(not(windows), allow(dead_code))]
 mod win;
 
 use tauri::menu::{Menu, MenuItem};

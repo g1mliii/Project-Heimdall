@@ -368,6 +368,10 @@ mod imp {
     }
 }
 
+// The sampler is Windows-only: MangoHud logs its own GPU columns, so the Linux
+// backend never builds one. The stub half exists so a non-Windows checkout still
+// compiles and runs this module's pure tests.
+#[cfg_attr(not(windows), allow(unused_imports))]
 pub use imp::{adapter_luid_for_pid, TelemetrySampler};
 
 #[cfg(test)]

@@ -7,32 +7,37 @@
 use serde::Serialize;
 use tauri::ipc::{InvokeBody, Request};
 use tauri::{AppHandle, Manager, State};
-use tauri_plugin_shell::ShellExt;
 #[cfg(feature = "release-updates")]
 use tauri_plugin_updater::UpdaterExt;
 
 #[cfg(feature = "release-updates")]
 use crate::activity::ActivityKind;
 use crate::activity::ActivityState;
-use crate::capture::{self, CaptureResult, CaptureStarted, CaptureState};
+use crate::capture::{self, CaptureResult, CaptureStart, CaptureState};
 use crate::crash;
+use crate::env::{self, EnvCheck};
 use crate::error::{AppError, AppResult};
 use crate::hardware::{HardwareSnapshot, MethodologyFacts};
 use crate::hotkey::{self, HotkeyState};
-use crate::presentmon::{capture_tool, SIDECAR};
 use crate::signing::PayloadSigner;
+use crate::stream::CaptureTarget;
 use crate::upload::{self, PayloadState, PreparedPayload};
-use crate::win;
 
 /// Everything the onboarding screen's checklist needs, in one round trip.
+///
+/// The checklist is a `Vec<EnvCheck>` rather than a fixed set of named booleans
+/// (§23.1): Windows and Linux have different checks with different remedies, and
+/// the copy for each belongs on the side that ran the check. See `env.rs`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Environment {
-    /// `None` when membership could not be determined — reported as unknown
-    /// rather than as a failure, so the checklist can say so.
-    pub performance_log_users: Option<bool>,
-    /// Whether the bundled PresentMon sidecar resolves and can be launched.
-    pub sidecar_present: bool,
+    /// `windows` | `linux` | `other` — what the UI switches copy on.
+    pub platform: &'static str,
+    /// Every setup check this platform runs, in display order.
+    pub checks: Vec<EnvCheck>,
+    /// True when starting a capture ARMS a watcher instead of beginning one
+    /// (§23.1). Drives the armed screen; Windows never enters it.
+    pub watcher_mode: bool,
     pub capture_tool: String,
     pub hotkey: HotkeyState,
     pub api_base_url: String,
@@ -45,6 +50,47 @@ pub struct Environment {
     pub updates_enabled: bool,
 }
 
+/// The capture tool for this platform: the pinned PresentMon sidecar on Windows,
+/// whatever the user's MangoHud reports about itself on Linux (§23.1).
+fn capture_tool() -> String {
+    #[cfg(windows)]
+    {
+        crate::presentmon::capture_tool()
+    }
+    #[cfg(not(windows))]
+    {
+        crate::linux::capture_tool()
+    }
+}
+
+/// Declared hardware for this platform. Windows reads DXGI/WMI/registry; Linux
+/// reads `/proc` and `/sys` and defers to MangoHud's sysinfo row for everything
+/// the log carries (§23.2).
+fn collect_hardware() -> (HardwareSnapshot, MethodologyFacts) {
+    #[cfg(windows)]
+    {
+        crate::win::collect_hardware()
+    }
+    #[cfg(not(windows))]
+    {
+        crate::linux::collect_hardware()
+    }
+}
+
+fn collect_hardware_for_pid(pid: u32) -> (HardwareSnapshot, MethodologyFacts) {
+    #[cfg(windows)]
+    {
+        crate::win::collect_hardware_for_pid(pid)
+    }
+    #[cfg(not(windows))]
+    {
+        // The watcher model gives us no handle on the game's process or its DRM
+        // adapter, so there is nothing per-pid to refine — see linux.rs.
+        let _ = pid;
+        crate::linux::collect_hardware()
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeclaredHardware {
@@ -55,8 +101,9 @@ pub struct DeclaredHardware {
 #[tauri::command]
 pub fn get_environment(app: AppHandle) -> Environment {
     Environment {
-        performance_log_users: win::in_performance_log_users(),
-        sidecar_present: app.shell().sidecar(SIDECAR).is_ok(),
+        platform: env::platform(),
+        checks: env::checks(&app),
+        watcher_mode: env::watcher_mode(),
         capture_tool: capture_tool(),
         hotkey: app
             .state::<hotkey::HotkeyManager>()
@@ -148,7 +195,7 @@ pub async fn install_update(app: AppHandle) -> AppResult<()> {
 #[tauri::command]
 pub async fn get_hardware() -> AppResult<DeclaredHardware> {
     blocking("hardware collection", || {
-        let (hardware, methodology) = win::collect_hardware();
+        let (hardware, methodology) = collect_hardware();
         DeclaredHardware {
             hardware,
             methodology,
@@ -163,7 +210,7 @@ pub async fn get_hardware() -> AppResult<DeclaredHardware> {
 #[tauri::command]
 pub async fn get_hardware_for_pid(pid: u32) -> AppResult<DeclaredHardware> {
     blocking("capture hardware collection", move || {
-        let (hardware, methodology) = win::collect_hardware_for_pid(pid);
+        let (hardware, methodology) = collect_hardware_for_pid(pid);
         DeclaredHardware {
             hardware,
             methodology,
@@ -173,22 +220,41 @@ pub async fn get_hardware_for_pid(pid: u32) -> AppResult<DeclaredHardware> {
 }
 
 /// The foreground process, so the "Game" row is live before capture starts.
+///
+/// Windows only in practice. The Linux watcher never inspects the foreground
+/// window — it learns the game's name from the log MangoHud writes — so the stub
+/// reports that rather than naming whichever window happened to be focused.
 #[tauri::command]
-pub fn get_foreground_game() -> AppResult<crate::presentmon::CaptureTarget> {
-    win::foreground_target()
+pub fn get_foreground_game() -> AppResult<CaptureTarget> {
+    #[cfg(windows)]
+    {
+        crate::win::foreground_target()
+    }
+    #[cfg(not(windows))]
+    {
+        Err(AppError::Foreground(
+            "the Linux client reads the game name from MangoHud's log, not the \
+             foreground window"
+                .into(),
+        ))
+    }
 }
 
-/// Start a capture. Off the main thread: this enumerates the game's loaded
-/// modules for the anti-cheat notice, spawns the sidecar, and waits 60 ms for
-/// the telemetry sampler to open its counters — a UI freeze at the exact moment
-/// the user is in a fullscreen game.
+/// Start a capture, or arm the MangoHud watcher (§23.1) — see `CaptureStart`.
+///
+/// Off the main thread: on Windows this enumerates the game's loaded modules for
+/// the anti-cheat notice, spawns the sidecar, and waits 60 ms for the telemetry
+/// sampler to open its counters; on Linux it reads every candidate MangoHud
+/// config off disk. Both are a UI freeze at the exact moment the user is in a
+/// fullscreen game.
 #[tauri::command]
-pub async fn start_capture(app: AppHandle) -> AppResult<CaptureStarted> {
+pub async fn start_capture(app: AppHandle) -> AppResult<CaptureStart> {
     blocking("capture start", move || capture::start(&app)).await?
 }
 
-/// Stop a capture. Off the main thread: this kills and drains PresentMon, joins
-/// the telemetry sampler, and moves the retained CSV out of native custody.
+/// Stop a capture. Off the main thread: this drains the row source (killing
+/// PresentMon or ending the watcher poll), joins the telemetry sampler, and
+/// moves the retained CSV out of native custody.
 #[tauri::command]
 pub async fn stop_capture(app: AppHandle) -> AppResult<CaptureResult> {
     blocking("capture stop", move || capture::stop(&app)).await?

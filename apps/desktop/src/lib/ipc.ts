@@ -17,9 +17,36 @@ export interface HotkeyState {
   message?: string;
 }
 
+export type CheckState = "ok" | "missing" | "unknown";
+
+/**
+ * One onboarding check, produced by Rust (src-tauri/src/env.rs).
+ *
+ * The label, hint and any config lines come from the side that ran the check —
+ * Windows and Linux have different checks with different remedies, and the copy
+ * for "add this line to MangoHud.conf" only exists where the config was read.
+ * This side renders the list and reads `blocking`; it knows nothing about what
+ * any individual check means.
+ */
+export interface EnvCheck {
+  id: string;
+  label: string;
+  state: CheckState;
+  hint?: string;
+  /** Verbatim config lines to add. Shown, never written. */
+  lines?: string[];
+  /** Failing this means a capture cannot work at all. */
+  blocking: boolean;
+}
+
 export interface Environment {
-  performanceLogUsers: boolean | null;
-  sidecarPresent: boolean;
+  platform: "windows" | "linux" | "other";
+  checks: EnvCheck[];
+  /**
+   * True when starting a capture ARMS a watcher rather than beginning one
+   * (§23.1) — the Linux MangoHud backend. Windows never enters the armed screen.
+   */
+  watcherMode: boolean;
   captureTool: string;
   hotkey: HotkeyState;
   apiBaseUrl: string;
@@ -46,6 +73,29 @@ export interface CaptureTarget {
 export interface CaptureStarted extends CaptureTarget {
   antiCheat?: string;
 }
+
+/**
+ * The watcher is live but MangoHud has not written a log yet (§23.1).
+ *
+ * `liveTraceExpected` is false when no `log_interval` is configured. MangoHud may
+ * then only write the log when logging stops, so the Capturing screen has to say
+ * "the trace appears when it flushes" instead of rendering an empty chart that
+ * looks broken. Skip, never fail — the same rule the diagnostics follow.
+ */
+export interface CaptureArmed {
+  logDirs: string[];
+  hint: string;
+  liveTraceExpected: boolean;
+}
+
+/**
+ * What `startCapture` resolved to. Tagged rather than a nullable pair: the two
+ * outcomes mean different things, and a shape allowing both or neither would let
+ * a bug show a running timer over a capture that never began.
+ */
+export type CaptureStart =
+  | ({ state: "started" } & CaptureStarted)
+  | ({ state: "armed" } & CaptureArmed);
 
 export interface CaptureRows {
   lines: string[];
@@ -108,7 +158,7 @@ export const getHardwareForPid = (pid: number) =>
 export const checkForUpdate = () => call<UpdateInfo | null>("check_for_update");
 export const installUpdate = () => call<void>("install_update");
 export const getForegroundGame = () => call<CaptureTarget>("get_foreground_game");
-export const startCapture = () => call<CaptureStarted>("start_capture");
+export const startCapture = () => call<CaptureStart>("start_capture");
 export const stopCapture = () => call<CaptureResult>("stop_capture");
 export const captureRunning = () => call<boolean>("capture_running");
 export const setHotkey = (accelerator: string) => call<HotkeyState>("set_hotkey", { accelerator });
@@ -148,6 +198,7 @@ export const putPreparedPayload = (url: string, contentType: string) =>
 /* ── Events ─────────────────────────────────────────────────────────────── */
 
 export const EVENTS = {
+  armed: "capture://armed",
   started: "capture://started",
   rows: "capture://rows",
   ended: "capture://ended",

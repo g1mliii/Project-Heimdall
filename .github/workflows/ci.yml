@@ -127,3 +127,96 @@ jobs:
       # fork's CI builds the same artifact without any secrets.
       - if: steps.detect.outputs.present == 'true'
         run: pnpm --filter @heimdall/desktop exec tauri build
+
+  desktop-linux:
+    name: Desktop Linux (cargo clippy / test / bundle)
+    runs-on: ubuntu-latest
+    # A second job rather than a matrix on `desktop`: the two platforms share no
+    # setup worth factoring. This one vendors no sidecar, installs GTK/WebKit,
+    # and builds appimage+deb; the Windows one fetches a Win32 binary and builds
+    # an NSIS installer. A matrix would be `if:` on nearly every step.
+    #
+    # Its real job is to compile the `#[cfg(target_os = "linux")]` code at all.
+    # cfg'd-out code is never type-checked, so the MangoHud watcher and the
+    # /proc-and-/sys reads (§23.1, §23.2) are invisible to the Windows job — the
+    # pure rules are covered there by tests, but the platform halves are not
+    # compiled until here.
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: detect
+        run: |
+          if [ -f apps/desktop/src-tauri/Cargo.toml ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "Desktop client not scaffolded yet — skipping the Linux gate."
+          fi
+
+      # Tauri's Linux build needs the webview and its toolchain from the distro.
+      # libayatana-appindicator3-dev is what the tray icon links against; without
+      # it the build fails rather than silently shipping an app with no tray.
+      - if: steps.detect.outputs.present == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            curl \
+            wget \
+            file
+
+      - if: steps.detect.outputs.present == 'true'
+        uses: pnpm/action-setup@v6
+
+      - if: steps.detect.outputs.present == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - if: steps.detect.outputs.present == 'true'
+        run: pnpm install --frozen-lockfile
+
+      # Fetches the webfonts the Vite build inlines. fetch-presentmon.mjs still
+      # asserts the version pin agrees with presentmon.rs, then exits without
+      # downloading: the sidecar is a Win32 executable and `externalBin` names it
+      # only in tauri.windows.conf.json (§24.1).
+      - if: steps.detect.outputs.present == 'true'
+        run: pnpm --filter @heimdall/desktop vendor
+
+      - if: steps.detect.outputs.present == 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - if: steps.detect.outputs.present == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+          key: linux
+
+      - if: steps.detect.outputs.present == 'true'
+        run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets --all-features --locked -- -D warnings -D clippy::perf
+
+      # The same suite the Windows job runs. Most of it is platform-neutral by
+      # construction (mangohud.rs and linux.rs are pure), so a divergence between
+      # the two runs is itself the signal.
+      - if: steps.detect.outputs.present == 'true'
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --locked
+
+      - if: steps.detect.outputs.present == 'true'
+        run: pnpm --filter @heimdall/ui build
+
+      # Proves the bundle targets in tauri.linux.conf.json actually resolve.
+      # Unsigned and non-updating, same as the Windows job.
+      #
+      # The Flatpak manifest is NOT built here: flatpak-builder downloads a whole
+      # SDK and takes longer than the rest of CI combined, so it is a separate
+      # workflow_dispatch job (apps/desktop/flatpak/dev.heimdall.capture.yml).
+      - if: steps.detect.outputs.present == 'true'
+        run: pnpm --filter @heimdall/desktop exec tauri build --bundles appimage,deb

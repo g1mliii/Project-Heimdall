@@ -1,0 +1,109 @@
+# Flatpak manifest for the Heimdall capture client (§24.1).
+#
+# ── The sandbox is the substance here, not the manifest ──────────────────────
+#
+# A Flatpak'd watcher has to READ two things that live outside its sandbox: the
+# MangoHud config (to learn where logs go) and the folder those logs land in
+# (§23.1). Getting those grants right is the whole difficulty; the build itself
+# is an ordinary Tauri bundle.
+#
+# The grants below are deliberately narrow and enumerated. `--filesystem=host`
+# would make this trivially work and is exactly what we are not doing: this app
+# uploads hardware snapshots and frame data, and a benchmark viewer with read
+# access to a user's entire home directory is not a trade worth making for a
+# convenience we can achieve with three paths.
+#
+# ── Building ────────────────────────────────────────────────────────────────
+#
+#   flatpak-builder --user --install --force-clean build-dir \
+#     apps/desktop/flatpak/dev.heimdall.capture.yml
+#
+# This expects a prebuilt binary — see `sources` below. It is NOT a PR gate: a
+# full Flatpak build downloads an entire SDK and takes far longer than the rest
+# of CI put together, so it runs on workflow_dispatch.
+#
+# ── NOT VERIFIED ────────────────────────────────────────────────────────────
+#
+# This manifest has never been built or run on a Steam Deck, and the sandbox
+# grants below have never been tested against a real Deck install. They are
+# derived from the paths the watcher resolves (mangohud.rs `config_candidates`),
+# not from a working install. Treat SteamOS gaming mode as unverified — see the
+# Phase 9.5 not-verified list in IMPLEMENTATION_PLAN.md.
+
+id: dev.heimdall.capture
+runtime: org.gnome.Platform
+runtime-version: "49"
+sdk: org.gnome.Sdk
+command: heimdall-capture
+
+finish-args:
+  # ── Display and input ───────────────────────────────────────────────────
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+
+  # ── Network ─────────────────────────────────────────────────────────────
+  # The §11 create → PUT → finalize upload, and the direct-to-R2 PUT.
+  - --share=network
+
+  # ── Tray icon ───────────────────────────────────────────────────────────
+  # Closing the window hides to the tray so the capture hotkey stays live while
+  # the user is in a game (see lib.rs). Without this the app still runs, but
+  # Quit and the capture toggle are only reachable from the window.
+  - --talk-name=org.kde.StatusNotifierWatcher
+
+  # ── MangoHud config, read-only ──────────────────────────────────────────
+  # Both locations, because both are real and the watcher cannot know which one
+  # the game it is about to capture will read. The Flatpak Steam path is the one
+  # people miss: a game launched from Flatpak Steam reads ITS config, not the
+  # host's, so a user with a perfect ~/.config setup can still see nothing
+  # (mangohud.rs documents this as the most likely first-run failure).
+  - --filesystem=xdg-config/MangoHud:ro
+  - --filesystem=~/.var/app/com.valvesoftware.Steam/config/MangoHud:ro
+
+  # ── The log folder, read-only ───────────────────────────────────────────
+  # Read-only is correct and not a compromise: the client reads logs MangoHud
+  # wrote and never creates, edits or deletes one. It does not own them.
+  #
+  # This default matches the `output_folder` the onboarding screen suggests
+  # (env.rs). A user whose folder is elsewhere grants it themselves —
+  #
+  #   flatpak override --user --filesystem=/their/path:ro dev.heimdall.capture
+  #
+  # — which the setup guide documents. Enumerating one default plus an explicit
+  # override is the honest shape: we cannot predict an arbitrary path, and
+  # pretending otherwise would mean granting the home directory.
+  - --filesystem=~/mangohud-logs:ro
+
+  # /proc and /sys are already visible read-only inside the sandbox, so §23.2's
+  # hardware reads (/proc/cpuinfo, /proc/meminfo, /sys/class/drm) need no grant.
+  # `mangohud --version` for capture provenance does NOT work from in here — the
+  # sandbox has no host PATH — so a Flatpak install reports the capture tool as
+  # "MangoHud (version unknown)". That is a real, admitted limitation of this
+  # packaging, not a bug: see mangohud.rs UNKNOWN_CAPTURE_TOOL.
+
+modules:
+  - name: heimdall-capture
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 heimdall-capture /app/bin/heimdall-capture
+      - install -Dm644 dev.heimdall.capture.desktop
+        /app/share/applications/dev.heimdall.capture.desktop
+      - install -Dm644 icon-128.png
+        /app/share/icons/hicolor/128x128/apps/dev.heimdall.capture.png
+      - install -Dm644 LICENSES.md /app/share/licenses/heimdall-capture/LICENSES.md
+    sources:
+      # Built by `cargo tauri build` (or the deb's payload) rather than compiled
+      # here: a from-source Rust + Node build inside flatpak-builder would need
+      # the whole toolchain vendored offline, and the binary this ships is the
+      # same one the deb and AppImage carry.
+      - type: file
+        path: ../src-tauri/target/release/heimdall-capture
+      - type: file
+        path: dev.heimdall.capture.desktop
+      - type: file
+        path: ../src-tauri/icons/128x128.png
+        dest-filename: icon-128.png
+      - type: file
+        path: ../src-tauri/LICENSES.md

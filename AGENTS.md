@@ -1,7 +1,8 @@
 # Heimdall — agent instructions
 
 Open-source game benchmarking: capture frame-time data, share interactive reports, auto-diagnose
-performance problems. Monorepo: Next.js web hub + (future) Tauri desktop client + shared TS packages.
+performance problems. Monorepo: Next.js web hub + Tauri desktop capture client (Windows and Linux)
++ shared TS packages.
 
 **Roadmap:** [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) — phases 0–7.5 shipped; Phase 8
 (Clerk accounts/auth, §20) is next. Code comments cite plan sections as `§n.n` — keep those
@@ -19,13 +20,18 @@ pnpm check:deps              # dependency minimum-age policy (must pass before a
 pnpm audit:deps              # advisory audit, moderate+
 pnpm --filter @heimdall/web test:e2e:functional   # Playwright minus @visual baselines
 
-pnpm --filter @heimdall/desktop vendor   # vendor webfonts + the pinned PresentMon sidecar (once)
-pnpm --filter @heimdall/desktop dev     # Tauri capture client (Windows)
+pnpm --filter @heimdall/desktop vendor   # webfonts, + the pinned PresentMon sidecar on Windows (once)
+pnpm --filter @heimdall/desktop dev     # Tauri capture client (Windows or Linux)
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml   # the Rust half
 ```
 
-- The desktop client's Rust half is Windows-only; its JS half must pass on Linux (CI runs
-  `pnpm verify` on ubuntu). Keep platform-specific logic in Rust. See
+- The desktop client's Rust half has **two cfg-selected capture backends** behind one session
+  contract: `win.rs`/`presentmon.rs` (PresentMon sidecar) and `linux.rs`/`mangohud.rs` (MangoHud log
+  watcher, §23.1). Each keeps a "not available" stub for the other platform, so a checkout of either
+  builds, lints and runs the whole suite — including the other platform's *pure* rules. What that
+  cannot cover is the `#[cfg]`-ed-out platform halves, which is why CI has both a `desktop` (windows)
+  and a `desktop-linux` (ubuntu) job. Keep platform-specific logic in Rust, and keep anything
+  decidable without a syscall pure so both runners test it. See
   [`docs/desktop-client.md`](docs/desktop-client.md).
 
 - Web tests import the **built** `@heimdall/ui` entrypoint (`dist/`). If UI tests fail on a clean
@@ -43,7 +49,8 @@ apps/web/               Next.js hub — pages (/, /upload, /runs/[id], /games/[s
   src/lib/jobs/         durable verification/reprocess workers (DB-queue claimed, never fire-and-forget)
   src/lib/upload/       browser-held benchmark-set capability (the §11 flow itself lives in packages/ingest-client)
 apps/driver-curation/   scheduled driver-currency ingest (Phase 6.6)
-apps/desktop/           Tauri 2 Windows capture client — React webview (src/) + Rust core (src-tauri/)
+apps/desktop/           Tauri 2 capture client — React webview (src/) + Rust core (src-tauri/);
+                        two cfg-selected backends: PresentMon sidecar (Windows), MangoHud watcher (Linux)
 packages/shared/        zod schemas, types, visibility/integrity/comparability — single source of truth
 packages/ingest-client/ the §11 create → PUT → finalize protocol, shared by web upload and desktop
 packages/parsers/       CapFrameX/PresentMon/MangoHud parsers + metrics + diagnostics (pure TS, runs in browser AND server)
