@@ -19,6 +19,7 @@
     "dev": "pnpm --filter @heimdall/ui build && pnpm --filter @heimdall/web dev",
     "build": "pnpm --filter @heimdall/web build",
     "migrate": "node infra/db/migrate.mjs",
+    "seed:steam": "node scripts/seed-steam-apps.mjs",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
