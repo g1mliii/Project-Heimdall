@@ -24,8 +24,25 @@ overrides:
   # tsup 8.5.1 resolves an older peer copy via bundle-require. 0.28.1 fixes
   # GHSA-g7r4-m6w7-qqqr (Windows dev-server arbitrary file read).
   esbuild: 0.28.1
-  postcss: 8.5.18
+  postcss: 8.5.23
   sharp: 0.35.0
-  brace-expansion@^2.0.0: 5.0.8
-  brace-expansion@^5.0.0: 5.0.8
+  brace-expansion@^2.0.0: 5.0.9
+  brace-expansion@^5.0.0: 5.0.9
+  # Advisory drift cleared 2026-09-03. These are all DEV/TEST tooling reached
+  # through jsdom, vite, eslint and testcontainers — none ships to a user — but
+  # `pnpm audit:deps` gates CI, and main had gone red on its own since the last
+  # sweep on 2026-07-30. Two undici majors are in the tree at once (7.x under
+  # jsdom, 8.x under testcontainers), so each needs its own pin.
+  undici@^7.0.0: 7.29.0
+  undici@^8.0.0: 8.9.0
+  nanoid: 3.3.18
   protobufjs@^7.5.0: 7.6.5
+  # steam-user (apps/steam-pics) reaches protobufjs 6.11.6 through
+  # steam-appticket, which the ^7.5.0 override above does not match — every
+  # protobufjs advisory lists 6.x as vulnerable, including a critical RCE. Force
+  # that copy onto the same patched 7.x the rest of the tree already uses.
+  # We never call the app-ticket APIs; this is reachable-by-install, not by us.
+  protobufjs@^6.0.0: 7.6.5
+  # steam-user pins an adm-zip below 0.6.0 (GHSA: a crafted ZIP triggers a 4 GB
+  # allocation). 0.6.0 is the lowest patched release.
+  adm-zip: 0.6.0
