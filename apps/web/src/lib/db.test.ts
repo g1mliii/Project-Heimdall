@@ -140,6 +140,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
         "schema_migrations",
         "staging_cleanup_jobs",
         "steam_app_builds",
+        "steam_catalog_cursor",
         "steam_app_changes",
         "steam_app_depot_manifests",
         "steam_app_depots",
