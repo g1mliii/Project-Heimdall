@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   DEMOTE_INACTIVE_APPS_SQL,
+  LINK_GAMES_TO_STEAM_APPS_SQL,
   INSERT_PLAYER_COUNTS_SQL,
   INSERT_PRICE_SNAPSHOTS_SQL,
   INSERT_REVIEW_SNAPSHOTS_SQL,
@@ -260,6 +261,42 @@ describe("demotion posture", () => {
     expect(DEMOTE_INACTIVE_APPS_SQL).toContain(
       `not in ('${TRACKING_REASON.curatedBenchmark}', '${TRACKING_REASON.charts}')`,
     );
+  });
+});
+
+describe("game linking posture (8.7.9)", () => {
+  it("only ever considers an app Steam itself calls a game", () => {
+    // A DLC or soundtrack shares nearly every token with its base title, so no
+    // threshold separates them — this guard does.
+    expect(LINK_GAMES_TO_STEAM_APPS_SQL).toContain("a.app_type = 'game'");
+  });
+
+  it("requires a mutual best match, not just a good one", () => {
+    expect(LINK_GAMES_TO_STEAM_APPS_SQL).toContain("game_rank = 1");
+    expect(LINK_GAMES_TO_STEAM_APPS_SQL).toContain("app_rank = 1");
+  });
+
+  it("keeps the driver curator's threshold and safety margin, on both sides", () => {
+    expect(LINK_GAMES_TO_STEAM_APPS_SQL).toContain("score >= 0.82");
+    expect(LINK_GAMES_TO_STEAM_APPS_SQL).toContain("score - next_game_score >= 0.08");
+    expect(LINK_GAMES_TO_STEAM_APPS_SQL).toContain("score - next_app_score >= 0.08");
+  });
+
+  it("gives an exact name match no escape from the ambiguity check", () => {
+    // Two distinct games can share a name, and so can two apps; `priority = 3`
+    // as a standalone pass would turn that tie into an arbitrary link.
+    expect(LINK_GAMES_TO_STEAM_APPS_SQL).not.toContain("priority = 3");
+  });
+
+  it("only ever fills a null, so a hand-made link stands", () => {
+    expect(LINK_GAMES_TO_STEAM_APPS_SQL).toContain("g.steam_appid is null");
+    expect(LINK_GAMES_TO_STEAM_APPS_SQL.toLowerCase()).not.toContain("delete");
+  });
+
+  it("splits on whitespace, not on the letter s", () => {
+    // `'\\s+'` in the template literal; a single backslash would collapse to a
+    // literal "s" and tokenise every name at its s characters.
+    expect(LINK_GAMES_TO_STEAM_APPS_SQL).toContain("'\\s+'");
   });
 });
 

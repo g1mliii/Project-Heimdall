@@ -4,6 +4,7 @@ import {
   readStaleCatalogApps,
   readTrackedApps,
   upsertTrackedApps,
+  linkGamesToSteamApps,
   writeAppMetadata,
   writeAppUpdates,
   writePlayerCounts,
@@ -337,6 +338,19 @@ async function runCatalogLane(deps: ResolvedDeps): Promise<LaneReport> {
     writeAppMetadata(execute, metadata),
     writeAppUpdates(execute, updates),
   ]);
+
+  // AFTER the metadata write, deliberately: the matcher only considers apps
+  // Steam calls a game, and `app_type` arrives with the metadata this run just
+  // fetched. Linking here lets a title discovered today be resolved today
+  // rather than waiting a full cycle. Costs no subrequest — it is pure SQL —
+  // and never overwrites a link, so a failure is losing a day, not data.
+  let gamesLinked = 0;
+  try {
+    gamesLinked = await linkGamesToSteamApps(execute);
+  } catch (error) {
+    logger.warn("steam game linking failed", { error: errorSummary(error) });
+  }
+
   return {
     lane: "catalog",
     appsPolled: apps.length,
@@ -346,6 +360,7 @@ async function runCatalogLane(deps: ResolvedDeps): Promise<LaneReport> {
     changesRecorded: metadataReport.changes,
     appsDiscovered,
     appsParked,
+    gamesLinked,
   };
 }
 

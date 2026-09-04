@@ -126,6 +126,8 @@ export interface LaneReport {
   appsDiscovered?: number;
   /** Catalog lane only: apps parked at tier 0 for never drawing players. */
   appsParked?: number;
+  /** Catalog lane only: canonical games newly resolved to a Steam appid. */
+  gamesLinked?: number;
 }
 
 export interface IngestLogger {

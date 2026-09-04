@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, testDbAvailable, type TestDb } from "../../web/src/lib/testing/test-db";
 import {
   demoteInactiveApps,
+  linkGamesToSteamApps,
   readStaleCatalogApps,
   readTrackedApps,
   upsertTrackedApps,
@@ -362,6 +363,87 @@ describe.skipIf(!canRun)("steam ingest persistence", () => {
       [HAND],
     );
     expect(rows[0]!.poll_tier).toBe(0);
+  });
+
+  describe("linking canonical games to steam apps (8.7.9)", () => {
+    const APP = (n: number) => 900_000 + n;
+
+    const addApp = (n: number, name: string, appType: string | null) =>
+      db.pool.query(
+        `insert into steam_apps (appid, name, app_type, poll_tier, tracking_reason)
+         values ($1, $2, $3, 2, 'featured')
+         on conflict (appid) do update set name = excluded.name, app_type = excluded.app_type`,
+        [APP(n), name, appType],
+      );
+    const addGame = (slug: string, name: string) =>
+      db.pool.query(`insert into games (slug, name) values ($1, $2) on conflict (slug) do nothing`, [
+        slug,
+        name,
+      ]);
+    const linkOf = async (slug: string) =>
+      (
+        await db.pool.query<{ steam_appid: string | null }>(
+          `select steam_appid from games where slug = $1`,
+          [slug],
+        )
+      ).rows[0]!.steam_appid;
+
+    it("links an exact name match, punctuation and trademark noise aside", async () => {
+      await addApp(1, "Cyberpunk 2077", "game");
+      await addGame("cyberpunk-2077", "Cyberpunk 2077™");
+      expect(await linkGamesToSteamApps(execute)).toBeGreaterThanOrEqual(1);
+      expect(await linkOf("cyberpunk-2077")).toBe(String(APP(1)));
+    });
+
+    it("refuses the DLC that shares almost every token with its base game", async () => {
+      // No score separates these; `app_type` does. This is the whole reason the
+      // matcher will not consider an app Steam does not call a game.
+      await addApp(2, "Elden Ring: Shadow of the Erdtree", "dlc");
+      await addGame("elden-ring-shadow", "Elden Ring Shadow of the Erdtree");
+      await linkGamesToSteamApps(execute);
+      expect(await linkOf("elden-ring-shadow")).toBeNull();
+    });
+
+    it("waits rather than guessing while an app's metadata is unfetched", async () => {
+      await addApp(3, "Hollow Knight Silksong", null);
+      await addGame("hollow-knight-silksong", "Hollow Knight Silksong");
+      await linkGamesToSteamApps(execute);
+      expect(await linkOf("hollow-knight-silksong")).toBeNull();
+
+      // The catalog lane fills app_type in; the next pass resolves it.
+      await addApp(3, "Hollow Knight Silksong", "game");
+      await linkGamesToSteamApps(execute);
+      expect(await linkOf("hollow-knight-silksong")).toBe(String(APP(3)));
+    });
+
+    it("resolves neither game when two compete for one app", async () => {
+      await addApp(4, "Total Annihilation", "game");
+      await addGame("total-annihilation-a", "Total Annihilation");
+      await addGame("total-annihilation-b", "Total Annihilation");
+      await linkGamesToSteamApps(execute);
+      expect(await linkOf("total-annihilation-a")).toBeNull();
+      expect(await linkOf("total-annihilation-b")).toBeNull();
+    });
+
+    it("leaves an unrelated title alone rather than reaching for the nearest name", async () => {
+      await addApp(5, "Portal 2", "game");
+      await addGame("half-life-alyx", "Half-Life: Alyx");
+      await linkGamesToSteamApps(execute);
+      expect(await linkOf("half-life-alyx")).toBeNull();
+    });
+
+    it("never overwrites a link an operator already made", async () => {
+      await addApp(6, "Stray", "game");
+      await addApp(7, "Stray", "game");
+      await addGame("stray", "Stray");
+      await db.pool.query(`update games set steam_appid = $1 where slug = 'stray'`, [APP(7)]);
+      await linkGamesToSteamApps(execute);
+      expect(await linkOf("stray")).toBe(String(APP(7)));
+    });
+
+    it("costs nothing on a second pass", async () => {
+      expect(await linkGamesToSteamApps(execute)).toBe(0);
+    });
   });
 
   it("nulls the game link rather than deleting the game when an app goes away", async () => {

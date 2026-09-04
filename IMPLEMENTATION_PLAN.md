@@ -587,11 +587,20 @@ commit — local Windows renders are not valid baselines.
   key; `ISteamApps/GetAppList` was REMOVED upstream — confirmed 404 "Method 'GetAppList' not found
   in interface 'ISteamApps'" on 2026-09-02). Today's working set grows only from
   `featuredcategories` (~56 appids/day). Until this lands, coverage is thin but real.
-- [ ] 8.7.9 **Wire `games.steam_appid`** — resolve existing canonical games to appids, so the run
-  corpus can join the update history. Reuse the conservative token-overlap matcher from
-  `driver-curation/src/db.ts` rather than inventing a second one.
+- [x] 8.7.9 **Wire `games.steam_appid`** — `LINK_GAMES_TO_STEAM_APPS_SQL` runs at the end of the
+  catalog lane (pure SQL, no subrequest), reusing the driver curator's token-overlap rule: score
+  >= 0.82 of the larger token count, winner must clear the runner-up by 0.08. Two guards this
+  direction needs on top of it: only apps whose `app_type` Steam reports as `game` are candidates
+  (a DLC shares nearly every token with its base title, and no threshold separates those), and a
+  pair must be the mutual best in both directions with NO exact-match escape hatch — two games can
+  share a name, and a tie broken on id order is a coin flip presented as a fact. Only ever fills a
+  null, so an operator's link stands. Dry run against production linked Cyberpunk 2077 and Hogwarts
+  Legacy and correctly refused "Cyberpunk 2077 Private Test" (0.5, under threshold).
 - [ ] 8.7.10 **Patch-annotated deltas** — the §25–§26 payoff: annotate a before/after comparison
-  with the updates that landed between the two captures.
+  with the updates that landed between the two captures. **BLOCKED ON PHASE 10**, not outstanding
+  work here: there is no before/after comparison to annotate until the validator exists. The data
+  and the join are ready — `steam_app_updates.posted_at` between two runs' `captured_at`, via the
+  `games.steam_appid` link 8.7.9 just wired.
 - [ ] 8.7.11 **Move the time series to ClickHouse (§28/Phase 12).** 400 apps at 10 min is ~57k
   rows/day; the shapes here are deliberately narrow and additive so the copy is mechanical.
 
@@ -604,7 +613,7 @@ commit — local Windows renders are not valid baselines.
   patch-note latch, and the `games` link constraints.
 
 ### Phase 8.7 Regression Gate
-- `pnpm verify` green; 111 tests in `apps/steam-ingest` (19 of them against Postgres 17); the worker
+- `pnpm verify` green; 124 tests in `apps/steam-ingest` (26 of them against Postgres 17); the worker
   builds under `wrangler deploy --dry-run`; no lane can exceed its per-invocation subrequest cap,
   and no capped lane can leave the tail of the working set permanently unpolled.
 

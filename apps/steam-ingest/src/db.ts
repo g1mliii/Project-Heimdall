@@ -72,6 +72,114 @@ export const DEMOTE_INACTIVE_APPS_SQL = `update steam_apps a
    ), 0) < $1::integer
 returning a.appid`;
 
+/**
+ * Resolve canonical games to Steam appids (8.7.9).
+ *
+ * This is the join that turns the whole 8.7 dimension into a feature: without
+ * it `steam_app_updates` is a pile of announcements no run can reach, and the
+ * sentence this phase exists to produce — "this title patched between your two
+ * captures" — cannot be written.
+ *
+ * A WRONG LINK IS WORSE THAN NO LINK. It does not fail loudly; it silently
+ * annotates a run with another game's patch history, which is exactly the kind
+ * of confident-and-wrong output §0.5 exists to prevent. So the matcher is the
+ * conservative token-overlap rule the driver curator already uses (score >=
+ * 0.82 of the larger token count, and the winner must beat the runner-up by
+ * 0.08 or be an exact name match), plus two guards this direction needs:
+ *
+ * 1. STEAM MUST CALL IT A GAME. A DLC, demo, soundtrack or tool shares nearly
+ *    every token with its base title — "Cyberpunk 2077: Phantom Liberty" scores
+ *    far above any threshold against "Cyberpunk 2077". No score separates those;
+ *    `app_type` does. Apps whose metadata the catalog lane has not fetched yet
+ *    have a null app_type and simply wait for the next pass, so coverage heals
+ *    itself rather than guessing early.
+ * 2. MUTUAL BEST. `games_steam_appid_key` allows one app per game, so a pair is
+ *    only taken when the game is that app's best candidate AND the app is that
+ *    game's best. Two remasters competing for one appid resolve to neither.
+ *
+ * Reentrant and additive: it only ever fills a null, so an operator's hand-made
+ * link is never second-guessed and a re-run costs nothing.
+ */
+export const LINK_GAMES_TO_STEAM_APPS_SQL = `with normalized_games as (
+  select g.id as game_id, tokens.value as tokens, names.value as normalized_name
+    from games g
+   cross join lateral (select regexp_replace(lower(g.name), '[^[:alnum:]]+', ' ', 'g')) as names(value)
+   cross join lateral (select regexp_split_to_array(btrim(names.value), '\\s+')) as tokens(value)
+   where g.steam_appid is null
+   union all
+  -- The capture sources' own names for the same game, which is often the form
+  -- that matches a store listing.
+  select ga.game_id, tokens.value, names.value
+    from game_aliases ga
+    join games g on g.id = ga.game_id
+   cross join lateral (select regexp_replace(lower(ga.normalized_name), '[^[:alnum:]]+', ' ', 'g')) as names(value)
+   cross join lateral (select regexp_split_to_array(btrim(names.value), '\\s+')) as tokens(value)
+   where g.steam_appid is null
+), candidate_apps as (
+  select a.appid, tokens.value as tokens, names.value as normalized_name
+    from steam_apps a
+   cross join lateral (select regexp_replace(lower(a.name), '[^[:alnum:]]+', ' ', 'g')) as names(value)
+   cross join lateral (select regexp_split_to_array(btrim(names.value), '\\s+')) as tokens(value)
+   where a.app_type = 'game'
+     and not exists (select 1 from games linked where linked.steam_appid = a.appid)
+), scored as (
+  select n.game_id,
+         c.appid,
+         max(case when n.normalized_name = c.normalized_name then 3 else 1 end) as priority,
+         max(overlap.score) as score
+    from normalized_games n
+    join candidate_apps c on n.tokens && c.tokens
+   cross join lateral (
+     select count(*)::real /
+            greatest(cardinality(n.tokens), cardinality(c.tokens), 1) as score
+       from (
+         select unnest(n.tokens) as token
+         intersect
+         select unnest(c.tokens) as token
+       ) shared_tokens
+   ) overlap
+   group by n.game_id, c.appid
+), ranked as (
+  select scored.*,
+         row_number() over w_game as game_rank,
+         lead(priority) over w_game as next_game_priority,
+         lead(score) over w_game as next_game_score,
+         row_number() over w_app as app_rank,
+         lead(priority) over w_app as next_app_priority,
+         lead(score) over w_app as next_app_score
+    from scored
+   where score >= 0.82
+  window w_game as (partition by game_id order by priority desc, score desc, appid),
+         w_app as (partition by appid order by priority desc, score desc, game_id)
+), resolved as (
+  select game_id, appid
+    from ranked
+   where game_rank = 1
+     and app_rank = 1
+     -- Unambiguous in BOTH directions, with no exact-match escape hatch. The
+     -- driver curator lets an exact name win outright because it resolves
+     -- against a dictionary where the name IS the key; here two distinct games
+     -- can carry the same name and two apps can carry the same title, and a tie
+     -- broken on id order is a coin flip presented as a fact. Both sides must
+     -- beat their runner-up on priority or clear the 0.08 margin.
+     and (
+       next_game_priority is null
+       or priority > next_game_priority
+       or score - next_game_score >= 0.08
+     )
+     and (
+       next_app_priority is null
+       or priority > next_app_priority
+       or score - next_app_score >= 0.08
+     )
+)
+update games g
+   set steam_appid = r.appid
+  from resolved r
+ where g.id = r.game_id
+   and g.steam_appid is null
+returning g.id`;
+
 export const UPSERT_APPS_SQL = `insert into steam_apps (appid, name, poll_tier, tracking_reason)
 select appid, name, poll_tier, tracking_reason
   from jsonb_to_recordset($1::jsonb) as x(
@@ -369,6 +477,12 @@ export async function readKnownAppIds(
   if (appids.length === 0) return new Set();
   const rows = await execute<{ appid: string | number }>(KNOWN_APPIDS_SQL, [JSON.stringify(appids)]);
   return new Set(rows.map((row) => Number(row.appid)).filter((id) => Number.isSafeInteger(id)));
+}
+
+/** Fills `games.steam_appid` for every game the matcher can resolve safely. */
+export async function linkGamesToSteamApps(execute: SqlExecutor): Promise<number> {
+  const rows = await execute<{ id: string }>(LINK_GAMES_TO_STEAM_APPS_SQL, []);
+  return rows.length;
 }
 
 export async function demoteInactiveApps(
