@@ -216,6 +216,16 @@ describe("buildIdentityRelation (§8.8a)", () => {
     expect(buildIdentityRelation(on(730, "1"), on(570, "2"))).toBe("unknown");
   });
 
+  it("will not compare build ids that are not anchored to an app", () => {
+    // The two fields are independently optional, so a buildid with no appid
+    // reaches here. Both sides missing must not read as "the same app": these
+    // could be any two titles.
+    expect(buildIdentityRelation({ steamBuildId: "1" }, { steamBuildId: "1" })).toBe("unknown");
+    expect(buildIdentityRelation({ steamBuildId: "1" }, { steamBuildId: "2" })).toBe("unknown");
+    expect(buildIdentityRelation(on(730, "1"), { steamBuildId: "1" })).toBe("unknown");
+    expect(buildIdentityRelation({ steamBuildId: "1" }, on(730, "1"))).toBe("unknown");
+  });
+
   it("stays OUT of the pooling key, so a patch cannot shatter a distribution", () => {
     // The whole point: pooling across builds is what lets a distribution exist.
     // If this ever becomes a key field, every game's buckets reset on patch day

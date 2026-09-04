@@ -24,6 +24,7 @@ export * from "./eligibility";
 export * from "./statistics";
 export * from "./assessment";
 export * from "./stream";
+export * from "./safe-fetch";
 
 export { FRAME_GENERATION_EVIDENCE, PHYSICS, reconcileGeneratedFrameTech } from "./integrity";
 export {

@@ -94,33 +94,40 @@ impl<'a> Scanner<'a> {
             return None;
         }
         self.pos += 1;
-        let mut out = String::new();
+        // BYTES, not chars. `byte as char` maps each byte to the code point of
+        // the same value, which decodes Steam's UTF-8 files as Latin-1: a
+        // library path `D:\Jeux Vidéo\SteamLibrary` came back mojibake'd, its
+        // read_dir then failed, and every app in that library disappeared from
+        // detection. The input is a `&str`, so the bytes between the quotes are
+        // valid UTF-8 and every escape below substitutes ASCII — collecting
+        // them and validating once at the close quote is lossless.
+        let mut out: Vec<u8> = Vec::new();
         while let Some(&byte) = self.bytes.get(self.pos) {
             self.pos += 1;
             match byte {
-                b'"' => return Some(out),
+                b'"' => return String::from_utf8(out).ok(),
                 // `\\` in a Windows path, `\"` in a label. Anything else keeps
                 // the backslash: Steam does not escape it and neither do we.
                 b'\\' => match self.bytes.get(self.pos) {
                     Some(b'\\') => {
-                        out.push('\\');
+                        out.push(b'\\');
                         self.pos += 1;
                     }
                     Some(b'"') => {
-                        out.push('"');
+                        out.push(b'"');
                         self.pos += 1;
                     }
                     Some(b'n') => {
-                        out.push('\n');
+                        out.push(b'\n');
                         self.pos += 1;
                     }
                     Some(b't') => {
-                        out.push('\t');
+                        out.push(b'\t');
                         self.pos += 1;
                     }
-                    _ => out.push('\\'),
+                    _ => out.push(b'\\'),
                 },
-                _ => out.push(byte as char),
+                _ => out.push(byte),
             }
         }
         // Unterminated string: the file is truncated, so the parse fails.
@@ -573,6 +580,30 @@ mod tests {
             .to_string_lossy()
             .contains(r"\Program Files (x86)\"));
         assert!(!paths[0].to_string_lossy().contains(r"\\"));
+    }
+
+    #[test]
+    fn keeps_non_ascii_paths_and_names_intact() {
+        // Steam writes .vdf and .acf as UTF-8. Decoding them a byte at a time
+        // turned `é` into `Ã©`: the mangled library path's read_dir then failed
+        // and every app installed there vanished from detection, while a
+        // mangled installdir stopped matching the running executable's path.
+        let folders = r#"
+"libraryfolders"
+{
+	"0"
+	{
+		"path"		"D:\\Jeux Vidéo\\SteamLibrary"
+	}
+}
+"#;
+        assert_eq!(
+            parse_library_folders(folders),
+            vec![PathBuf::from(r"D:\Jeux Vidéo\SteamLibrary")]
+        );
+
+        let acf = CS2_MANIFEST.replace("Counter-Strike Global Offensive", "Ōkami HD");
+        assert_eq!(parse_app_manifest(&acf).unwrap().installdir, "Ōkami HD");
     }
 
     #[test]

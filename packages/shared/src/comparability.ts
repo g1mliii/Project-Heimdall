@@ -263,6 +263,14 @@ export function buildIdentityRelation(
   if (!leftBuild || !rightBuild) return "unknown";
   // Two different apps are not a build difference; that is a different-game
   // problem and belongs to whatever compared them, not here.
-  if (left?.steamAppId !== right?.steamAppId) return "unknown";
+  //
+  // BOTH app ids must be PRESENT, not merely equal. The two fields are
+  // independently optional in the manifest, so a manifest can carry a buildid
+  // with no appid — and `undefined !== undefined` is false, which would let two
+  // unrelated titles fall through to a "same-build"/"different-build" verdict
+  // off an unobserved field. An absent observation reads as unknown.
+  const leftApp = left?.steamAppId;
+  const rightApp = right?.steamAppId;
+  if (leftApp === undefined || rightApp === undefined || leftApp !== rightApp) return "unknown";
   return leftBuild === rightBuild ? "same-build" : "different-build";
 }

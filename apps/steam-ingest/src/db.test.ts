@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createTestDb, testDbAvailable, type TestDb } from "../../web/src/lib/testing/test-db";
 import {
+  demoteInactiveApps,
   readStaleCatalogApps,
   readTrackedApps,
   upsertTrackedApps,
@@ -61,6 +62,9 @@ describe.skipIf(!canRun)("steam ingest persistence", () => {
     await db?.teardown();
   });
 
+  const trackedIds = async (pollTier: number | null = null) =>
+    (await readTrackedApps(execute, pollTier)).map((app) => app.appid);
+
   const seed = () =>
     upsertTrackedApps(execute, [
       { appid: APPID, name: "Counter-Strike 2", pollTier: 1, trackingReason: "featured" },
@@ -98,8 +102,8 @@ describe.skipIf(!canRun)("steam ingest persistence", () => {
 
   it("seeds tracked apps and reads them back by tier", async () => {
     expect(await seed()).toBe(2);
-    expect(await readTrackedApps(execute)).toEqual([APPID, OTHER]);
-    expect(await readTrackedApps(execute, 1)).toEqual([APPID]);
+    expect(await trackedIds()).toEqual([APPID, OTHER]);
+    expect(await trackedIds(1)).toEqual([APPID]);
   });
 
   it("never widens a hand-narrowed poll tier", async () => {
@@ -110,7 +114,7 @@ describe.skipIf(!canRun)("steam ingest persistence", () => {
       [OTHER],
     );
     expect(rows[0]!.poll_tier).toBe(0);
-    expect(await readTrackedApps(execute)).toEqual([APPID]);
+    expect(await trackedIds()).toEqual([APPID]);
     await db.pool.query(`update steam_apps set poll_tier = 2 where appid = $1`, [OTHER]);
   });
 
@@ -280,6 +284,84 @@ describe.skipIf(!canRun)("steam ingest persistence", () => {
     await expect(
       db.pool.query(`update games set steam_appid = $1 where slug = 'cs2-dupe'`, [APPID]),
     ).rejects.toThrow(/games_steam_appid_key/);
+  });
+
+  const DLC = 111_111;
+
+  it("parks an app that has never once reported a player count", async () => {
+    await upsertTrackedApps(execute, [
+      { appid: DLC, name: "Some Soundtrack", pollTier: 2, trackingReason: "featured" },
+    ]);
+    // Steam answers `result != 1` for DLC, tools, demos and soundtracks, so the
+    // players lane wrote no row for this app and never will. Keying the grace
+    // window on one exempted exactly the class the pass exists to shed.
+    await db.pool.query(
+      `update steam_apps set first_seen_at = now() - interval '8 days' where appid = $1`,
+      [DLC],
+    );
+    expect(await demoteInactiveApps(execute, 50)).toBe(1);
+    const { rows } = await db.pool.query<{ poll_tier: number; parked_at: Date | null }>(
+      `select poll_tier, parked_at from steam_apps where appid = $1`,
+      [DLC],
+    );
+    expect(rows[0]!.poll_tier).toBe(0);
+    // Recorded, so a later re-discovery can tell the poller's parking from an
+    // operator's.
+    expect(rows[0]!.parked_at).not.toBeNull();
+  });
+
+  it("spares an entrant it has not watched for a day yet", async () => {
+    const FRESH = 222_222;
+    await upsertTrackedApps(execute, [
+      { appid: FRESH, name: "Brand New", pollTier: 2, trackingReason: "featured" },
+    ]);
+    expect(await demoteInactiveApps(execute, 50)).toBe(0);
+    const { rows } = await db.pool.query<{ poll_tier: number }>(
+      `select poll_tier from steam_apps where appid = $1`,
+      [FRESH],
+    );
+    expect(rows[0]!.poll_tier).toBe(2);
+  });
+
+  it("re-promotes a parked app the moment it charts, but not when featured re-lists it", async () => {
+    // Featured re-discovery is the noise the parking pass exists to shed.
+    await upsertTrackedApps(execute, [
+      { appid: DLC, name: "Some Soundtrack", pollTier: 2, trackingReason: "featured" },
+    ]);
+    expect(await trackedIds()).not.toContain(DLC);
+
+    await upsertTrackedApps(execute, [
+      { appid: DLC, name: "Some Soundtrack", pollTier: 1, trackingReason: "charts" },
+    ]);
+    const { rows } = await db.pool.query<{
+      poll_tier: number;
+      parked_at: Date | null;
+      promoted_at: Date | null;
+    }>(`select poll_tier, parked_at, promoted_at from steam_apps where appid = $1`, [DLC]);
+    expect(rows[0]!.poll_tier).toBe(1);
+    expect(rows[0]!.parked_at).toBeNull();
+    expect(rows[0]!.promoted_at).not.toBeNull();
+    expect(await trackedIds()).toContain(DLC);
+
+    // A new tracked stretch gets its own day of grace, so the same pass cannot
+    // immediately re-park it on the empty week it spent at tier 0.
+    expect(await demoteInactiveApps(execute, 50)).toBe(0);
+  });
+
+  it("keeps an operator's hand-narrowed tier 0 parked even when it charts", async () => {
+    const HAND = 333_333;
+    await upsertTrackedApps(execute, [
+      { appid: HAND, name: "Hand Parked", pollTier: 2, trackingReason: "featured" },
+    ]);
+    await db.pool.query(`update steam_apps set poll_tier = 0 where appid = $1`, [HAND]);
+    await upsertTrackedApps(execute, [
+      { appid: HAND, name: "Hand Parked", pollTier: 1, trackingReason: "charts" },
+    ]);
+    const { rows } = await db.pool.query<{ poll_tier: number }>(
+      `select poll_tier from steam_apps where appid = $1`,
+      [HAND],
+    );
+    expect(rows[0]!.poll_tier).toBe(0);
   });
 
   it("nulls the game link rather than deleting the game when an app goes away", async () => {

@@ -10,6 +10,7 @@ import {
   writePriceSnapshots,
   writeReviewSnapshots,
   type SqlExecutor,
+  type TrackedApp,
 } from "./db";
 import { mapWithConcurrency } from "./fetch";
 import {
@@ -25,6 +26,9 @@ import {
   LANE_CADENCE_MS,
   PRICE_BATCH_SIZE,
 } from "./sources";
+import { summariseError } from "@heimdall/shared";
+
+import { POLL_TIER, TRACKING_REASON } from "./types";
 import type {
   AppMetadata,
   AppUpdate,
@@ -51,6 +55,8 @@ import type {
 export interface LaneLimits {
   playerApps: number;
   reviewApps: number;
+  /** Apps priced per run. Costs ceil(n / PRICE_BATCH_SIZE) per country. */
+  priceApps: number;
   catalogApps: number;
   concurrency: number;
   /** Names cost one subrequest each and cannot be batched — cap per run. */
@@ -62,6 +68,11 @@ export interface LaneLimits {
 export const LANE_LIMITS: LaneLimits = {
   playerApps: 400,
   reviewApps: 300,
+  // Batching makes this the cheapest lane per app — 1000 apps is 20 subrequests
+  // per country — but "cheapest" is not "free", and it was the one lane with no
+  // cap at all: its cost grew with the working set and multiplies with every
+  // country added to PRICE_COUNTRIES.
+  priceApps: 1000,
   catalogApps: 80,
   concurrency: 6,
   nameLookups: 60,
@@ -88,11 +99,7 @@ export interface IngestDeps {
 
 /** Never let a connection string or a store payload reach a persisted log. */
 export function errorSummary(error: unknown): string {
-  if (!(error instanceof Error)) return "unknown ingest error";
-  return `${error.name}: ${error.message}`.replace(
-    /postgres(?:ql)?:\/\/[^\s]+/gi,
-    "[redacted database URL]",
-  );
+  return summariseError(error, "unknown ingest error");
 }
 
 function chunk<T>(items: readonly T[], size: number): T[][] {
@@ -103,9 +110,64 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
   return out;
 }
 
+/**
+ * Partition into fixed windows and advance one per run.
+ *
+ * The index comes from the lane's own cadence, never from stored state: a
+ * retried, duplicated or overlapping invocation inside one cadence window lands
+ * on the same index, re-polls the same apps and collapses onto the same
+ * `bucket` key — the idempotence the whole bucket design rests on.
+ */
+function rotate(apps: readonly number[], limit: number, now: Date, cadenceMs: number): number[] {
+  if (apps.length <= limit) return [...apps];
+  const windows = Math.ceil(apps.length / limit);
+  const index = Math.floor(now.getTime() / cadenceMs) % windows;
+  return apps.slice(index * limit, index * limit + limit);
+}
+
+/**
+ * The slice of the working set THIS run polls.
+ *
+ * A cap with no rotation is a permanent blind spot, not a budget. TRACKED_APPS_SQL
+ * orders deterministically (`poll_tier asc, appid asc`), so a plain
+ * `slice(0, limit)` polls the same head every run and an app sorting past the
+ * cut is never sampled once, however long the poller runs. Rotating covers
+ * every app once per `ceil(n / limit)` runs at exactly the same cost per run.
+ * The catalog lane already does this in SQL, by staleness; these lanes have no
+ * column to sort on, so the rotation is positional.
+ *
+ * Tier 1 is EXEMPT from the rotation, because rotating it would quietly delete
+ * the distinction `poll_tier` exists to draw: the schema calls tier 1 the high
+ * cadence set and tier 2 standard, and the old `slice(0, limit)` honoured that
+ * only by accident of the tier-ascending sort. So the declared set is polled
+ * every run and the rotation spends whatever budget is left on the rest. Only
+ * when tier 1 alone overruns the cap does it rotate too — at that point the cap
+ * is the binding constraint and something has to give.
+ */
+export function pollWindow(
+  apps: readonly TrackedApp[],
+  limit: number,
+  now: Date,
+  cadenceMs: number,
+): number[] {
+  if (!Number.isInteger(limit) || limit < 1) throw new Error("app cap must be a positive integer");
+  const pinned: number[] = [];
+  const rotating: number[] = [];
+  for (const app of apps) {
+    (app.pollTier === POLL_TIER.high ? pinned : rotating).push(app.appid);
+  }
+  if (pinned.length >= limit) return rotate(pinned, limit, now, cadenceMs);
+  return [...pinned, ...rotate(rotating, limit - pinned.length, now, cadenceMs)];
+}
+
 async function runPlayersLane(deps: ResolvedDeps): Promise<LaneReport> {
   const { execute, fetchImpl, limits, now } = deps;
-  const apps = (await readTrackedApps(execute)).slice(0, limits.playerApps);
+  const apps = pollWindow(
+    await readTrackedApps(execute),
+    limits.playerApps,
+    now,
+    LANE_CADENCE_MS.players,
+  );
   const bucket = bucketFor(now, LANE_CADENCE_MS.players);
   const results = await mapWithConcurrency(apps, limits.concurrency, (appid) =>
     fetchPlayerCount(appid, { fetchImpl }),
@@ -131,7 +193,12 @@ async function runPlayersLane(deps: ResolvedDeps): Promise<LaneReport> {
 
 async function runReviewsLane(deps: ResolvedDeps): Promise<LaneReport> {
   const { execute, fetchImpl, limits, now } = deps;
-  const apps = (await readTrackedApps(execute)).slice(0, limits.reviewApps);
+  const apps = pollWindow(
+    await readTrackedApps(execute),
+    limits.reviewApps,
+    now,
+    LANE_CADENCE_MS.reviews,
+  );
   const bucket = bucketFor(now, LANE_CADENCE_MS.reviews);
   const results = await mapWithConcurrency(apps, limits.concurrency, (appid) =>
     fetchReviewSummary(appid, bucket, { fetchImpl }),
@@ -152,7 +219,12 @@ async function runReviewsLane(deps: ResolvedDeps): Promise<LaneReport> {
 
 async function runPricesLane(deps: ResolvedDeps): Promise<LaneReport> {
   const { execute, fetchImpl, limits, now, priceCountries } = deps;
-  const apps = await readTrackedApps(execute);
+  const apps = pollWindow(
+    await readTrackedApps(execute),
+    limits.priceApps,
+    now,
+    LANE_CADENCE_MS.prices,
+  );
   const bucket = bucketFor(now, LANE_CADENCE_MS.prices);
   const batches = chunk(apps, PRICE_BATCH_SIZE).flatMap((batch) =>
     priceCountries.map((countryCode) => ({ batch, countryCode })),
@@ -206,8 +278,8 @@ async function runCatalogLane(deps: ResolvedDeps): Promise<LaneReport> {
       .map((r) => ({
         appid: (r as { value: { appid: number; name: string } }).value.appid,
         name: (r as { value: { appid: number; name: string } }).value.name,
-        pollTier: 1,
-        trackingReason: "charts",
+        pollTier: POLL_TIER.high,
+        trackingReason: TRACKING_REASON.charts,
       }));
     if (seeds.length > 0) appsDiscovered += await upsertTrackedApps(execute, seeds);
   } catch (error) {
@@ -225,8 +297,8 @@ async function runCatalogLane(deps: ResolvedDeps): Promise<LaneReport> {
         featured.map((app) => ({
           appid: app.appid,
           name: app.name,
-          pollTier: 2,
-          trackingReason: "featured",
+          pollTier: POLL_TIER.standard,
+          trackingReason: TRACKING_REASON.featured,
         })),
       );
     }

@@ -97,10 +97,19 @@ describe("insertRun parameter binding", () => {
     return query.mock.calls[0] as [string, unknown[]];
   }
 
-  /** column name → the value bound to the placeholder in its select-list slot. */
-  function boundColumns(sql: string, params: unknown[]): Map<string, unknown> {
-    const match = /insert into runs \(([\s\S]*?)\) select([\s\S]*?)where \(/.exec(sql);
-    expect(match, "runs insert not found").not.toBeNull();
+  /**
+   * column name → the value bound to the placeholder in its select-list slot.
+   *
+   * `insert` must capture the column list first and the select list second.
+   */
+  function boundColumns(
+    sql: string,
+    params: unknown[],
+    insert: RegExp,
+    label: string,
+  ): Map<string, unknown> {
+    const match = insert.exec(sql);
+    expect(match, `${label} insert not found`).not.toBeNull();
     const columns = (match?.[1] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
     const values = (match?.[2] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
     expect(values).toHaveLength(columns.length);
@@ -115,7 +124,12 @@ describe("insertRun parameter binding", () => {
 
   it("lands each run column on its own value", async () => {
     const [sql, params] = await captureInsertRun();
-    const bound = boundColumns(sql, params);
+    const bound = boundColumns(
+      sql,
+      params,
+      /insert into runs \(([\s\S]*?)\) select([\s\S]*?)where \(/,
+      "runs",
+    );
 
     expect(bound.get("id")).toBe(distinctRun.id);
     expect(bound.get("game_raw")).toBe(distinctRun.game);
@@ -135,22 +149,14 @@ describe("insertRun parameter binding", () => {
 
   it("binds the summary block in run_summaries column order", async () => {
     const [sql, params] = await captureInsertRun();
-    const insert = /insert into run_summaries \(([\s\S]*?)\) select ([\s\S]*?)\s+from run_row/.exec(
+    const bound = boundColumns(
       sql,
+      params,
+      /insert into run_summaries \(([\s\S]*?)\) select ([\s\S]*?)\s+from run_row/,
+      "run_summaries",
     );
-    expect(insert, "run_summaries insert not found").not.toBeNull();
-
-    const columns = (insert?.[1] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-    const values = (insert?.[2] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-    expect(values).toHaveLength(columns.length);
     // First column is run_id; the rest are the canonical summary columns.
-    expect(columns[0]).toBe("run_id");
-    const bound = new Map(
-      columns.map((column, i) => {
-        const placeholder = /\$(\d+)/.exec(values[i]!);
-        return [column, params[Number(placeholder![1]) - 1]];
-      }),
-    );
+    expect([...bound.keys()][0]).toBe("run_id");
     expect(bound.get("run_id")).toBe(distinctRun.id);
     expect(bound.get("avg_fps")).toBe(distinctRun.summary.avgFps);
     expect(bound.get("p1_low_fps")).toBe(distinctRun.summary.onePercentLowFps);

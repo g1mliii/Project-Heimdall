@@ -114,9 +114,14 @@ export async function collectOnce({
     }
   }
 
-  const buildCounts = await writeBuilds(execute, builds, seenAt);
-  const depotCounts = await writeDepots(execute, depots, seenAt);
-  const manifestCounts = await writeManifests(execute, manifests, seenAt);
+  // Three independent writes: each table hangs off steam_apps and none
+  // references another, so nothing orders them. Sequential awaits cost two
+  // extra round trips per run for no guarantee.
+  const [buildCounts, depotCounts, manifestCounts] = await Promise.all([
+    writeBuilds(execute, builds, seenAt),
+    writeDepots(execute, depots, seenAt),
+    writeManifests(execute, manifests, seenAt),
+  ]);
 
   // Advance the cursor only after the writes land, so a crash mid-run re-reads
   // the same window instead of skipping it.
@@ -139,7 +144,17 @@ export async function collectOnce({
   };
 }
 
-/** Never let a connection string reach a persisted log. */
+/**
+ * Never let a connection string reach a persisted log.
+ *
+ * DELIBERATELY A COPY of `summariseError` in `@heimdall/shared`, which the two
+ * sibling pollers import. This collector is the one worker that is not bundled:
+ * it compiles with `tsc` and runs as `node dist/index.js`, while
+ * `@heimdall/shared` publishes raw TypeScript (`main: ./src/index.ts`) with no
+ * build step, so importing it here would need this app repackaged and its
+ * workflow taught to build the package first. Widen the pattern in both places
+ * until that changes.
+ */
 export function summarise(error: unknown): string {
   if (!(error instanceof Error)) return "unknown pics error";
   return `${error.name}: ${error.message}`.replace(

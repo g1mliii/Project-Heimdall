@@ -604,14 +604,24 @@ commit — local Windows renders are not valid baselines.
   patch-note latch, and the `games` link constraints.
 
 ### Phase 8.7 Regression Gate
-- `pnpm verify` green; 83 tests in `apps/steam-ingest` (15 of them against Postgres 17); the worker
-  builds under `wrangler deploy --dry-run`; no lane can exceed its per-invocation subrequest cap.
+- `pnpm verify` green; 111 tests in `apps/steam-ingest` (19 of them against Postgres 17); the worker
+  builds under `wrangler deploy --dry-run`; no lane can exceed its per-invocation subrequest cap,
+  and no capped lane can leave the tail of the working set permanently unpolled.
 
 **Phase 8.7 collectors implemented (2026-09-02).** Schema, worker and all four lanes landed with
 fixtures captured live the same day. 8.7.8-8.7.11 are open. **Deploy needs:** `DATABASE_URL` as a
 Worker secret, `pnpm migrate` against Neon, and a Workers PAID plan — `LANE_LIMITS` defaults assume
 the 1000-subrequest budget; the free plan's 50 requires dropping every cap by an order of
 magnitude, and the honest fix there is a smaller working set, not a higher cap.
+
+**Working-set lifecycle corrected (2026-09-03).** Review of the merge found the parking pass could
+never park its targets (its grace guard needed a player-count row, which Steam never reports for
+DLC, tools and demos), tier 0 was absorbing so a parked app could never be re-promoted however hard
+it charted, and the capped players/reviews lanes plus the uncapped prices lane between them either
+starved the tail of the working set or grew without bound. Migrations 0043 (`parked_at`,
+`promoted_at`) and 0044 (`games_steam_appid_fkey` was only ever created in the first schema
+migrated, because 0041's guard reads database-wide `pg_constraint` unqualified) go with the fix, so
+this needs `pnpm migrate` again.
 
 ---
 

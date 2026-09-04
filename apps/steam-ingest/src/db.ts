@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless";
+import { assertDatabaseUrl } from "@heimdall/shared";
 
 import type { AppMetadata, AppUpdate, PlayerCountSample, PriceSample, ReviewSample } from "./types";
 
@@ -14,7 +15,7 @@ import type { AppMetadata, AppUpdate, PlayerCountSample, PriceSample, ReviewSamp
  * costing a poll cycle.
  */
 
-export const TRACKED_APPS_SQL = `select appid
+export const TRACKED_APPS_SQL = `select appid, poll_tier
   from steam_apps
  where poll_tier > 0
    and ($1::smallint is null or poll_tier = $1::smallint)
@@ -51,15 +52,20 @@ export const KNOWN_APPIDS_SQL = `select a.appid
  * someone decided it matters, not because it was busy this week.
  */
 export const DEMOTE_INACTIVE_APPS_SQL = `update steam_apps a
-   set poll_tier = 0
+   set poll_tier = 0, parked_at = now()
  where a.poll_tier > 0
    and coalesce(a.tracking_reason, '') not in ('curated-benchmark', 'charts')
    -- Only judge an app we have actually watched for a day; a new entrant must
-   -- not be parked before it has had a chance to report anything.
-   and exists (
-     select 1 from steam_player_counts p
-      where p.appid = a.appid and p.bucket <= now() - interval '24 hours'
-   )
+   -- not be parked before it has had a chance to draw a crowd.
+   --
+   -- Asked of the APP, never of its samples. Keying this on "has a player-count
+   -- row older than a day" exempted exactly the class this pass exists to shed:
+   -- Steam answers "result != 1" for DLC, tools, demos and soundtracks, the
+   -- players lane writes no row for those, and the guard was false for them
+   -- forever. promoted_at (0043), not first_seen_at, is the start of the
+   -- CURRENT tracked stretch, so a title the charts just re-promoted gets its
+   -- own day rather than being judged on the week it spent parked.
+   and coalesce(a.promoted_at, a.first_seen_at) <= now() - interval '24 hours'
    and coalesce((
      select max(p.players) from steam_player_counts p
       where p.appid = a.appid and p.bucket >= now() - interval '7 days'
@@ -78,7 +84,31 @@ on conflict (appid) do update
   set name = excluded.name,
       -- Never silently widen coverage on re-discovery: an operator who parked an
       -- app at tier 0 keeps it there, and a re-seed only ever tightens cadence.
-      poll_tier = least(steam_apps.poll_tier, excluded.poll_tier),
+      -- A hand-narrowed row has a null parked_at, so it takes the least
+      -- branch below and is untouched by any amount of re-discovery.
+      --
+      -- The POLLER's own parking is the exception, and it has to be: the
+      -- demotion pass promises "an app that takes off is re-promoted by the
+      -- charts source the moment it charts", and least() alone made tier 0
+      -- absorbing, so a title parked during a quiet week and then charting at
+      -- number one stayed dark forever. CHARTS ONLY — featured re-discovery is
+      -- the noise the parking pass exists to shed, and letting it un-park would
+      -- put the working set straight back on the treadmill.
+      --
+      -- One re-promotion decides all three columns, so it is named once and
+      -- they are assigned together: a tier that moved without its dates, or
+      -- dates without the tier, is the same silent half-state the 0043 comment
+      -- describes. Re-promotion also starts a NEW tracked stretch, which is
+      -- what buys the app its day of grace before the demotion pass can judge
+      -- it again on the empty week it spent at tier 0.
+      (poll_tier, promoted_at, parked_at) = (
+        select case when r.repromote then excluded.poll_tier
+                    else least(steam_apps.poll_tier, excluded.poll_tier) end,
+               case when r.repromote then now() else steam_apps.promoted_at end,
+               case when r.repromote then null else steam_apps.parked_at end
+          from (select steam_apps.parked_at is not null
+                   and excluded.tracking_reason = 'charts') as r(repromote)
+      ),
       tracking_reason = coalesce(steam_apps.tracking_reason, excluded.tracking_reason)
 returning 1`;
 
@@ -272,6 +302,17 @@ returning 1`;
 
 export type SqlExecutor = <Row>(text: string, params: readonly unknown[]) => Promise<Row[]>;
 
+/**
+ * One app in the working set. The tier rides along because the lanes have to
+ * spend a finite per-run budget on it: `steam_apps.poll_tier` declares which
+ * apps are the high-cadence set, and a lane that reads only appids has no way
+ * to honour that.
+ */
+export interface TrackedApp {
+  appid: number;
+  pollTier: number;
+}
+
 export interface TrackedAppSeed {
   appid: number;
   name: string;
@@ -279,16 +320,9 @@ export interface TrackedAppSeed {
   trackingReason: string;
 }
 
-function validateDatabaseUrl(value: string): void {
-  const url = new URL(value);
-  if (!(["postgres:", "postgresql:"] as string[]).includes(url.protocol) || !url.hostname) {
-    throw new Error("DATABASE_URL must be a PostgreSQL connection string");
-  }
-}
-
 /** A Neon-backed executor. Kept separate so every write path is unit-testable. */
 export function executorFor(databaseUrl: string): SqlExecutor {
-  validateDatabaseUrl(databaseUrl);
+  assertDatabaseUrl(databaseUrl);
   const sql = neon(databaseUrl);
   return (<Row>(text: string, params: readonly unknown[]) =>
     sql.query(text, params as never[]) as unknown as Promise<Row[]>) as SqlExecutor;
@@ -307,11 +341,16 @@ async function writeBatch(
 export async function readTrackedApps(
   execute: SqlExecutor,
   pollTier: number | null = null,
-): Promise<number[]> {
-  const rows = await execute<{ appid: string | number }>(TRACKED_APPS_SQL, [pollTier]);
+): Promise<TrackedApp[]> {
+  const rows = await execute<{ appid: string | number; poll_tier: string | number }>(
+    TRACKED_APPS_SQL,
+    [pollTier],
+  );
   // Neon returns bigint as a string to avoid a lossy Number cast; appids are far
   // below 2^53, so narrowing here is safe and keeps the rest of the app numeric.
-  return rows.map((row) => Number(row.appid)).filter((appid) => Number.isSafeInteger(appid));
+  return rows
+    .map((row) => ({ appid: Number(row.appid), pollTier: Number(row.poll_tier) }))
+    .filter((app) => Number.isSafeInteger(app.appid));
 }
 
 export async function readStaleCatalogApps(

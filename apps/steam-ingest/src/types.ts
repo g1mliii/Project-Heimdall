@@ -6,6 +6,33 @@
  */
 export type IngestLane = "players" | "reviews" | "prices" | "catalog";
 
+/**
+ * steam_apps.poll_tier (migration 0041). The poller reads this column, so
+ * widening coverage is a data change rather than a deploy — which only works
+ * while every reader agrees on what the numbers mean.
+ */
+export const POLL_TIER = {
+  /** Known but not polled: the long tail, plus whatever the demotion pass parks. */
+  parked: 0,
+  high: 1,
+  standard: 2,
+} as const;
+
+/**
+ * steam_apps.tracking_reason — why an app is in the working set at all.
+ *
+ * The demotion and re-promotion rules turn on these strings, and db.ts writes
+ * them into SQL text, which cannot interpolate a constant: every statement
+ * there binds values only (see the statement-shape test). db.unit.test.ts
+ * asserts the SQL and this table stay in step, so a rename fails loudly instead
+ * of quietly matching nothing for the lifetime of the deploy.
+ */
+export const TRACKING_REASON = {
+  charts: "charts",
+  featured: "featured",
+  curatedBenchmark: "curated-benchmark",
+} as const;
+
 export interface PlayerCountSample {
   appid: number;
   bucket: string;
