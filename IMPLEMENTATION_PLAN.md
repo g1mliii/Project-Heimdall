@@ -583,10 +583,18 @@ commit — local Windows renders are not valid baselines.
 - **Historical backfill.** The series starts 2026-09-02. There is no way to buy the missing years,
   and SteamDB explicitly prohibits crawling, so this is a floor, not a gap to close.
 
-- [ ] 8.7.8 **Bulk catalog seed** using `STEAM_API_KEY` + `IStoreService/GetAppList` (403s without a
+- [x] 8.7.8 **Bulk catalog seed** using `STEAM_API_KEY` + `IStoreService/GetAppList` (403s without a
   key; `ISteamApps/GetAppList` was REMOVED upstream — confirmed 404 "Method 'GetAppList' not found
-  in interface 'ISteamApps'" on 2026-09-02). Today's working set grows only from
-  `featuredcategories` (~56 appids/day). Until this lands, coverage is thin but real.
+  in interface 'ISteamApps'" on 2026-09-02). Sweeps pages into the KNOWN set at **tier 0**, which is
+  the whole design: Steam's catalog is six figures of apps and polling them is arithmetic, not
+  budgeting — one subrequest each against a 1000-per-invocation ceiling. Tier 0 is what 0041 built
+  for ("known but never polled"), so the catalog gains breadth — a name for any appid, and
+  candidates for the 8.7.9 matcher — while what gets POLLED still earns its slot by charting or
+  being curated. `on conflict do nothing`, so a sweep can never trample a tracked app's tier,
+  reason or metadata. `app_type` comes from the request filter (`include_games` with every other
+  class off) rather than an appdetails read per app. Resumable via `steam_catalog_cursor` (0045);
+  self-suppressing with no key. **Set the key with `wrangler secret put STEAM_API_KEY` — a
+  repository secret or a local `.env` does not reach a deployed Worker.**
 - [x] 8.7.9 **Wire `games.steam_appid`** — `LINK_GAMES_TO_STEAM_APPS_SQL` runs at the end of the
   catalog lane (pure SQL, no subrequest), reusing the driver curator's token-overlap rule: score
   >= 0.82 of the larger token count, winner must clear the runner-up by 0.08. Two guards this
@@ -613,7 +621,7 @@ commit — local Windows renders are not valid baselines.
   patch-note latch, and the `games` link constraints.
 
 ### Phase 8.7 Regression Gate
-- `pnpm verify` green; 124 tests in `apps/steam-ingest` (26 of them against Postgres 17); the worker
+- `pnpm verify` green; 132 tests in `apps/steam-ingest` (29 of them against Postgres 17); the worker
   builds under `wrangler deploy --dry-run`; no lane can exceed its per-invocation subrequest cap,
   and no capped lane can leave the tail of the working set permanently unpolled.
 

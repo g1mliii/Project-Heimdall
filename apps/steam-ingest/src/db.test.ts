@@ -4,6 +4,9 @@ import { createTestDb, testDbAvailable, type TestDb } from "../../web/src/lib/te
 import {
   demoteInactiveApps,
   linkGamesToSteamApps,
+  readCatalogCursor,
+  seedCatalogApps,
+  writeCatalogCursor,
   readStaleCatalogApps,
   readTrackedApps,
   upsertTrackedApps,
@@ -443,6 +446,50 @@ describe.skipIf(!canRun)("steam ingest persistence", () => {
 
     it("costs nothing on a second pass", async () => {
       expect(await linkGamesToSteamApps(execute)).toBe(0);
+    });
+  });
+
+  describe("bulk catalog seed (8.7.8)", () => {
+    it("adds unknown apps at tier 0, where they cost the polled lanes nothing", async () => {
+      const added = await seedCatalogApps(execute, [
+        { appid: 800_001, name: "Seeded Game" },
+        { appid: 800_002, name: "Another Seeded Game" },
+      ]);
+      expect(added).toBe(2);
+      const { rows } = await db.pool.query<{
+        poll_tier: number;
+        app_type: string;
+        tracking_reason: string;
+      }>(`select poll_tier, app_type, tracking_reason from steam_apps where appid = 800001`);
+      expect(rows[0]).toEqual({ poll_tier: 0, app_type: "game", tracking_reason: "catalog" });
+      // Tier 0 is not the working set, so the polled lanes are unmoved.
+      expect(await trackedIds()).not.toContain(800_001);
+    });
+
+    it("never trades a tracked app's tier or reason for a bulk row", async () => {
+      const before = await db.pool.query<{ poll_tier: number; tracking_reason: string; name: string }>(
+        `select poll_tier, tracking_reason, name from steam_apps where appid = $1`,
+        [APPID],
+      );
+      // The same appid arriving in a sweep, with a different name.
+      expect(await seedCatalogApps(execute, [{ appid: APPID, name: "WRONG NAME" }])).toBe(0);
+      const after = await db.pool.query<{ poll_tier: number; tracking_reason: string; name: string }>(
+        `select poll_tier, tracking_reason, name from steam_apps where appid = $1`,
+        [APPID],
+      );
+      expect(after.rows[0]).toEqual(before.rows[0]);
+    });
+
+    it("remembers where a sweep stopped, and that one finished", async () => {
+      expect(await readCatalogCursor(execute)).toEqual({ lastAppid: 0, completedAt: null });
+      await writeCatalogCursor(execute, 123_456, null);
+      expect(await readCatalogCursor(execute)).toEqual({ lastAppid: 123_456, completedAt: null });
+
+      const completedAt = "2026-09-04T00:00:00.000Z";
+      await writeCatalogCursor(execute, 0, completedAt);
+      const done = await readCatalogCursor(execute);
+      expect(done.lastAppid).toBe(0);
+      expect(new Date(done.completedAt!).toISOString()).toBe(completedAt);
     });
   });
 

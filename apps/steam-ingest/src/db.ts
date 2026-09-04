@@ -220,6 +220,42 @@ on conflict (appid) do update
       tracking_reason = coalesce(steam_apps.tracking_reason, excluded.tracking_reason)
 returning 1`;
 
+/**
+ * The bulk catalog seed (8.7.8).
+ *
+ * SEEDS AT TIER 0, WHICH IS THE WHOLE DESIGN. Steam's catalog is six figures of
+ * apps; putting them in the POLLED set is not a budget question, it is
+ * arithmetic — one subrequest each against a 1000-per-invocation ceiling. Tier
+ * 0 is what migration 0041 built for exactly this: "known but never polled".
+ * The catalog gains breadth (a name for any appid, and candidates the 8.7.9
+ * matcher can resolve against), while what gets POLLED still earns its slot by
+ * charting or being curated.
+ *
+ * `do nothing` on conflict, never `do update`: an app already in the working
+ * set must not have its tier, tracking reason or fetched metadata trampled by a
+ * bulk pass. The seed only ever adds what is missing.
+ *
+ * `app_type` is written from the request filter, not from an appdetails read.
+ * `include_games=true` with every other class off is Steam declaring these are
+ * games; asking again per app would cost one subrequest each to learn what the
+ * query already asserted.
+ */
+export const SEED_CATALOG_APPS_SQL = `insert into steam_apps (appid, name, app_type, poll_tier, tracking_reason)
+select x.appid, x.name, 'game', 0, 'catalog'
+  from jsonb_to_recordset($1::jsonb) as x(appid bigint, name text)
+on conflict (appid) do nothing
+returning 1`;
+
+export const READ_CATALOG_CURSOR_SQL = `select last_appid, completed_at
+  from steam_catalog_cursor where name = $1`;
+
+export const WRITE_CATALOG_CURSOR_SQL = `insert into steam_catalog_cursor (name, last_appid, completed_at, updated_at)
+values ($1, $2, $3, now())
+on conflict (name) do update
+  set last_appid = excluded.last_appid,
+      completed_at = excluded.completed_at,
+      updated_at = now()`;
+
 export const INSERT_PLAYER_COUNTS_SQL = `insert into steam_player_counts (appid, bucket, players)
 select x.appid, x.bucket, x.players
   from jsonb_to_recordset($1::jsonb) as x(
@@ -483,6 +519,43 @@ export async function readKnownAppIds(
 export async function linkGamesToSteamApps(execute: SqlExecutor): Promise<number> {
   const rows = await execute<{ id: string }>(LINK_GAMES_TO_STEAM_APPS_SQL, []);
   return rows.length;
+}
+
+export const CATALOG_CURSOR_NAME = "store-app-list";
+
+export interface CatalogCursor {
+  lastAppid: number;
+  completedAt: string | null;
+}
+
+export async function readCatalogCursor(execute: SqlExecutor): Promise<CatalogCursor> {
+  const rows = await execute<{ last_appid: string | number; completed_at: string | null }>(
+    READ_CATALOG_CURSOR_SQL,
+    [CATALOG_CURSOR_NAME],
+  );
+  const row = rows[0];
+  if (!row) return { lastAppid: 0, completedAt: null };
+  const lastAppid = Number(row.last_appid);
+  return {
+    lastAppid: Number.isSafeInteger(lastAppid) && lastAppid > 0 ? lastAppid : 0,
+    completedAt: row.completed_at,
+  };
+}
+
+export async function writeCatalogCursor(
+  execute: SqlExecutor,
+  lastAppid: number,
+  completedAt: string | null,
+): Promise<void> {
+  await execute(WRITE_CATALOG_CURSOR_SQL, [CATALOG_CURSOR_NAME, lastAppid, completedAt]);
+}
+
+/** Adds catalog apps that are not already known. Never touches an existing row. */
+export function seedCatalogApps(
+  execute: SqlExecutor,
+  apps: readonly { appid: number; name: string }[],
+): Promise<number> {
+  return writeBatch(execute, SEED_CATALOG_APPS_SQL, apps);
 }
 
 export async function demoteInactiveApps(

@@ -128,6 +128,8 @@ export interface LaneReport {
   appsParked?: number;
   /** Catalog lane only: canonical games newly resolved to a Steam appid. */
   gamesLinked?: number;
+  /** Catalog lane only: apps added at tier 0 by the bulk catalog seed (8.7.8). */
+  appsSeeded?: number;
 }
 
 export interface IngestLogger {

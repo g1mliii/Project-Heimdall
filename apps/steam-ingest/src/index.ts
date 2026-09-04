@@ -4,6 +4,13 @@ import type { IngestLane } from "./types";
 
 interface Env {
   DATABASE_URL: string;
+  /**
+   * Publisher key for IStoreService/GetAppList (8.7.8). OPTIONAL: absent means
+   * the bulk catalog seed is skipped and discovery still runs from charts and
+   * featured. Set it with `wrangler secret put STEAM_API_KEY` — a repository
+   * secret or a local .env does not reach a deployed Worker.
+   */
+  STEAM_API_KEY?: string;
 }
 
 /**
@@ -26,13 +33,18 @@ export default {
       return;
     }
     try {
-      const report = await runLane(lane, { execute: executorFor(env.DATABASE_URL) });
+      const report = await runLane(lane, {
+        execute: executorFor(env.DATABASE_URL),
+        steamApiKey: env.STEAM_API_KEY,
+      });
       console.info("steam ingest complete", {
         lane: report.lane,
         appsPolled: report.appsPolled,
         rowsWritten: report.rowsWritten,
         appsFailed: report.appsFailed,
         changesRecorded: report.changesRecorded,
+        appsSeeded: report.appsSeeded,
+        gamesLinked: report.gamesLinked,
       });
     } catch {
       // Same posture as driver-curation: never let a connection string or a

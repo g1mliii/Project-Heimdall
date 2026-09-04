@@ -223,6 +223,70 @@ export async function fetchPriceBatch(
 }
 
 /**
+ * One page of Steam's whole catalog (8.7.8).
+ *
+ * The ONLY keyed endpoint this worker uses. `ISteamApps/GetAppList` was removed
+ * upstream (confirmed 404, "Method 'GetAppList' not found in interface
+ * 'ISteamApps'"), and its replacement 403s without a publisher key.
+ *
+ * `include_games` alone, deliberately: DLC, soundtracks, videos and hardware
+ * are exactly the long tail the parking pass exists to shed, and seeding them
+ * would hand the working set the noise it spends every run rejecting. That
+ * filter is also an UPSTREAM DECLARATION that everything returned is a game,
+ * which is what lets the seed write `app_type` without an appdetails read —
+ * the same posture as every other capability fact in this project.
+ *
+ * Returns the page plus the cursor to resume from. `hasMore` false means the
+ * sweep reached the end of the catalog, not that the page was empty.
+ */
+export interface CatalogPage {
+  apps: Array<{ appid: number; name: string }>;
+  lastAppid: number;
+  hasMore: boolean;
+}
+
+export async function fetchCatalogPage(
+  apiKey: string,
+  lastAppid: number,
+  maxResults: number,
+  deps: SourceDeps = {},
+): Promise<CatalogPage> {
+  const url = new URL("https://api.steampowered.com/IStoreService/GetAppList/v1/");
+  url.searchParams.set("key", apiKey);
+  url.searchParams.set("include_games", "true");
+  url.searchParams.set("include_dlc", "false");
+  url.searchParams.set("include_software", "false");
+  url.searchParams.set("include_videos", "false");
+  url.searchParams.set("include_hardware", "false");
+  url.searchParams.set("max_results", String(maxResults));
+  if (lastAppid > 0) url.searchParams.set("last_appid", String(lastAppid));
+
+  const body = await fetchJson(url.toString(), deps);
+  if (!isRecord(body) || !isRecord(body.response)) {
+    throw new Error("catalog page had no response object");
+  }
+  const raw = Array.isArray(body.response.apps) ? body.response.apps : [];
+  const apps: Array<{ appid: number; name: string }> = [];
+  let highest = lastAppid;
+  for (const entry of raw) {
+    if (!isRecord(entry)) continue;
+    const appid = Number(entry.appid);
+    const name = boundedString(entry.name, MAX_NAME_LENGTH);
+    if (!Number.isSafeInteger(appid) || appid <= 0 || !name) continue;
+    apps.push({ appid, name });
+    if (appid > highest) highest = appid;
+  }
+  // Trust Steam's own cursor when it sends one; fall back to the highest appid
+  // we actually saw, so a missing field cannot restart the sweep from zero.
+  const reported = Number(body.response.last_appid);
+  return {
+    apps,
+    lastAppid: Number.isSafeInteger(reported) && reported > 0 ? reported : highest,
+    hasMore: body.response.have_more_results === true,
+  };
+}
+
+/**
  * The two keyless Steam charts endpoints, unioned.
  *
  * This is the RIGHT discovery source, and featuredcategories is not. Featured

@@ -1,12 +1,15 @@
 import {
   demoteInactiveApps,
+  linkGamesToSteamApps,
+  readCatalogCursor,
   readKnownAppIds,
   readStaleCatalogApps,
   readTrackedApps,
+  seedCatalogApps,
   upsertTrackedApps,
-  linkGamesToSteamApps,
   writeAppMetadata,
   writeAppUpdates,
+  writeCatalogCursor,
   writePlayerCounts,
   writePriceSnapshots,
   writeReviewSnapshots,
@@ -19,6 +22,7 @@ import {
   fetchAppMetadata,
   fetchAppName,
   fetchAppUpdates,
+  fetchCatalogPage,
   fetchFeaturedApps,
   fetchTopAppIds,
   fetchPlayerCount,
@@ -64,6 +68,13 @@ export interface LaneLimits {
   nameLookups: number;
   /** Peak players over the last week below which a discovered app is parked. */
   inactivePlayerThreshold: number;
+  /**
+   * Pages of Steam's catalog to sweep per catalog run (8.7.8). One subrequest
+   * and one insert each, so this is cheap in the budget that actually binds.
+   */
+  catalogSeedPages: number;
+  /** Apps requested per seed page. Steam caps this server-side. */
+  catalogSeedPageSize: number;
 }
 
 export const LANE_LIMITS: LaneLimits = {
@@ -78,6 +89,8 @@ export const LANE_LIMITS: LaneLimits = {
   concurrency: 6,
   nameLookups: 60,
   inactivePlayerThreshold: 50,
+  catalogSeedPages: 5,
+  catalogSeedPageSize: 10_000,
 };
 
 /** Widen deliberately: every added country multiplies the price lane's rows. */
@@ -91,6 +104,8 @@ const defaultLogger: IngestLogger = {
 
 export interface IngestDeps {
   execute: SqlExecutor;
+  /** Publisher key for the one keyed endpoint. Absent disables the seed (8.7.8). */
+  steamApiKey?: string;
   fetchImpl?: typeof fetch;
   logger?: IngestLogger;
   now?: Date;
@@ -252,6 +267,46 @@ async function runPricesLane(deps: ResolvedDeps): Promise<LaneReport> {
   };
 }
 
+/**
+ * Sweep pages of Steam's catalog into the KNOWN set at tier 0 (8.7.8).
+ *
+ * Self-suppressing without a key, like every other optional upstream here: no
+ * key means no seed and a working set that still grows from charts and
+ * featured, not a failed run.
+ *
+ * Resumable and idempotent. The cursor is persisted after each page, so a run
+ * that dies halfway resumes where it stopped rather than restarting a
+ * six-figure sweep; and because the insert is `do nothing`, re-reading a page
+ * already seen costs one query and changes nothing. When the sweep reaches the
+ * end it records `completed_at` and rewinds to zero, so the next pass picks up
+ * apps Steam has added since.
+ */
+async function seedCatalog(deps: ResolvedDeps): Promise<number> {
+  const { execute, fetchImpl, limits, logger, now, steamApiKey } = deps;
+  if (!steamApiKey) return 0;
+
+  let { lastAppid } = await readCatalogCursor(execute);
+  let seeded = 0;
+  for (let page = 0; page < limits.catalogSeedPages; page++) {
+    const result = await fetchCatalogPage(
+      steamApiKey,
+      lastAppid,
+      limits.catalogSeedPageSize,
+      { fetchImpl },
+    );
+    if (result.apps.length > 0) seeded += await seedCatalogApps(execute, result.apps);
+    // A page that advances nothing would loop forever on the same cursor.
+    if (!result.hasMore || result.lastAppid <= lastAppid) {
+      await writeCatalogCursor(execute, 0, now.toISOString());
+      logger.info("steam catalog sweep complete", { seeded });
+      return seeded;
+    }
+    lastAppid = result.lastAppid;
+    await writeCatalogCursor(execute, lastAppid, null);
+  }
+  return seeded;
+}
+
 async function runCatalogLane(deps: ResolvedDeps): Promise<LaneReport> {
   const { execute, fetchImpl, limits, logger, now } = deps;
 
@@ -309,6 +364,16 @@ async function runCatalogLane(deps: ResolvedDeps): Promise<LaneReport> {
     logger.warn("steam featured discovery failed", { error: errorSummary(error) });
   }
 
+  // Breadth before parking: a seeded app enters at tier 0, so it never reaches
+  // the parking pass, and the pass's own working-set arithmetic is unchanged.
+  let appsSeeded = 0;
+  try {
+    appsSeeded = await seedCatalog(deps);
+  } catch (error) {
+    // The seed is additive. Losing it costs breadth, never an existing row.
+    logger.warn("steam catalog seed failed", { error: errorSummary(error) });
+  }
+
   let appsParked = 0;
   try {
     appsParked = await demoteInactiveApps(execute, limits.inactivePlayerThreshold);
@@ -360,12 +425,14 @@ async function runCatalogLane(deps: ResolvedDeps): Promise<LaneReport> {
     changesRecorded: metadataReport.changes,
     appsDiscovered,
     appsParked,
+    appsSeeded,
     gamesLinked,
   };
 }
 
 interface ResolvedDeps {
   execute: SqlExecutor;
+  steamApiKey: string | undefined;
   fetchImpl: typeof fetch | undefined;
   limits: LaneLimits;
   logger: IngestLogger;
@@ -376,6 +443,7 @@ interface ResolvedDeps {
 export async function runLane(lane: IngestLane, deps: IngestDeps): Promise<LaneReport> {
   const resolved: ResolvedDeps = {
     execute: deps.execute,
+    steamApiKey: deps.steamApiKey,
     fetchImpl: deps.fetchImpl,
     limits: { ...LANE_LIMITS, ...deps.limits },
     logger: deps.logger ?? defaultLogger,

@@ -19,6 +19,9 @@ function stubDb(trackedApps: number[], highCadence: readonly number[] = []) {
   const execute = vi.fn(async (text: string, params: readonly unknown[]) => {
     calls.push({ text, params });
     if (text.trimStart().startsWith("update steam_apps")) return []; // demotion: nothing parked
+    if (text.includes("update games g")) return []; // linker: nothing resolved
+    if (text.includes("from steam_catalog_cursor")) return [];
+    if (text.trimStart().startsWith("insert into steam_catalog_cursor")) return [];
     if (text.includes("jsonb_array_elements_text")) {
       // known-appid lookup: everything already tracked is "known".
       const asked = JSON.parse(String(params[0])) as number[];
@@ -498,5 +501,147 @@ describe("pollWindow", () => {
 
   it("refuses a nonsensical cap rather than silently polling nothing", () => {
     expect(() => pollWindow(standard(1, 2), 0, now, cadence)).toThrow(/positive integer/);
+  });
+});
+
+describe("bulk catalog seed (8.7.8)", () => {
+  const catalogRoutes = {
+    ISteamChartsService: { response: { ranks: [] } },
+    featuredcategories: {},
+    appdetails: { "730": { success: false } },
+    GetNewsForApp: { appnews: { newsitems: [] } },
+  };
+
+  it("does nothing at all without a key, rather than failing the run", async () => {
+    const db = stubDb([730]);
+    const fetchImpl = routedFetch(catalogRoutes);
+    const report = await runLane("catalog", {
+      execute: db.execute,
+      fetchImpl,
+      logger: silentLogger,
+      now,
+    });
+    expect(report.appsSeeded).toBe(0);
+    expect(String(vi.mocked(fetchImpl).mock.calls)).not.toContain("GetAppList");
+  });
+
+  it("seeds a page at tier 0 so breadth costs the polled lanes nothing", async () => {
+    const db = stubDb([730]);
+    const fetchImpl = routedFetch({
+      ...catalogRoutes,
+      GetAppList: {
+        response: {
+          apps: [
+            { appid: 111, name: "Seeded One" },
+            { appid: 222, name: "Seeded Two" },
+          ],
+          last_appid: 222,
+          have_more_results: false,
+        },
+      },
+    });
+    const report = await runLane("catalog", {
+      execute: db.execute,
+      fetchImpl,
+      logger: silentLogger,
+      now,
+      steamApiKey: "test-key",
+    });
+    expect(report.appsSeeded).toBe(2);
+    const seeded = db.calls.find((call) => call.text.includes("insert into steam_apps (appid, name, app_type, poll_tier"));
+    expect(seeded).toBeDefined();
+    expect(seeded!.text).toContain("'game', 0, 'catalog'");
+    // `do nothing`: a bulk pass must never trample a tracked app's tier.
+    expect(seeded!.text).toContain("on conflict (appid) do nothing");
+  });
+
+  it("stops paging when Steam says there is no more, and rewinds the cursor", async () => {
+    const db = stubDb([730]);
+    let pages = 0;
+    const fetchImpl = vi.fn(async (input: URL | RequestInfo) => {
+      const url = String(input);
+      if (url.includes("GetAppList")) {
+        pages++;
+        return new Response(
+          JSON.stringify({
+            response: { apps: [{ appid: 900 + pages, name: `App ${pages}` }], last_appid: 900 + pages, have_more_results: pages < 2 },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("ISteamChartsService")) return new Response(JSON.stringify({ response: { ranks: [] } }), { status: 200 });
+      if (url.includes("featuredcategories")) return new Response("{}", { status: 200 });
+      if (url.includes("appdetails")) return new Response(JSON.stringify({ "730": { success: false } }), { status: 200 });
+      return new Response(JSON.stringify({ appnews: { newsitems: [] } }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await runLane("catalog", {
+      execute: db.execute,
+      fetchImpl,
+      logger: silentLogger,
+      now,
+      steamApiKey: "test-key",
+      limits: { catalogSeedPages: 5 },
+    });
+    // Two pages, then have_more_results false ends the sweep early.
+    expect(pages).toBe(2);
+    const cursorWrites = db.calls.filter((call) =>
+      call.text.trimStart().startsWith("insert into steam_catalog_cursor"),
+    );
+    expect(cursorWrites.at(-1)!.params[1]).toBe(0);
+    expect(cursorWrites.at(-1)!.params[2]).toBe(now.toISOString());
+  });
+
+  it("honours the page budget on a catalog larger than one run", async () => {
+    const db = stubDb([730]);
+    let pages = 0;
+    const fetchImpl = vi.fn(async (input: URL | RequestInfo) => {
+      const url = String(input);
+      if (url.includes("GetAppList")) {
+        pages++;
+        return new Response(
+          JSON.stringify({
+            response: { apps: [{ appid: 900 + pages, name: `App ${pages}` }], last_appid: 900 + pages, have_more_results: true },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("ISteamChartsService")) return new Response(JSON.stringify({ response: { ranks: [] } }), { status: 200 });
+      if (url.includes("featuredcategories")) return new Response("{}", { status: 200 });
+      if (url.includes("appdetails")) return new Response(JSON.stringify({ "730": { success: false } }), { status: 200 });
+      return new Response(JSON.stringify({ appnews: { newsitems: [] } }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await runLane("catalog", {
+      execute: db.execute,
+      fetchImpl,
+      logger: silentLogger,
+      now,
+      steamApiKey: "test-key",
+      limits: { catalogSeedPages: 3 },
+    });
+    expect(pages).toBe(3);
+  });
+
+  it("keeps the key out of the logged error when a page fails", async () => {
+    const warn = vi.fn();
+    const db = stubDb([730]);
+    const fetchImpl = routedFetch({
+      ...catalogRoutes,
+      GetAppList: () => {
+        throw new Error("upstream 403");
+      },
+    });
+    const report = await runLane("catalog", {
+      execute: db.execute,
+      fetchImpl,
+      logger: { ...silentLogger, warn },
+      now,
+      steamApiKey: "super-secret-key",
+    });
+    // A failed seed must not fail the lane; the refresh below it still ran.
+    expect(report.appsSeeded).toBe(0);
+    expect(report.appsPolled).toBe(1);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("super-secret-key");
   });
 });
