@@ -1,6 +1,6 @@
 import fallbackCsv from "../data/driver-fallback.csv";
 import { compareDriverVersions } from "@heimdall/parsers";
-import { normalizeAliasName } from "@heimdall/shared";
+import { normalizeAliasName, summariseError } from "@heimdall/shared";
 
 import { persistCuration } from "./db";
 import { LIVE_DRIVER_SOURCES, parseFallbackCsv, type DriverSource } from "./sources";
@@ -21,11 +21,7 @@ const defaultLogger: CurationLogger = {
 };
 
 function errorSummary(error: unknown): string {
-  if (!(error instanceof Error)) return "unknown source error";
-  return `${error.name}: ${error.message}`.replace(
-    /postgres(?:ql)?:\/\/[^\s]+/gi,
-    "[redacted database URL]",
-  );
+  return summariseError(error, "unknown source error");
 }
 
 function catalogKey(row: DriverCatalogRecord): string {

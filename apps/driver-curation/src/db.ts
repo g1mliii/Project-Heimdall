@@ -1,5 +1,5 @@
 import { neon } from "@neondatabase/serverless";
-import { normalizeAliasName, slugifyGameName } from "@heimdall/shared";
+import { assertDatabaseUrl, normalizeAliasName, slugifyGameName } from "@heimdall/shared";
 
 import type { CurationBatch, PersistReport } from "./types";
 
@@ -276,13 +276,6 @@ interface PersistRow {
 
 export type SqlExecutor = (text: string, params: readonly unknown[]) => Promise<PersistRow[]>;
 
-function validateDatabaseUrl(value: string): void {
-  const url = new URL(value);
-  if (!(["postgres:", "postgresql:"] as string[]).includes(url.protocol) || !url.hostname) {
-    throw new Error("DATABASE_URL must be a PostgreSQL connection string");
-  }
-}
-
 function catalogJson(batch: CurationBatch): string {
   return JSON.stringify(
     batch.catalog.map((row) => ({
@@ -335,7 +328,7 @@ export async function persistCuration(
   databaseUrl: string,
   batch: CurationBatch,
 ): Promise<PersistReport> {
-  validateDatabaseUrl(databaseUrl);
+  assertDatabaseUrl(databaseUrl);
   const sql = neon(databaseUrl);
   return persistCurationWith(
     (text, params) => sql.query(text, params as never[]) as unknown as Promise<PersistRow[]>,

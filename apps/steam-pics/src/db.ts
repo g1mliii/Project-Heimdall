@@ -99,6 +99,7 @@ on conflict (appid, depot_id, branch, manifest_gid) do update
       )
 returning (xmax = 0) as inserted`;
 
+/** A copy of `assertDatabaseUrl` in `@heimdall/shared`; see `summarise` in collect.ts. */
 function validateDatabaseUrl(value: string): void {
   const url = new URL(value);
   if (!(["postgres:", "postgresql:"] as string[]).includes(url.protocol) || !url.hostname) {

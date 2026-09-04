@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { SqlExecutor } from "./db";
-import { errorSummary, runLane } from "./ingest";
+import { errorSummary, pollWindow, runLane } from "./ingest";
+import { LANE_CADENCE_MS } from "./sources";
 import type { IngestLogger } from "./types";
 
 interface Recorded {
@@ -13,11 +14,14 @@ interface Recorded {
  * Stands in for Neon: answers the two read statements from `trackedApps` and
  * records every write so a test can assert on the rows that would land.
  */
-function stubDb(trackedApps: number[]) {
+function stubDb(trackedApps: number[], highCadence: readonly number[] = []) {
   const calls: Recorded[] = [];
   const execute = vi.fn(async (text: string, params: readonly unknown[]) => {
     calls.push({ text, params });
     if (text.trimStart().startsWith("update steam_apps")) return []; // demotion: nothing parked
+    if (text.includes("update games g")) return []; // linker: nothing resolved
+    if (text.includes("from steam_catalog_cursor")) return [];
+    if (text.trimStart().startsWith("insert into steam_catalog_cursor")) return [];
     if (text.includes("jsonb_array_elements_text")) {
       // known-appid lookup: everything already tracked is "known".
       const asked = JSON.parse(String(params[0])) as number[];
@@ -25,7 +29,9 @@ function stubDb(trackedApps: number[]) {
     }
     if (text.includes("from steam_apps") && text.trimStart().startsWith("select")) {
       const limit = typeof params[0] === "number" ? params[0] : trackedApps.length;
-      return trackedApps.slice(0, limit).map((appid) => ({ appid: String(appid) }));
+      return trackedApps
+        .slice(0, limit)
+        .map((appid) => ({ appid: String(appid), poll_tier: highCadence.includes(appid) ? 1 : 2 }));
     }
     const batch = JSON.parse(String(params[0]));
     // The metadata statement is a CTE returning one report row, not one row
@@ -115,7 +121,7 @@ describe("players lane", () => {
   });
 
   it("honours the per-invocation app cap", async () => {
-    const db = stubDb([1, 2, 3, 4, 5]);
+    const db = stubDb([1, 2, 3, 4]);
     const fetchImpl = routedFetch({
       "GetNumberOfCurrentPlayers": { response: { result: 1, player_count: 1 } },
     });
@@ -127,6 +133,48 @@ describe("players lane", () => {
       limits: { playerApps: 2 },
     });
     expect(report.appsPolled).toBe(2);
+  });
+
+  /** The appids one players run actually sampled, on a fresh stub each time. */
+  const appidsPolledAt = async (
+    at: Date,
+    apps: number[],
+    playerApps: number,
+    highCadence: number[] = [],
+  ) => {
+    const db = stubDb(apps, highCadence);
+    await runLane("players", {
+      execute: db.execute,
+      fetchImpl: routedFetch({
+        GetNumberOfCurrentPlayers: { response: { result: 1, player_count: 1 } },
+      }),
+      logger: silentLogger,
+      now: at,
+      limits: { playerApps },
+    });
+    return db.written("steam_player_counts").map((row) => row.appid);
+  };
+  const nextRun = new Date(now.getTime() + LANE_CADENCE_MS.players);
+
+  it("polls a different window of an oversized working set on the next run", async () => {
+    // A cap with no rotation is a blind spot, not a budget: the tail of the
+    // working set would never be sampled once.
+    const first = await appidsPolledAt(now, [1, 2, 3, 4], 2);
+    const second = await appidsPolledAt(nextRun, [1, 2, 3, 4], 2);
+    expect(first).toHaveLength(2);
+    expect(second).toHaveLength(2);
+    expect(new Set([...first, ...second])).toEqual(new Set([1, 2, 3, 4]));
+  });
+
+  it("keeps the high-cadence tier in every run and rotates only the rest", async () => {
+    // Rotating tier 1 too would silently erase the distinction poll_tier exists
+    // to draw, which the old unrotated slice honoured only by accident of the
+    // tier-ascending sort.
+    const first = await appidsPolledAt(now, [1, 2, 3, 4, 5], 3, [1]);
+    const second = await appidsPolledAt(nextRun, [1, 2, 3, 4, 5], 3, [1]);
+    expect(first).toContain(1);
+    expect(second).toContain(1);
+    expect(new Set([...first, ...second])).toEqual(new Set([1, 2, 3, 4, 5]));
   });
 
   it("re-running inside one cadence window rewrites the same bucket key", async () => {
@@ -174,6 +222,20 @@ describe("prices lane", () => {
       country_code: "us",
       bucket: "2026-09-02T12:00:00.000Z",
     });
+  });
+
+  it("caps the apps it prices, the one lane that used to price the whole set", async () => {
+    const db = stubDb([730, 570, 440, 1091500]);
+    const fetchImpl = routedFetch({ appdetails: {} });
+    const report = await runLane("prices", {
+      execute: db.execute,
+      fetchImpl,
+      logger: silentLogger,
+      now,
+      limits: { priceApps: 2 },
+    });
+    expect(report.appsPolled).toBe(2);
+    expect(vi.mocked(fetchImpl)).toHaveBeenCalledTimes(1);
   });
 
   it("reports lost coverage in apps, not requests, when a batch fails", async () => {
@@ -375,5 +437,211 @@ describe("charts discovery in the catalog lane", () => {
     });
     expect(report.appsPolled).toBe(1);
     expect(report.appsDiscovered).toBe(0);
+  });
+});
+
+describe("pollWindow", () => {
+  const cadence = LANE_CADENCE_MS.players;
+  const at = (steps: number) => new Date(now.getTime() + steps * cadence);
+  /** Standard tier, so nothing is pinned unless a case says so. */
+  const standard = (...appids: number[]) => appids.map((appid) => ({ appid, pollTier: 2 }));
+
+  it("returns the whole working set when it fits under the cap", () => {
+    expect(pollWindow(standard(1, 2, 3), 5, now, cadence)).toEqual([1, 2, 3]);
+  });
+
+  it("covers every app exactly once across one full rotation", () => {
+    const apps = standard(1, 2, 3, 4, 5);
+    const seen: number[] = [];
+    for (let step = 0; step < 3; step++) {
+      const window = pollWindow(apps, 2, at(step), cadence);
+      expect(window.length).toBeLessThanOrEqual(2);
+      seen.push(...window);
+    }
+    expect(seen.sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("holds the same window for a retry inside one cadence bucket", () => {
+    const apps = standard(1, 2, 3, 4, 5);
+    const start = Math.floor(now.getTime() / cadence) * cadence;
+    const first = pollWindow(apps, 2, new Date(start), cadence);
+    const retry = pollWindow(apps, 2, new Date(start + cadence - 1), cadence);
+    expect(retry).toEqual(first);
+  });
+
+  it("polls the high-cadence tier every run and never lets it exceed the cap", () => {
+    const apps = [
+      { appid: 10, pollTier: 1 },
+      { appid: 11, pollTier: 1 },
+      ...standard(1, 2, 3, 4, 5),
+    ];
+    for (let step = 0; step < 4; step++) {
+      const window = pollWindow(apps, 3, at(step), cadence);
+      expect(window).toHaveLength(3);
+      expect(window.slice(0, 2)).toEqual([10, 11]);
+    }
+  });
+
+  it("rotates the high-cadence tier itself once it alone overruns the cap", () => {
+    const apps = [
+      { appid: 10, pollTier: 1 },
+      { appid: 11, pollTier: 1 },
+      { appid: 12, pollTier: 1 },
+      ...standard(1, 2),
+    ];
+    const seen = new Set<number>();
+    for (let step = 0; step < 2; step++) {
+      const window = pollWindow(apps, 2, at(step), cadence);
+      expect(window.length).toBeLessThanOrEqual(2);
+      window.forEach((appid) => seen.add(appid));
+    }
+    // The cap is the binding constraint, so the standard tier waits.
+    expect(seen).toEqual(new Set([10, 11, 12]));
+  });
+
+  it("refuses a nonsensical cap rather than silently polling nothing", () => {
+    expect(() => pollWindow(standard(1, 2), 0, now, cadence)).toThrow(/positive integer/);
+  });
+});
+
+describe("bulk catalog seed (8.7.8)", () => {
+  const catalogRoutes = {
+    ISteamChartsService: { response: { ranks: [] } },
+    featuredcategories: {},
+    appdetails: { "730": { success: false } },
+    GetNewsForApp: { appnews: { newsitems: [] } },
+  };
+
+  it("does nothing at all without a key, rather than failing the run", async () => {
+    const db = stubDb([730]);
+    const fetchImpl = routedFetch(catalogRoutes);
+    const report = await runLane("catalog", {
+      execute: db.execute,
+      fetchImpl,
+      logger: silentLogger,
+      now,
+    });
+    expect(report.appsSeeded).toBe(0);
+    expect(String(vi.mocked(fetchImpl).mock.calls)).not.toContain("GetAppList");
+  });
+
+  it("seeds a page at tier 0 so breadth costs the polled lanes nothing", async () => {
+    const db = stubDb([730]);
+    const fetchImpl = routedFetch({
+      ...catalogRoutes,
+      GetAppList: {
+        response: {
+          apps: [
+            { appid: 111, name: "Seeded One" },
+            { appid: 222, name: "Seeded Two" },
+          ],
+          last_appid: 222,
+          have_more_results: false,
+        },
+      },
+    });
+    const report = await runLane("catalog", {
+      execute: db.execute,
+      fetchImpl,
+      logger: silentLogger,
+      now,
+      steamApiKey: "test-key",
+    });
+    expect(report.appsSeeded).toBe(2);
+    const seeded = db.calls.find((call) => call.text.includes("insert into steam_apps (appid, name, app_type, poll_tier"));
+    expect(seeded).toBeDefined();
+    expect(seeded!.text).toContain("'game', 0, 'catalog'");
+    // `do nothing`: a bulk pass must never trample a tracked app's tier.
+    expect(seeded!.text).toContain("on conflict (appid) do nothing");
+  });
+
+  it("stops paging when Steam says there is no more, and rewinds the cursor", async () => {
+    const db = stubDb([730]);
+    let pages = 0;
+    const fetchImpl = vi.fn(async (input: URL | RequestInfo) => {
+      const url = String(input);
+      if (url.includes("GetAppList")) {
+        pages++;
+        return new Response(
+          JSON.stringify({
+            response: { apps: [{ appid: 900 + pages, name: `App ${pages}` }], last_appid: 900 + pages, have_more_results: pages < 2 },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("ISteamChartsService")) return new Response(JSON.stringify({ response: { ranks: [] } }), { status: 200 });
+      if (url.includes("featuredcategories")) return new Response("{}", { status: 200 });
+      if (url.includes("appdetails")) return new Response(JSON.stringify({ "730": { success: false } }), { status: 200 });
+      return new Response(JSON.stringify({ appnews: { newsitems: [] } }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await runLane("catalog", {
+      execute: db.execute,
+      fetchImpl,
+      logger: silentLogger,
+      now,
+      steamApiKey: "test-key",
+      limits: { catalogSeedPages: 5 },
+    });
+    // Two pages, then have_more_results false ends the sweep early.
+    expect(pages).toBe(2);
+    const cursorWrites = db.calls.filter((call) =>
+      call.text.trimStart().startsWith("insert into steam_catalog_cursor"),
+    );
+    expect(cursorWrites.at(-1)!.params[1]).toBe(0);
+    expect(cursorWrites.at(-1)!.params[2]).toBe(now.toISOString());
+  });
+
+  it("honours the page budget on a catalog larger than one run", async () => {
+    const db = stubDb([730]);
+    let pages = 0;
+    const fetchImpl = vi.fn(async (input: URL | RequestInfo) => {
+      const url = String(input);
+      if (url.includes("GetAppList")) {
+        pages++;
+        return new Response(
+          JSON.stringify({
+            response: { apps: [{ appid: 900 + pages, name: `App ${pages}` }], last_appid: 900 + pages, have_more_results: true },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.includes("ISteamChartsService")) return new Response(JSON.stringify({ response: { ranks: [] } }), { status: 200 });
+      if (url.includes("featuredcategories")) return new Response("{}", { status: 200 });
+      if (url.includes("appdetails")) return new Response(JSON.stringify({ "730": { success: false } }), { status: 200 });
+      return new Response(JSON.stringify({ appnews: { newsitems: [] } }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await runLane("catalog", {
+      execute: db.execute,
+      fetchImpl,
+      logger: silentLogger,
+      now,
+      steamApiKey: "test-key",
+      limits: { catalogSeedPages: 3 },
+    });
+    expect(pages).toBe(3);
+  });
+
+  it("keeps the key out of the logged error when a page fails", async () => {
+    const warn = vi.fn();
+    const db = stubDb([730]);
+    const fetchImpl = routedFetch({
+      ...catalogRoutes,
+      GetAppList: () => {
+        throw new Error("upstream 403");
+      },
+    });
+    const report = await runLane("catalog", {
+      execute: db.execute,
+      fetchImpl,
+      logger: { ...silentLogger, warn },
+      now,
+      steamApiKey: "super-secret-key",
+    });
+    // A failed seed must not fail the lane; the refresh below it still ran.
+    expect(report.appsSeeded).toBe(0);
+    expect(report.appsPolled).toBe(1);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("super-secret-key");
   });
 });

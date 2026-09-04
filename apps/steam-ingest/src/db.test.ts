@@ -2,6 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createTestDb, testDbAvailable, type TestDb } from "../../web/src/lib/testing/test-db";
 import {
+  demoteInactiveApps,
+  linkGamesToSteamApps,
+  readCatalogCursor,
+  seedCatalogApps,
+  writeCatalogCursor,
   readStaleCatalogApps,
   readTrackedApps,
   upsertTrackedApps,
@@ -61,6 +66,9 @@ describe.skipIf(!canRun)("steam ingest persistence", () => {
     await db?.teardown();
   });
 
+  const trackedIds = async (pollTier: number | null = null) =>
+    (await readTrackedApps(execute, pollTier)).map((app) => app.appid);
+
   const seed = () =>
     upsertTrackedApps(execute, [
       { appid: APPID, name: "Counter-Strike 2", pollTier: 1, trackingReason: "featured" },
@@ -98,8 +106,8 @@ describe.skipIf(!canRun)("steam ingest persistence", () => {
 
   it("seeds tracked apps and reads them back by tier", async () => {
     expect(await seed()).toBe(2);
-    expect(await readTrackedApps(execute)).toEqual([APPID, OTHER]);
-    expect(await readTrackedApps(execute, 1)).toEqual([APPID]);
+    expect(await trackedIds()).toEqual([APPID, OTHER]);
+    expect(await trackedIds(1)).toEqual([APPID]);
   });
 
   it("never widens a hand-narrowed poll tier", async () => {
@@ -110,7 +118,7 @@ describe.skipIf(!canRun)("steam ingest persistence", () => {
       [OTHER],
     );
     expect(rows[0]!.poll_tier).toBe(0);
-    expect(await readTrackedApps(execute)).toEqual([APPID]);
+    expect(await trackedIds()).toEqual([APPID]);
     await db.pool.query(`update steam_apps set poll_tier = 2 where appid = $1`, [OTHER]);
   });
 
@@ -280,6 +288,209 @@ describe.skipIf(!canRun)("steam ingest persistence", () => {
     await expect(
       db.pool.query(`update games set steam_appid = $1 where slug = 'cs2-dupe'`, [APPID]),
     ).rejects.toThrow(/games_steam_appid_key/);
+  });
+
+  const DLC = 111_111;
+
+  it("parks an app that has never once reported a player count", async () => {
+    await upsertTrackedApps(execute, [
+      { appid: DLC, name: "Some Soundtrack", pollTier: 2, trackingReason: "featured" },
+    ]);
+    // Steam answers `result != 1` for DLC, tools, demos and soundtracks, so the
+    // players lane wrote no row for this app and never will. Keying the grace
+    // window on one exempted exactly the class the pass exists to shed.
+    await db.pool.query(
+      `update steam_apps set first_seen_at = now() - interval '8 days' where appid = $1`,
+      [DLC],
+    );
+    expect(await demoteInactiveApps(execute, 50)).toBe(1);
+    const { rows } = await db.pool.query<{ poll_tier: number; parked_at: Date | null }>(
+      `select poll_tier, parked_at from steam_apps where appid = $1`,
+      [DLC],
+    );
+    expect(rows[0]!.poll_tier).toBe(0);
+    // Recorded, so a later re-discovery can tell the poller's parking from an
+    // operator's.
+    expect(rows[0]!.parked_at).not.toBeNull();
+  });
+
+  it("spares an entrant it has not watched for a day yet", async () => {
+    const FRESH = 222_222;
+    await upsertTrackedApps(execute, [
+      { appid: FRESH, name: "Brand New", pollTier: 2, trackingReason: "featured" },
+    ]);
+    expect(await demoteInactiveApps(execute, 50)).toBe(0);
+    const { rows } = await db.pool.query<{ poll_tier: number }>(
+      `select poll_tier from steam_apps where appid = $1`,
+      [FRESH],
+    );
+    expect(rows[0]!.poll_tier).toBe(2);
+  });
+
+  it("re-promotes a parked app the moment it charts, but not when featured re-lists it", async () => {
+    // Featured re-discovery is the noise the parking pass exists to shed.
+    await upsertTrackedApps(execute, [
+      { appid: DLC, name: "Some Soundtrack", pollTier: 2, trackingReason: "featured" },
+    ]);
+    expect(await trackedIds()).not.toContain(DLC);
+
+    await upsertTrackedApps(execute, [
+      { appid: DLC, name: "Some Soundtrack", pollTier: 1, trackingReason: "charts" },
+    ]);
+    const { rows } = await db.pool.query<{
+      poll_tier: number;
+      parked_at: Date | null;
+      promoted_at: Date | null;
+    }>(`select poll_tier, parked_at, promoted_at from steam_apps where appid = $1`, [DLC]);
+    expect(rows[0]!.poll_tier).toBe(1);
+    expect(rows[0]!.parked_at).toBeNull();
+    expect(rows[0]!.promoted_at).not.toBeNull();
+    expect(await trackedIds()).toContain(DLC);
+
+    // A new tracked stretch gets its own day of grace, so the same pass cannot
+    // immediately re-park it on the empty week it spent at tier 0.
+    expect(await demoteInactiveApps(execute, 50)).toBe(0);
+  });
+
+  it("keeps an operator's hand-narrowed tier 0 parked even when it charts", async () => {
+    const HAND = 333_333;
+    await upsertTrackedApps(execute, [
+      { appid: HAND, name: "Hand Parked", pollTier: 2, trackingReason: "featured" },
+    ]);
+    await db.pool.query(`update steam_apps set poll_tier = 0 where appid = $1`, [HAND]);
+    await upsertTrackedApps(execute, [
+      { appid: HAND, name: "Hand Parked", pollTier: 1, trackingReason: "charts" },
+    ]);
+    const { rows } = await db.pool.query<{ poll_tier: number }>(
+      `select poll_tier from steam_apps where appid = $1`,
+      [HAND],
+    );
+    expect(rows[0]!.poll_tier).toBe(0);
+  });
+
+  describe("linking canonical games to steam apps (8.7.9)", () => {
+    const APP = (n: number) => 900_000 + n;
+
+    const addApp = (n: number, name: string, appType: string | null) =>
+      db.pool.query(
+        `insert into steam_apps (appid, name, app_type, poll_tier, tracking_reason)
+         values ($1, $2, $3, 2, 'featured')
+         on conflict (appid) do update set name = excluded.name, app_type = excluded.app_type`,
+        [APP(n), name, appType],
+      );
+    const addGame = (slug: string, name: string) =>
+      db.pool.query(`insert into games (slug, name) values ($1, $2) on conflict (slug) do nothing`, [
+        slug,
+        name,
+      ]);
+    const linkOf = async (slug: string) =>
+      (
+        await db.pool.query<{ steam_appid: string | null }>(
+          `select steam_appid from games where slug = $1`,
+          [slug],
+        )
+      ).rows[0]!.steam_appid;
+
+    it("links an exact name match, punctuation and trademark noise aside", async () => {
+      await addApp(1, "Cyberpunk 2077", "game");
+      await addGame("cyberpunk-2077", "Cyberpunk 2077™");
+      expect(await linkGamesToSteamApps(execute)).toBeGreaterThanOrEqual(1);
+      expect(await linkOf("cyberpunk-2077")).toBe(String(APP(1)));
+    });
+
+    it("refuses the DLC that shares almost every token with its base game", async () => {
+      // No score separates these; `app_type` does. This is the whole reason the
+      // matcher will not consider an app Steam does not call a game.
+      await addApp(2, "Elden Ring: Shadow of the Erdtree", "dlc");
+      await addGame("elden-ring-shadow", "Elden Ring Shadow of the Erdtree");
+      await linkGamesToSteamApps(execute);
+      expect(await linkOf("elden-ring-shadow")).toBeNull();
+    });
+
+    it("waits rather than guessing while an app's metadata is unfetched", async () => {
+      await addApp(3, "Hollow Knight Silksong", null);
+      await addGame("hollow-knight-silksong", "Hollow Knight Silksong");
+      await linkGamesToSteamApps(execute);
+      expect(await linkOf("hollow-knight-silksong")).toBeNull();
+
+      // The catalog lane fills app_type in; the next pass resolves it.
+      await addApp(3, "Hollow Knight Silksong", "game");
+      await linkGamesToSteamApps(execute);
+      expect(await linkOf("hollow-knight-silksong")).toBe(String(APP(3)));
+    });
+
+    it("resolves neither game when two compete for one app", async () => {
+      await addApp(4, "Total Annihilation", "game");
+      await addGame("total-annihilation-a", "Total Annihilation");
+      await addGame("total-annihilation-b", "Total Annihilation");
+      await linkGamesToSteamApps(execute);
+      expect(await linkOf("total-annihilation-a")).toBeNull();
+      expect(await linkOf("total-annihilation-b")).toBeNull();
+    });
+
+    it("leaves an unrelated title alone rather than reaching for the nearest name", async () => {
+      await addApp(5, "Portal 2", "game");
+      await addGame("half-life-alyx", "Half-Life: Alyx");
+      await linkGamesToSteamApps(execute);
+      expect(await linkOf("half-life-alyx")).toBeNull();
+    });
+
+    it("never overwrites a link an operator already made", async () => {
+      await addApp(6, "Stray", "game");
+      await addApp(7, "Stray", "game");
+      await addGame("stray", "Stray");
+      await db.pool.query(`update games set steam_appid = $1 where slug = 'stray'`, [APP(7)]);
+      await linkGamesToSteamApps(execute);
+      expect(await linkOf("stray")).toBe(String(APP(7)));
+    });
+
+    it("costs nothing on a second pass", async () => {
+      expect(await linkGamesToSteamApps(execute)).toBe(0);
+    });
+  });
+
+  describe("bulk catalog seed (8.7.8)", () => {
+    it("adds unknown apps at tier 0, where they cost the polled lanes nothing", async () => {
+      const added = await seedCatalogApps(execute, [
+        { appid: 800_001, name: "Seeded Game" },
+        { appid: 800_002, name: "Another Seeded Game" },
+      ]);
+      expect(added).toBe(2);
+      const { rows } = await db.pool.query<{
+        poll_tier: number;
+        app_type: string;
+        tracking_reason: string;
+      }>(`select poll_tier, app_type, tracking_reason from steam_apps where appid = 800001`);
+      expect(rows[0]).toEqual({ poll_tier: 0, app_type: "game", tracking_reason: "catalog" });
+      // Tier 0 is not the working set, so the polled lanes are unmoved.
+      expect(await trackedIds()).not.toContain(800_001);
+    });
+
+    it("never trades a tracked app's tier or reason for a bulk row", async () => {
+      const before = await db.pool.query<{ poll_tier: number; tracking_reason: string; name: string }>(
+        `select poll_tier, tracking_reason, name from steam_apps where appid = $1`,
+        [APPID],
+      );
+      // The same appid arriving in a sweep, with a different name.
+      expect(await seedCatalogApps(execute, [{ appid: APPID, name: "WRONG NAME" }])).toBe(0);
+      const after = await db.pool.query<{ poll_tier: number; tracking_reason: string; name: string }>(
+        `select poll_tier, tracking_reason, name from steam_apps where appid = $1`,
+        [APPID],
+      );
+      expect(after.rows[0]).toEqual(before.rows[0]);
+    });
+
+    it("remembers where a sweep stopped, and that one finished", async () => {
+      expect(await readCatalogCursor(execute)).toEqual({ lastAppid: 0, completedAt: null });
+      await writeCatalogCursor(execute, 123_456, null);
+      expect(await readCatalogCursor(execute)).toEqual({ lastAppid: 123_456, completedAt: null });
+
+      const completedAt = "2026-09-04T00:00:00.000Z";
+      await writeCatalogCursor(execute, 0, completedAt);
+      const done = await readCatalogCursor(execute);
+      expect(done.lastAppid).toBe(0);
+      expect(new Date(done.completedAt!).toISOString()).toBe(completedAt);
+    });
   });
 
   it("nulls the game link rather than deleting the game when an app goes away", async () => {

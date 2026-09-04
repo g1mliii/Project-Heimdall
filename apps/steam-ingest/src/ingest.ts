@@ -1,15 +1,20 @@
 import {
   demoteInactiveApps,
+  linkGamesToSteamApps,
+  readCatalogCursor,
   readKnownAppIds,
   readStaleCatalogApps,
   readTrackedApps,
+  seedCatalogApps,
   upsertTrackedApps,
   writeAppMetadata,
   writeAppUpdates,
+  writeCatalogCursor,
   writePlayerCounts,
   writePriceSnapshots,
   writeReviewSnapshots,
   type SqlExecutor,
+  type TrackedApp,
 } from "./db";
 import { mapWithConcurrency } from "./fetch";
 import {
@@ -17,6 +22,7 @@ import {
   fetchAppMetadata,
   fetchAppName,
   fetchAppUpdates,
+  fetchCatalogPage,
   fetchFeaturedApps,
   fetchTopAppIds,
   fetchPlayerCount,
@@ -25,6 +31,9 @@ import {
   LANE_CADENCE_MS,
   PRICE_BATCH_SIZE,
 } from "./sources";
+import { summariseError } from "@heimdall/shared";
+
+import { POLL_TIER, TRACKING_REASON } from "./types";
 import type {
   AppMetadata,
   AppUpdate,
@@ -51,21 +60,37 @@ import type {
 export interface LaneLimits {
   playerApps: number;
   reviewApps: number;
+  /** Apps priced per run. Costs ceil(n / PRICE_BATCH_SIZE) per country. */
+  priceApps: number;
   catalogApps: number;
   concurrency: number;
   /** Names cost one subrequest each and cannot be batched — cap per run. */
   nameLookups: number;
   /** Peak players over the last week below which a discovered app is parked. */
   inactivePlayerThreshold: number;
+  /**
+   * Pages of Steam's catalog to sweep per catalog run (8.7.8). One subrequest
+   * and one insert each, so this is cheap in the budget that actually binds.
+   */
+  catalogSeedPages: number;
+  /** Apps requested per seed page. Steam caps this server-side. */
+  catalogSeedPageSize: number;
 }
 
 export const LANE_LIMITS: LaneLimits = {
   playerApps: 400,
   reviewApps: 300,
+  // Batching makes this the cheapest lane per app — 1000 apps is 20 subrequests
+  // per country — but "cheapest" is not "free", and it was the one lane with no
+  // cap at all: its cost grew with the working set and multiplies with every
+  // country added to PRICE_COUNTRIES.
+  priceApps: 1000,
   catalogApps: 80,
   concurrency: 6,
   nameLookups: 60,
   inactivePlayerThreshold: 50,
+  catalogSeedPages: 5,
+  catalogSeedPageSize: 10_000,
 };
 
 /** Widen deliberately: every added country multiplies the price lane's rows. */
@@ -79,6 +104,8 @@ const defaultLogger: IngestLogger = {
 
 export interface IngestDeps {
   execute: SqlExecutor;
+  /** Publisher key for the one keyed endpoint. Absent disables the seed (8.7.8). */
+  steamApiKey?: string;
   fetchImpl?: typeof fetch;
   logger?: IngestLogger;
   now?: Date;
@@ -88,11 +115,7 @@ export interface IngestDeps {
 
 /** Never let a connection string or a store payload reach a persisted log. */
 export function errorSummary(error: unknown): string {
-  if (!(error instanceof Error)) return "unknown ingest error";
-  return `${error.name}: ${error.message}`.replace(
-    /postgres(?:ql)?:\/\/[^\s]+/gi,
-    "[redacted database URL]",
-  );
+  return summariseError(error, "unknown ingest error");
 }
 
 function chunk<T>(items: readonly T[], size: number): T[][] {
@@ -103,9 +126,64 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
   return out;
 }
 
+/**
+ * Partition into fixed windows and advance one per run.
+ *
+ * The index comes from the lane's own cadence, never from stored state: a
+ * retried, duplicated or overlapping invocation inside one cadence window lands
+ * on the same index, re-polls the same apps and collapses onto the same
+ * `bucket` key — the idempotence the whole bucket design rests on.
+ */
+function rotate(apps: readonly number[], limit: number, now: Date, cadenceMs: number): number[] {
+  if (apps.length <= limit) return [...apps];
+  const windows = Math.ceil(apps.length / limit);
+  const index = Math.floor(now.getTime() / cadenceMs) % windows;
+  return apps.slice(index * limit, index * limit + limit);
+}
+
+/**
+ * The slice of the working set THIS run polls.
+ *
+ * A cap with no rotation is a permanent blind spot, not a budget. TRACKED_APPS_SQL
+ * orders deterministically (`poll_tier asc, appid asc`), so a plain
+ * `slice(0, limit)` polls the same head every run and an app sorting past the
+ * cut is never sampled once, however long the poller runs. Rotating covers
+ * every app once per `ceil(n / limit)` runs at exactly the same cost per run.
+ * The catalog lane already does this in SQL, by staleness; these lanes have no
+ * column to sort on, so the rotation is positional.
+ *
+ * Tier 1 is EXEMPT from the rotation, because rotating it would quietly delete
+ * the distinction `poll_tier` exists to draw: the schema calls tier 1 the high
+ * cadence set and tier 2 standard, and the old `slice(0, limit)` honoured that
+ * only by accident of the tier-ascending sort. So the declared set is polled
+ * every run and the rotation spends whatever budget is left on the rest. Only
+ * when tier 1 alone overruns the cap does it rotate too — at that point the cap
+ * is the binding constraint and something has to give.
+ */
+export function pollWindow(
+  apps: readonly TrackedApp[],
+  limit: number,
+  now: Date,
+  cadenceMs: number,
+): number[] {
+  if (!Number.isInteger(limit) || limit < 1) throw new Error("app cap must be a positive integer");
+  const pinned: number[] = [];
+  const rotating: number[] = [];
+  for (const app of apps) {
+    (app.pollTier === POLL_TIER.high ? pinned : rotating).push(app.appid);
+  }
+  if (pinned.length >= limit) return rotate(pinned, limit, now, cadenceMs);
+  return [...pinned, ...rotate(rotating, limit - pinned.length, now, cadenceMs)];
+}
+
 async function runPlayersLane(deps: ResolvedDeps): Promise<LaneReport> {
   const { execute, fetchImpl, limits, now } = deps;
-  const apps = (await readTrackedApps(execute)).slice(0, limits.playerApps);
+  const apps = pollWindow(
+    await readTrackedApps(execute),
+    limits.playerApps,
+    now,
+    LANE_CADENCE_MS.players,
+  );
   const bucket = bucketFor(now, LANE_CADENCE_MS.players);
   const results = await mapWithConcurrency(apps, limits.concurrency, (appid) =>
     fetchPlayerCount(appid, { fetchImpl }),
@@ -131,7 +209,12 @@ async function runPlayersLane(deps: ResolvedDeps): Promise<LaneReport> {
 
 async function runReviewsLane(deps: ResolvedDeps): Promise<LaneReport> {
   const { execute, fetchImpl, limits, now } = deps;
-  const apps = (await readTrackedApps(execute)).slice(0, limits.reviewApps);
+  const apps = pollWindow(
+    await readTrackedApps(execute),
+    limits.reviewApps,
+    now,
+    LANE_CADENCE_MS.reviews,
+  );
   const bucket = bucketFor(now, LANE_CADENCE_MS.reviews);
   const results = await mapWithConcurrency(apps, limits.concurrency, (appid) =>
     fetchReviewSummary(appid, bucket, { fetchImpl }),
@@ -152,7 +235,12 @@ async function runReviewsLane(deps: ResolvedDeps): Promise<LaneReport> {
 
 async function runPricesLane(deps: ResolvedDeps): Promise<LaneReport> {
   const { execute, fetchImpl, limits, now, priceCountries } = deps;
-  const apps = await readTrackedApps(execute);
+  const apps = pollWindow(
+    await readTrackedApps(execute),
+    limits.priceApps,
+    now,
+    LANE_CADENCE_MS.prices,
+  );
   const bucket = bucketFor(now, LANE_CADENCE_MS.prices);
   const batches = chunk(apps, PRICE_BATCH_SIZE).flatMap((batch) =>
     priceCountries.map((countryCode) => ({ batch, countryCode })),
@@ -177,6 +265,46 @@ async function runPricesLane(deps: ResolvedDeps): Promise<LaneReport> {
     rowsWritten: await writePriceSnapshots(execute, samples),
     appsFailed,
   };
+}
+
+/**
+ * Sweep pages of Steam's catalog into the KNOWN set at tier 0 (8.7.8).
+ *
+ * Self-suppressing without a key, like every other optional upstream here: no
+ * key means no seed and a working set that still grows from charts and
+ * featured, not a failed run.
+ *
+ * Resumable and idempotent. The cursor is persisted after each page, so a run
+ * that dies halfway resumes where it stopped rather than restarting a
+ * six-figure sweep; and because the insert is `do nothing`, re-reading a page
+ * already seen costs one query and changes nothing. When the sweep reaches the
+ * end it records `completed_at` and rewinds to zero, so the next pass picks up
+ * apps Steam has added since.
+ */
+async function seedCatalog(deps: ResolvedDeps): Promise<number> {
+  const { execute, fetchImpl, limits, logger, now, steamApiKey } = deps;
+  if (!steamApiKey) return 0;
+
+  let { lastAppid } = await readCatalogCursor(execute);
+  let seeded = 0;
+  for (let page = 0; page < limits.catalogSeedPages; page++) {
+    const result = await fetchCatalogPage(
+      steamApiKey,
+      lastAppid,
+      limits.catalogSeedPageSize,
+      { fetchImpl },
+    );
+    if (result.apps.length > 0) seeded += await seedCatalogApps(execute, result.apps);
+    // A page that advances nothing would loop forever on the same cursor.
+    if (!result.hasMore || result.lastAppid <= lastAppid) {
+      await writeCatalogCursor(execute, 0, now.toISOString());
+      logger.info("steam catalog sweep complete", { seeded });
+      return seeded;
+    }
+    lastAppid = result.lastAppid;
+    await writeCatalogCursor(execute, lastAppid, null);
+  }
+  return seeded;
 }
 
 async function runCatalogLane(deps: ResolvedDeps): Promise<LaneReport> {
@@ -206,8 +334,8 @@ async function runCatalogLane(deps: ResolvedDeps): Promise<LaneReport> {
       .map((r) => ({
         appid: (r as { value: { appid: number; name: string } }).value.appid,
         name: (r as { value: { appid: number; name: string } }).value.name,
-        pollTier: 1,
-        trackingReason: "charts",
+        pollTier: POLL_TIER.high,
+        trackingReason: TRACKING_REASON.charts,
       }));
     if (seeds.length > 0) appsDiscovered += await upsertTrackedApps(execute, seeds);
   } catch (error) {
@@ -225,8 +353,8 @@ async function runCatalogLane(deps: ResolvedDeps): Promise<LaneReport> {
         featured.map((app) => ({
           appid: app.appid,
           name: app.name,
-          pollTier: 2,
-          trackingReason: "featured",
+          pollTier: POLL_TIER.standard,
+          trackingReason: TRACKING_REASON.featured,
         })),
       );
     }
@@ -234,6 +362,16 @@ async function runCatalogLane(deps: ResolvedDeps): Promise<LaneReport> {
     // Discovery is additive. Losing it costs new coverage, never existing rows,
     // so the refresh below still runs.
     logger.warn("steam featured discovery failed", { error: errorSummary(error) });
+  }
+
+  // Breadth before parking: a seeded app enters at tier 0, so it never reaches
+  // the parking pass, and the pass's own working-set arithmetic is unchanged.
+  let appsSeeded = 0;
+  try {
+    appsSeeded = await seedCatalog(deps);
+  } catch (error) {
+    // The seed is additive. Losing it costs breadth, never an existing row.
+    logger.warn("steam catalog seed failed", { error: errorSummary(error) });
   }
 
   let appsParked = 0;
@@ -265,6 +403,19 @@ async function runCatalogLane(deps: ResolvedDeps): Promise<LaneReport> {
     writeAppMetadata(execute, metadata),
     writeAppUpdates(execute, updates),
   ]);
+
+  // AFTER the metadata write, deliberately: the matcher only considers apps
+  // Steam calls a game, and `app_type` arrives with the metadata this run just
+  // fetched. Linking here lets a title discovered today be resolved today
+  // rather than waiting a full cycle. Costs no subrequest — it is pure SQL —
+  // and never overwrites a link, so a failure is losing a day, not data.
+  let gamesLinked = 0;
+  try {
+    gamesLinked = await linkGamesToSteamApps(execute);
+  } catch (error) {
+    logger.warn("steam game linking failed", { error: errorSummary(error) });
+  }
+
   return {
     lane: "catalog",
     appsPolled: apps.length,
@@ -274,11 +425,14 @@ async function runCatalogLane(deps: ResolvedDeps): Promise<LaneReport> {
     changesRecorded: metadataReport.changes,
     appsDiscovered,
     appsParked,
+    appsSeeded,
+    gamesLinked,
   };
 }
 
 interface ResolvedDeps {
   execute: SqlExecutor;
+  steamApiKey: string | undefined;
   fetchImpl: typeof fetch | undefined;
   limits: LaneLimits;
   logger: IngestLogger;
@@ -289,6 +443,7 @@ interface ResolvedDeps {
 export async function runLane(lane: IngestLane, deps: IngestDeps): Promise<LaneReport> {
   const resolved: ResolvedDeps = {
     execute: deps.execute,
+    steamApiKey: deps.steamApiKey,
     fetchImpl: deps.fetchImpl,
     limits: { ...LANE_LIMITS, ...deps.limits },
     logger: deps.logger ?? defaultLogger,

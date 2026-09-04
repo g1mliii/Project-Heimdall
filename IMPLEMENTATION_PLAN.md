@@ -583,15 +583,32 @@ commit — local Windows renders are not valid baselines.
 - **Historical backfill.** The series starts 2026-09-02. There is no way to buy the missing years,
   and SteamDB explicitly prohibits crawling, so this is a floor, not a gap to close.
 
-- [ ] 8.7.8 **Bulk catalog seed** using `STEAM_API_KEY` + `IStoreService/GetAppList` (403s without a
+- [x] 8.7.8 **Bulk catalog seed** using `STEAM_API_KEY` + `IStoreService/GetAppList` (403s without a
   key; `ISteamApps/GetAppList` was REMOVED upstream — confirmed 404 "Method 'GetAppList' not found
-  in interface 'ISteamApps'" on 2026-09-02). Today's working set grows only from
-  `featuredcategories` (~56 appids/day). Until this lands, coverage is thin but real.
-- [ ] 8.7.9 **Wire `games.steam_appid`** — resolve existing canonical games to appids, so the run
-  corpus can join the update history. Reuse the conservative token-overlap matcher from
-  `driver-curation/src/db.ts` rather than inventing a second one.
+  in interface 'ISteamApps'" on 2026-09-02). Sweeps pages into the KNOWN set at **tier 0**, which is
+  the whole design: Steam's catalog is six figures of apps and polling them is arithmetic, not
+  budgeting — one subrequest each against a 1000-per-invocation ceiling. Tier 0 is what 0041 built
+  for ("known but never polled"), so the catalog gains breadth — a name for any appid, and
+  candidates for the 8.7.9 matcher — while what gets POLLED still earns its slot by charting or
+  being curated. `on conflict do nothing`, so a sweep can never trample a tracked app's tier,
+  reason or metadata. `app_type` comes from the request filter (`include_games` with every other
+  class off) rather than an appdetails read per app. Resumable via `steam_catalog_cursor` (0045);
+  self-suppressing with no key. **Set the key with `wrangler secret put STEAM_API_KEY` — a
+  repository secret or a local `.env` does not reach a deployed Worker.**
+- [x] 8.7.9 **Wire `games.steam_appid`** — `LINK_GAMES_TO_STEAM_APPS_SQL` runs at the end of the
+  catalog lane (pure SQL, no subrequest), reusing the driver curator's token-overlap rule: score
+  >= 0.82 of the larger token count, winner must clear the runner-up by 0.08. Two guards this
+  direction needs on top of it: only apps whose `app_type` Steam reports as `game` are candidates
+  (a DLC shares nearly every token with its base title, and no threshold separates those), and a
+  pair must be the mutual best in both directions with NO exact-match escape hatch — two games can
+  share a name, and a tie broken on id order is a coin flip presented as a fact. Only ever fills a
+  null, so an operator's link stands. Dry run against production linked Cyberpunk 2077 and Hogwarts
+  Legacy and correctly refused "Cyberpunk 2077 Private Test" (0.5, under threshold).
 - [ ] 8.7.10 **Patch-annotated deltas** — the §25–§26 payoff: annotate a before/after comparison
-  with the updates that landed between the two captures.
+  with the updates that landed between the two captures. **BLOCKED ON PHASE 10**, not outstanding
+  work here: there is no before/after comparison to annotate until the validator exists. The data
+  and the join are ready — `steam_app_updates.posted_at` between two runs' `captured_at`, via the
+  `games.steam_appid` link 8.7.9 just wired.
 - [ ] 8.7.11 **Move the time series to ClickHouse (§28/Phase 12).** 400 apps at 10 min is ~57k
   rows/day; the shapes here are deliberately narrow and additive so the copy is mechanical.
 
@@ -604,14 +621,24 @@ commit — local Windows renders are not valid baselines.
   patch-note latch, and the `games` link constraints.
 
 ### Phase 8.7 Regression Gate
-- `pnpm verify` green; 83 tests in `apps/steam-ingest` (15 of them against Postgres 17); the worker
-  builds under `wrangler deploy --dry-run`; no lane can exceed its per-invocation subrequest cap.
+- `pnpm verify` green; 132 tests in `apps/steam-ingest` (29 of them against Postgres 17); the worker
+  builds under `wrangler deploy --dry-run`; no lane can exceed its per-invocation subrequest cap,
+  and no capped lane can leave the tail of the working set permanently unpolled.
 
 **Phase 8.7 collectors implemented (2026-09-02).** Schema, worker and all four lanes landed with
 fixtures captured live the same day. 8.7.8-8.7.11 are open. **Deploy needs:** `DATABASE_URL` as a
 Worker secret, `pnpm migrate` against Neon, and a Workers PAID plan — `LANE_LIMITS` defaults assume
 the 1000-subrequest budget; the free plan's 50 requires dropping every cap by an order of
 magnitude, and the honest fix there is a smaller working set, not a higher cap.
+
+**Working-set lifecycle corrected (2026-09-03).** Review of the merge found the parking pass could
+never park its targets (its grace guard needed a player-count row, which Steam never reports for
+DLC, tools and demos), tier 0 was absorbing so a parked app could never be re-promoted however hard
+it charted, and the capped players/reviews lanes plus the uncapped prices lane between them either
+starved the tail of the working set or grew without bound. Migrations 0043 (`parked_at`,
+`promoted_at`) and 0044 (`games_steam_appid_fkey` was only ever created in the first schema
+migrated, because 0041's guard reads database-wide `pg_constraint` unqualified) go with the fix, so
+this needs `pnpm migrate` again.
 
 ---
 

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  DEMOTE_INACTIVE_APPS_SQL,
+  LINK_GAMES_TO_STEAM_APPS_SQL,
   INSERT_PLAYER_COUNTS_SQL,
   INSERT_PRICE_SNAPSHOTS_SQL,
   INSERT_REVIEW_SNAPSHOTS_SQL,
@@ -20,6 +22,7 @@ import {
   writeReviewSnapshots,
   type SqlExecutor,
 } from "./db";
+import { POLL_TIER, TRACKING_REASON } from "./types";
 
 /** Records every statement and its bound parameters. */
 function recorder(rows: unknown[] = [{ ok: 1 }]) {
@@ -179,6 +182,26 @@ describe("upsert posture", () => {
     expect(UPSERT_APPS_SQL).toContain("least(steam_apps.poll_tier, excluded.poll_tier)");
   });
 
+  it("re-promotes an app the POLLER parked, and only from the charts source", () => {
+    // `least()` alone made tier 0 absorbing, so the demotion pass's own promise
+    // — an app that takes off is re-promoted the moment it charts — could never
+    // be kept. `parked_at` is what separates the poller's parking from an
+    // operator's, which still takes the `least` branch and stays narrow.
+    expect(UPSERT_APPS_SQL).toContain(
+      `excluded.tracking_reason = '${TRACKING_REASON.charts}'`,
+    );
+    expect(UPSERT_APPS_SQL).not.toContain(
+      `excluded.tracking_reason = '${TRACKING_REASON.featured}'`,
+    );
+  });
+
+  it("decides the tier and both lifecycle dates from one named predicate", () => {
+    // Three copies of the condition could drift into a half-state: a tier that
+    // moved without its dates, or the reverse. One assignment, one predicate.
+    expect(UPSERT_APPS_SQL).toContain("(poll_tier, promoted_at, parked_at) = (");
+    expect(UPSERT_APPS_SQL.match(/steam_apps\.parked_at is not null/g)).toHaveLength(1);
+  });
+
   it("refuses to overwrite fresher metadata with a staler read", () => {
     expect(UPSERT_APP_METADATA_SQL).toContain(
       "where excluded.metadata_fetched_at > coalesce(steam_apps.metadata_fetched_at, 'epoch'::timestamptz)",
@@ -214,14 +237,84 @@ describe("upsert posture", () => {
   });
 });
 
+describe("demotion posture", () => {
+  it("dates the grace window from the app, never from its samples", () => {
+    // Steam answers `result != 1` for DLC, tools, demos and soundtracks, so the
+    // players lane writes no row for them at all. Requiring an aged
+    // steam_player_counts row exempted exactly the class this pass exists to
+    // park, and the working set could only grow.
+    expect(DEMOTE_INACTIVE_APPS_SQL).toContain(
+      "coalesce(a.promoted_at, a.first_seen_at) <= now() - interval '24 hours'",
+    );
+    expect(DEMOTE_INACTIVE_APPS_SQL).not.toMatch(
+      /exists\s*\(\s*select 1 from steam_player_counts p\s+where p\.appid = a\.appid and p\.bucket <=/,
+    );
+  });
+
+  it("records that the poller was the one that parked the app", () => {
+    expect(DEMOTE_INACTIVE_APPS_SQL).toContain(
+      `set poll_tier = ${POLL_TIER.parked}, parked_at = now()`,
+    );
+  });
+
+  it("still exempts a deliberate choice", () => {
+    expect(DEMOTE_INACTIVE_APPS_SQL).toContain(
+      `not in ('${TRACKING_REASON.curatedBenchmark}', '${TRACKING_REASON.charts}')`,
+    );
+  });
+});
+
+describe("game linking posture (8.7.9)", () => {
+  it("only ever considers an app Steam itself calls a game", () => {
+    // A DLC or soundtrack shares nearly every token with its base title, so no
+    // threshold separates them — this guard does.
+    expect(LINK_GAMES_TO_STEAM_APPS_SQL).toContain("a.app_type = 'game'");
+  });
+
+  it("requires a mutual best match, not just a good one", () => {
+    expect(LINK_GAMES_TO_STEAM_APPS_SQL).toContain("game_rank = 1");
+    expect(LINK_GAMES_TO_STEAM_APPS_SQL).toContain("app_rank = 1");
+  });
+
+  it("keeps the driver curator's threshold and safety margin, on both sides", () => {
+    expect(LINK_GAMES_TO_STEAM_APPS_SQL).toContain("score >= 0.82");
+    expect(LINK_GAMES_TO_STEAM_APPS_SQL).toContain("score - next_game_score >= 0.08");
+    expect(LINK_GAMES_TO_STEAM_APPS_SQL).toContain("score - next_app_score >= 0.08");
+  });
+
+  it("gives an exact name match no escape from the ambiguity check", () => {
+    // Two distinct games can share a name, and so can two apps; `priority = 3`
+    // as a standalone pass would turn that tie into an arbitrary link.
+    expect(LINK_GAMES_TO_STEAM_APPS_SQL).not.toContain("priority = 3");
+  });
+
+  it("only ever fills a null, so a hand-made link stands", () => {
+    expect(LINK_GAMES_TO_STEAM_APPS_SQL).toContain("g.steam_appid is null");
+    expect(LINK_GAMES_TO_STEAM_APPS_SQL.toLowerCase()).not.toContain("delete");
+  });
+
+  it("splits on whitespace, not on the letter s", () => {
+    // `'\\s+'` in the template literal; a single backslash would collapse to a
+    // literal "s" and tokenise every name at its s characters.
+    expect(LINK_GAMES_TO_STEAM_APPS_SQL).toContain("'\\s+'");
+  });
+});
+
 describe("reads", () => {
   it("coerces Neon's bigint strings and drops anything unsafe", async () => {
     const { execute } = recorder([
-      { appid: "730" },
-      { appid: 1091500 },
-      { appid: "not-a-number" },
+      { appid: "730", poll_tier: "1" },
+      { appid: 1091500, poll_tier: 2 },
+      { appid: "not-a-number", poll_tier: 2 },
     ]);
-    await expect(readTrackedApps(execute)).resolves.toEqual([730, 1091500]);
+    await expect(readTrackedApps(execute)).resolves.toEqual([
+      { appid: 730, pollTier: 1 },
+      { appid: 1091500, pollTier: 2 },
+    ]);
+  });
+
+  it("carries the tier, so a capped lane can honour the high-cadence set", () => {
+    expect(TRACKED_APPS_SQL).toContain("select appid, poll_tier");
   });
 
   it("passes the tier filter through as a bound parameter", async () => {

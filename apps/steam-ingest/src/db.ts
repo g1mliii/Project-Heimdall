@@ -1,4 +1,5 @@
 import { neon } from "@neondatabase/serverless";
+import { assertDatabaseUrl } from "@heimdall/shared";
 
 import type { AppMetadata, AppUpdate, PlayerCountSample, PriceSample, ReviewSample } from "./types";
 
@@ -14,7 +15,7 @@ import type { AppMetadata, AppUpdate, PlayerCountSample, PriceSample, ReviewSamp
  * costing a poll cycle.
  */
 
-export const TRACKED_APPS_SQL = `select appid
+export const TRACKED_APPS_SQL = `select appid, poll_tier
   from steam_apps
  where poll_tier > 0
    and ($1::smallint is null or poll_tier = $1::smallint)
@@ -51,20 +52,133 @@ export const KNOWN_APPIDS_SQL = `select a.appid
  * someone decided it matters, not because it was busy this week.
  */
 export const DEMOTE_INACTIVE_APPS_SQL = `update steam_apps a
-   set poll_tier = 0
+   set poll_tier = 0, parked_at = now()
  where a.poll_tier > 0
    and coalesce(a.tracking_reason, '') not in ('curated-benchmark', 'charts')
    -- Only judge an app we have actually watched for a day; a new entrant must
-   -- not be parked before it has had a chance to report anything.
-   and exists (
-     select 1 from steam_player_counts p
-      where p.appid = a.appid and p.bucket <= now() - interval '24 hours'
-   )
+   -- not be parked before it has had a chance to draw a crowd.
+   --
+   -- Asked of the APP, never of its samples. Keying this on "has a player-count
+   -- row older than a day" exempted exactly the class this pass exists to shed:
+   -- Steam answers "result != 1" for DLC, tools, demos and soundtracks, the
+   -- players lane writes no row for those, and the guard was false for them
+   -- forever. promoted_at (0043), not first_seen_at, is the start of the
+   -- CURRENT tracked stretch, so a title the charts just re-promoted gets its
+   -- own day rather than being judged on the week it spent parked.
+   and coalesce(a.promoted_at, a.first_seen_at) <= now() - interval '24 hours'
    and coalesce((
      select max(p.players) from steam_player_counts p
       where p.appid = a.appid and p.bucket >= now() - interval '7 days'
    ), 0) < $1::integer
 returning a.appid`;
+
+/**
+ * Resolve canonical games to Steam appids (8.7.9).
+ *
+ * This is the join that turns the whole 8.7 dimension into a feature: without
+ * it `steam_app_updates` is a pile of announcements no run can reach, and the
+ * sentence this phase exists to produce — "this title patched between your two
+ * captures" — cannot be written.
+ *
+ * A WRONG LINK IS WORSE THAN NO LINK. It does not fail loudly; it silently
+ * annotates a run with another game's patch history, which is exactly the kind
+ * of confident-and-wrong output §0.5 exists to prevent. So the matcher is the
+ * conservative token-overlap rule the driver curator already uses (score >=
+ * 0.82 of the larger token count, and the winner must beat the runner-up by
+ * 0.08 or be an exact name match), plus two guards this direction needs:
+ *
+ * 1. STEAM MUST CALL IT A GAME. A DLC, demo, soundtrack or tool shares nearly
+ *    every token with its base title — "Cyberpunk 2077: Phantom Liberty" scores
+ *    far above any threshold against "Cyberpunk 2077". No score separates those;
+ *    `app_type` does. Apps whose metadata the catalog lane has not fetched yet
+ *    have a null app_type and simply wait for the next pass, so coverage heals
+ *    itself rather than guessing early.
+ * 2. MUTUAL BEST. `games_steam_appid_key` allows one app per game, so a pair is
+ *    only taken when the game is that app's best candidate AND the app is that
+ *    game's best. Two remasters competing for one appid resolve to neither.
+ *
+ * Reentrant and additive: it only ever fills a null, so an operator's hand-made
+ * link is never second-guessed and a re-run costs nothing.
+ */
+export const LINK_GAMES_TO_STEAM_APPS_SQL = `with normalized_games as (
+  select g.id as game_id, tokens.value as tokens, names.value as normalized_name
+    from games g
+   cross join lateral (select regexp_replace(lower(g.name), '[^[:alnum:]]+', ' ', 'g')) as names(value)
+   cross join lateral (select regexp_split_to_array(btrim(names.value), '\\s+')) as tokens(value)
+   where g.steam_appid is null
+   union all
+  -- The capture sources' own names for the same game, which is often the form
+  -- that matches a store listing.
+  select ga.game_id, tokens.value, names.value
+    from game_aliases ga
+    join games g on g.id = ga.game_id
+   cross join lateral (select regexp_replace(lower(ga.normalized_name), '[^[:alnum:]]+', ' ', 'g')) as names(value)
+   cross join lateral (select regexp_split_to_array(btrim(names.value), '\\s+')) as tokens(value)
+   where g.steam_appid is null
+), candidate_apps as (
+  select a.appid, tokens.value as tokens, names.value as normalized_name
+    from steam_apps a
+   cross join lateral (select regexp_replace(lower(a.name), '[^[:alnum:]]+', ' ', 'g')) as names(value)
+   cross join lateral (select regexp_split_to_array(btrim(names.value), '\\s+')) as tokens(value)
+   where a.app_type = 'game'
+     and not exists (select 1 from games linked where linked.steam_appid = a.appid)
+), scored as (
+  select n.game_id,
+         c.appid,
+         max(case when n.normalized_name = c.normalized_name then 3 else 1 end) as priority,
+         max(overlap.score) as score
+    from normalized_games n
+    join candidate_apps c on n.tokens && c.tokens
+   cross join lateral (
+     select count(*)::real /
+            greatest(cardinality(n.tokens), cardinality(c.tokens), 1) as score
+       from (
+         select unnest(n.tokens) as token
+         intersect
+         select unnest(c.tokens) as token
+       ) shared_tokens
+   ) overlap
+   group by n.game_id, c.appid
+), ranked as (
+  select scored.*,
+         row_number() over w_game as game_rank,
+         lead(priority) over w_game as next_game_priority,
+         lead(score) over w_game as next_game_score,
+         row_number() over w_app as app_rank,
+         lead(priority) over w_app as next_app_priority,
+         lead(score) over w_app as next_app_score
+    from scored
+   where score >= 0.82
+  window w_game as (partition by game_id order by priority desc, score desc, appid),
+         w_app as (partition by appid order by priority desc, score desc, game_id)
+), resolved as (
+  select game_id, appid
+    from ranked
+   where game_rank = 1
+     and app_rank = 1
+     -- Unambiguous in BOTH directions, with no exact-match escape hatch. The
+     -- driver curator lets an exact name win outright because it resolves
+     -- against a dictionary where the name IS the key; here two distinct games
+     -- can carry the same name and two apps can carry the same title, and a tie
+     -- broken on id order is a coin flip presented as a fact. Both sides must
+     -- beat their runner-up on priority or clear the 0.08 margin.
+     and (
+       next_game_priority is null
+       or priority > next_game_priority
+       or score - next_game_score >= 0.08
+     )
+     and (
+       next_app_priority is null
+       or priority > next_app_priority
+       or score - next_app_score >= 0.08
+     )
+)
+update games g
+   set steam_appid = r.appid
+  from resolved r
+ where g.id = r.game_id
+   and g.steam_appid is null
+returning g.id`;
 
 export const UPSERT_APPS_SQL = `insert into steam_apps (appid, name, poll_tier, tracking_reason)
 select appid, name, poll_tier, tracking_reason
@@ -78,9 +192,69 @@ on conflict (appid) do update
   set name = excluded.name,
       -- Never silently widen coverage on re-discovery: an operator who parked an
       -- app at tier 0 keeps it there, and a re-seed only ever tightens cadence.
-      poll_tier = least(steam_apps.poll_tier, excluded.poll_tier),
+      -- A hand-narrowed row has a null parked_at, so it takes the least
+      -- branch below and is untouched by any amount of re-discovery.
+      --
+      -- The POLLER's own parking is the exception, and it has to be: the
+      -- demotion pass promises "an app that takes off is re-promoted by the
+      -- charts source the moment it charts", and least() alone made tier 0
+      -- absorbing, so a title parked during a quiet week and then charting at
+      -- number one stayed dark forever. CHARTS ONLY — featured re-discovery is
+      -- the noise the parking pass exists to shed, and letting it un-park would
+      -- put the working set straight back on the treadmill.
+      --
+      -- One re-promotion decides all three columns, so it is named once and
+      -- they are assigned together: a tier that moved without its dates, or
+      -- dates without the tier, is the same silent half-state the 0043 comment
+      -- describes. Re-promotion also starts a NEW tracked stretch, which is
+      -- what buys the app its day of grace before the demotion pass can judge
+      -- it again on the empty week it spent at tier 0.
+      (poll_tier, promoted_at, parked_at) = (
+        select case when r.repromote then excluded.poll_tier
+                    else least(steam_apps.poll_tier, excluded.poll_tier) end,
+               case when r.repromote then now() else steam_apps.promoted_at end,
+               case when r.repromote then null else steam_apps.parked_at end
+          from (select steam_apps.parked_at is not null
+                   and excluded.tracking_reason = 'charts') as r(repromote)
+      ),
       tracking_reason = coalesce(steam_apps.tracking_reason, excluded.tracking_reason)
 returning 1`;
+
+/**
+ * The bulk catalog seed (8.7.8).
+ *
+ * SEEDS AT TIER 0, WHICH IS THE WHOLE DESIGN. Steam's catalog is six figures of
+ * apps; putting them in the POLLED set is not a budget question, it is
+ * arithmetic — one subrequest each against a 1000-per-invocation ceiling. Tier
+ * 0 is what migration 0041 built for exactly this: "known but never polled".
+ * The catalog gains breadth (a name for any appid, and candidates the 8.7.9
+ * matcher can resolve against), while what gets POLLED still earns its slot by
+ * charting or being curated.
+ *
+ * `do nothing` on conflict, never `do update`: an app already in the working
+ * set must not have its tier, tracking reason or fetched metadata trampled by a
+ * bulk pass. The seed only ever adds what is missing.
+ *
+ * `app_type` is written from the request filter, not from an appdetails read.
+ * `include_games=true` with every other class off is Steam declaring these are
+ * games; asking again per app would cost one subrequest each to learn what the
+ * query already asserted.
+ */
+export const SEED_CATALOG_APPS_SQL = `insert into steam_apps (appid, name, app_type, poll_tier, tracking_reason)
+select x.appid, x.name, 'game', 0, 'catalog'
+  from jsonb_to_recordset($1::jsonb) as x(appid bigint, name text)
+on conflict (appid) do nothing
+returning 1`;
+
+export const READ_CATALOG_CURSOR_SQL = `select last_appid, completed_at
+  from steam_catalog_cursor where name = $1`;
+
+export const WRITE_CATALOG_CURSOR_SQL = `insert into steam_catalog_cursor (name, last_appid, completed_at, updated_at)
+values ($1, $2, $3, now())
+on conflict (name) do update
+  set last_appid = excluded.last_appid,
+      completed_at = excluded.completed_at,
+      updated_at = now()`;
 
 export const INSERT_PLAYER_COUNTS_SQL = `insert into steam_player_counts (appid, bucket, players)
 select x.appid, x.bucket, x.players
@@ -272,6 +446,17 @@ returning 1`;
 
 export type SqlExecutor = <Row>(text: string, params: readonly unknown[]) => Promise<Row[]>;
 
+/**
+ * One app in the working set. The tier rides along because the lanes have to
+ * spend a finite per-run budget on it: `steam_apps.poll_tier` declares which
+ * apps are the high-cadence set, and a lane that reads only appids has no way
+ * to honour that.
+ */
+export interface TrackedApp {
+  appid: number;
+  pollTier: number;
+}
+
 export interface TrackedAppSeed {
   appid: number;
   name: string;
@@ -279,16 +464,9 @@ export interface TrackedAppSeed {
   trackingReason: string;
 }
 
-function validateDatabaseUrl(value: string): void {
-  const url = new URL(value);
-  if (!(["postgres:", "postgresql:"] as string[]).includes(url.protocol) || !url.hostname) {
-    throw new Error("DATABASE_URL must be a PostgreSQL connection string");
-  }
-}
-
 /** A Neon-backed executor. Kept separate so every write path is unit-testable. */
 export function executorFor(databaseUrl: string): SqlExecutor {
-  validateDatabaseUrl(databaseUrl);
+  assertDatabaseUrl(databaseUrl);
   const sql = neon(databaseUrl);
   return (<Row>(text: string, params: readonly unknown[]) =>
     sql.query(text, params as never[]) as unknown as Promise<Row[]>) as SqlExecutor;
@@ -307,11 +485,16 @@ async function writeBatch(
 export async function readTrackedApps(
   execute: SqlExecutor,
   pollTier: number | null = null,
-): Promise<number[]> {
-  const rows = await execute<{ appid: string | number }>(TRACKED_APPS_SQL, [pollTier]);
+): Promise<TrackedApp[]> {
+  const rows = await execute<{ appid: string | number; poll_tier: string | number }>(
+    TRACKED_APPS_SQL,
+    [pollTier],
+  );
   // Neon returns bigint as a string to avoid a lossy Number cast; appids are far
   // below 2^53, so narrowing here is safe and keeps the rest of the app numeric.
-  return rows.map((row) => Number(row.appid)).filter((appid) => Number.isSafeInteger(appid));
+  return rows
+    .map((row) => ({ appid: Number(row.appid), pollTier: Number(row.poll_tier) }))
+    .filter((app) => Number.isSafeInteger(app.appid));
 }
 
 export async function readStaleCatalogApps(
@@ -330,6 +513,49 @@ export async function readKnownAppIds(
   if (appids.length === 0) return new Set();
   const rows = await execute<{ appid: string | number }>(KNOWN_APPIDS_SQL, [JSON.stringify(appids)]);
   return new Set(rows.map((row) => Number(row.appid)).filter((id) => Number.isSafeInteger(id)));
+}
+
+/** Fills `games.steam_appid` for every game the matcher can resolve safely. */
+export async function linkGamesToSteamApps(execute: SqlExecutor): Promise<number> {
+  const rows = await execute<{ id: string }>(LINK_GAMES_TO_STEAM_APPS_SQL, []);
+  return rows.length;
+}
+
+export const CATALOG_CURSOR_NAME = "store-app-list";
+
+export interface CatalogCursor {
+  lastAppid: number;
+  completedAt: string | null;
+}
+
+export async function readCatalogCursor(execute: SqlExecutor): Promise<CatalogCursor> {
+  const rows = await execute<{ last_appid: string | number; completed_at: string | null }>(
+    READ_CATALOG_CURSOR_SQL,
+    [CATALOG_CURSOR_NAME],
+  );
+  const row = rows[0];
+  if (!row) return { lastAppid: 0, completedAt: null };
+  const lastAppid = Number(row.last_appid);
+  return {
+    lastAppid: Number.isSafeInteger(lastAppid) && lastAppid > 0 ? lastAppid : 0,
+    completedAt: row.completed_at,
+  };
+}
+
+export async function writeCatalogCursor(
+  execute: SqlExecutor,
+  lastAppid: number,
+  completedAt: string | null,
+): Promise<void> {
+  await execute(WRITE_CATALOG_CURSOR_SQL, [CATALOG_CURSOR_NAME, lastAppid, completedAt]);
+}
+
+/** Adds catalog apps that are not already known. Never touches an existing row. */
+export function seedCatalogApps(
+  execute: SqlExecutor,
+  apps: readonly { appid: number; name: string }[],
+): Promise<number> {
+  return writeBatch(execute, SEED_CATALOG_APPS_SQL, apps);
 }
 
 export async function demoteInactiveApps(

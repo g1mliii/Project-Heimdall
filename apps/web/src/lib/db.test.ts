@@ -106,6 +106,9 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
       "0040_frame_analysis.sql",
       "0041_steam_ingest.sql",
       "0042_steam_builds.sql",
+      "0043_steam_parking_lifecycle.sql",
+      "0044_games_steam_appid_fkey_scope.sql",
+      "0045_steam_catalog_cursor.sql",
     ]);
 
     const { rows } = await pool.query<{ table_name: string }>(
@@ -137,6 +140,7 @@ describe.skipIf(!canRun)("postgres migrations + round-trip (§6)", () => {
         "schema_migrations",
         "staging_cleanup_jobs",
         "steam_app_builds",
+        "steam_catalog_cursor",
         "steam_app_changes",
         "steam_app_depot_manifests",
         "steam_app_depots",

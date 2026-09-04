@@ -2,12 +2,12 @@
  * §22.12 write-path parameter alignment — the trap this phase was warned about.
  *
  * `applyVerificationResult` and `applyReprocessResult` both build one large CTE
- * with HARDCODED positional offsets (`diagnosticInsertSql(1, 20, …)` and
- * `(1, 18, …)`). Appending the frame-analysis parameters after the diagnostics
- * arrays is safe; renumbering into the middle is not, and that class of bug
- * writes the wrong value into the right column with NO type error and NO
- * failure from any test that only checks the rows afterwards — a jsonb column
- * accepts whatever it is handed.
+ * out of fragments. Those offsets used to be hand-counted, which is the trap:
+ * a fragment renumbered into the middle writes the wrong value into the right
+ * column with NO type error and NO failure from any test that only checks the
+ * rows afterwards — a jsonb column accepts whatever it is handed. `SqlParams`
+ * now hands out every placeholder, so the offsets cannot drift by hand; these
+ * assertions are what keep that true as fragments are added.
  *
  * These assertions need no database: they capture the SQL and the parameter
  * array, and check that the statement references `$1..$n` with no gap and that
