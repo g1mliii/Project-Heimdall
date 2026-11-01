@@ -32,6 +32,13 @@ export const LANE_CADENCE_MS: Record<IngestLane, number> = {
  */
 export const PRICE_BATCH_SIZE = 50;
 
+/**
+ * Apps per GetItems review request. Measured 2026-11-01: 152 apps in one call
+ * answered in full at ~900 B per app; 50 keeps the URL and body small and one
+ * failed request from costing much of the working set.
+ */
+export const REVIEW_BATCH_SIZE = 50;
+
 /** Steam's news feed caps out well below this; we only want recent items. */
 const NEWS_ITEM_LIMIT = 20;
 
@@ -148,36 +155,63 @@ export async function fetchPlayerCount(appid: number, deps: SourceDeps = {}): Pr
 }
 
 /**
- * Review totals. Keyless.
+ * Review summaries for a batch of apps in one subrequest. Keyless.
  *
- * `num_per_page=0` asks for the summary without a single review body, which is
- * the whole payload in ~200 bytes.
+ * WHY NOT `store.steampowered.com/appreviews`: from 2026-10-22 it answers every
+ * request with a 302 to the store front page, which the lane saw as one failure
+ * per app and wrote nothing for nine days. `IStoreBrowseService/GetItems` is the
+ * documented Web API, batches like the price filter does, and carries the same
+ * band and label — but only an integer percent, not the positive/negative split
+ * (see migration 0046 for why the split is not reconstructed).
+ *
+ * `summary_filtered` is the all-language, off-topic-filtered summary the store
+ * page headlines — the same series `language=all` used to ask for.
+ * `summary_language_specific` is the request context's language only.
+ *
+ * Throws on an unrecognised envelope rather than returning `[]`: a quietly
+ * empty batch is exactly how an upstream change hides, and a throw lands in the
+ * lane's `appsFailed` where it can be seen.
  */
-export async function fetchReviewSummary(
-  appid: number,
+export async function fetchReviewBatch(
+  appids: readonly number[],
   bucket: string,
   deps: SourceDeps = {},
-): Promise<ReviewSample | null> {
-  const url =
-    `https://store.steampowered.com/appreviews/${appid}` +
-    `?json=1&num_per_page=0&purchase_type=all&language=all`;
-  const body = await fetchJson(url, deps);
-  if (!isRecord(body) || body.success !== 1 || !isRecord(body.query_summary)) return null;
-  const summary = body.query_summary;
-  const totalPositive = nonNegativeInt(summary.total_positive);
-  const totalNegative = nonNegativeInt(summary.total_negative);
-  const totalReviews = nonNegativeInt(summary.total_reviews);
-  if (totalPositive === null || totalNegative === null || totalReviews === null) return null;
-  const score = nonNegativeInt(summary.review_score);
-  return {
-    appid,
-    bucket,
-    reviewScore: score !== null && score <= 9 ? score : null,
-    reviewScoreDesc: boundedString(summary.review_score_desc, 64),
-    totalPositive,
-    totalNegative,
-    totalReviews,
+): Promise<ReviewSample[]> {
+  if (appids.length === 0) return [];
+  const input = {
+    ids: appids.map((appid) => ({ appid })),
+    context: { language: "english", country_code: "US" },
+    data_request: { include_reviews: true },
   };
+  const url =
+    `https://api.steampowered.com/IStoreBrowseService/GetItems/v1/` +
+    `?input_json=${encodeURIComponent(JSON.stringify(input))}`;
+  const body = await fetchJson(url, deps);
+  if (!isRecord(body) || !isRecord(body.response) || !Array.isArray(body.response.store_items)) {
+    throw new Error("GetItems: unrecognised response envelope");
+  }
+  const requested = new Set(appids);
+  const samples: ReviewSample[] = [];
+  for (const item of body.response.store_items) {
+    if (!isRecord(item) || item.success !== 1) continue; // 15 = no such app: no row, not an error
+    const appid = nonNegativeInt(item.appid);
+    if (appid === null || !requested.has(appid)) continue;
+    if (!isRecord(item.reviews) || !isRecord(item.reviews.summary_filtered)) continue;
+    const summary = item.reviews.summary_filtered;
+    const totalReviews = nonNegativeInt(summary.review_count);
+    if (totalReviews === null) continue;
+    const percent = nonNegativeInt(summary.percent_positive);
+    const score = nonNegativeInt(summary.review_score);
+    samples.push({
+      appid,
+      bucket,
+      reviewScore: score !== null && score <= 9 ? score : null,
+      reviewScoreDesc: boundedString(summary.review_score_label, 64),
+      percentPositive: totalReviews > 0 && percent !== null && percent <= 100 ? percent : null,
+      totalReviews,
+    });
+  }
+  return samples;
 }
 
 /**

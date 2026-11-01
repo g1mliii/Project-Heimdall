@@ -552,7 +552,8 @@ commit — local Windows renders are not valid baselines.
   bounded-concurrency mapper so one dead app cannot discard a batch and no invocation blows the
   Worker subrequest budget.
 - [x] 8.7.4 **Every source is keyless.** Verified live 2026-09-02: `GetNumberOfCurrentPlayers`
-  (47 B), `appreviews?num_per_page=0` (199 B), `appdetails?filters=price_overview` (batches ~50
+  (47 B), `appreviews?num_per_page=0` (199 B; dead since 2026-10-22, replaced by batched
+  `IStoreBrowseService/GetItems` — see below), `appdetails?filters=price_overview` (batches ~50
   appids per subrequest), `appdetails`, `ISteamNews/GetNewsForApp` (tags items `patchnotes`), and
   `featuredcategories` for discovery. `STEAM_API_KEY` is documented in `.env.example` but is
   needed only for `IStoreService/GetAppList` bulk enumeration — see 8.7.8.
@@ -647,6 +648,15 @@ more than half the time. Players moved to 30 min at `:07`/`:37`, sharing the hou
 `src/cron.test.ts` now pins wrangler.jsonc ↔ `CRON_LANES` ↔ `LANE_CADENCE_MS` and caps distinct
 DB-wake minutes per day (`MAX_DB_WAKE_MINUTES_PER_DAY`). Expect a gap in every series over the
 outage window, and a visible seam where `steam_player_counts` buckets widen from 10 to 30 min.
+
+**Reviews source replaced (2026-11-01).** `store.steampowered.com/appreviews` began answering every
+request with a 302 to the store front page on 2026-10-22; the lane counted one failure per app and
+wrote nothing for nine days. Reviews now come from `IStoreBrowseService/GetItems` (`include_reviews`,
+`summary_filtered`), 50 apps per subrequest. It reports an integer `percent_positive`, not the
+positive/negative split, so migration 0046 adds that column, makes the split nullable for new rows,
+and checks every row carries one form or the other; the split is never reconstructed from the
+rounded percent. An unrecognised GetItems envelope now throws, so a future upstream change shows up
+as `appsFailed` instead of an empty batch. Needs `pnpm migrate` before the Worker deploy.
 
 ---
 

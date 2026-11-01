@@ -268,18 +268,16 @@ on conflict (appid, bucket) do nothing
 returning 1`;
 
 export const INSERT_REVIEW_SNAPSHOTS_SQL = `insert into steam_review_snapshots (
-  appid, bucket, review_score, review_score_desc,
-  total_positive, total_negative, total_reviews
+  appid, bucket, review_score, review_score_desc, percent_positive, total_reviews
 )
 select x.appid, x.bucket, x.review_score, x.review_score_desc,
-       x.total_positive, x.total_negative, x.total_reviews
+       x.percent_positive, x.total_reviews
   from jsonb_to_recordset($1::jsonb) as x(
     appid bigint,
     bucket timestamptz,
     review_score smallint,
     review_score_desc text,
-    total_positive integer,
-    total_negative integer,
+    percent_positive smallint,
     total_reviews integer
   )
  where exists (select 1 from steam_apps a where a.appid = x.appid)
@@ -610,8 +608,7 @@ export function writeReviewSnapshots(
       bucket: sample.bucket,
       review_score: sample.reviewScore,
       review_score_desc: sample.reviewScoreDesc,
-      total_positive: sample.totalPositive,
-      total_negative: sample.totalNegative,
+      percent_positive: sample.percentPositive,
       total_reviews: sample.totalReviews,
     })),
   );

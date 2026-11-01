@@ -10,7 +10,7 @@ import {
   fetchFeaturedApps,
   fetchPlayerCount,
   fetchPriceBatch,
-  fetchReviewSummary,
+  fetchReviewBatch,
   fetchTopAppIds,
   LANE_CADENCE_MS,
   parseReleaseDate,
@@ -53,42 +53,75 @@ describe("player counts", () => {
   });
 });
 
-describe("review summaries", () => {
-  // These are the ALL-LANGUAGE totals, which is what `language=all` in the
-  // production URL asks for. Dropping that parameter returns the store's default
-  // English-only slice (~2.2M positive for this app at capture time) — a quietly
-  // different series, so the fixture pins the parameter as much as the parser.
-  it("reads the confirmed payload", async () => {
-    const fetchImpl = await serving("app-reviews.json");
-    await expect(fetchReviewSummary(730, bucket, { fetchImpl })).resolves.toEqual({
-      appid: 730,
-      bucket,
-      reviewScore: 8,
-      reviewScoreDesc: "Very Positive",
-      totalPositive: 8447162,
-      totalNegative: 1385617,
-      totalReviews: 9832779,
+describe("review batches", () => {
+  // Captured live from IStoreBrowseService/GetItems on 2026-11-01. Expected
+  // values are read off the fixture by hand, item by item.
+  const ids = [730, 1422450, 3601090, 3751970, 5165600, 999999999];
+
+  it("reads the confirmed batch, one row per app that reported", async () => {
+    const fetchImpl = await serving("store-items-reviews.json");
+    await expect(fetchReviewBatch(ids, bucket, { fetchImpl })).resolves.toEqual([
+      // summary_filtered (all languages), not summary_language_specific (2,642,415 English).
+      { appid: 730, bucket, reviewScore: 8, reviewScoreDesc: "Very Positive", percentPositive: 85, totalReviews: 9959244 },
+      // No reviews: Steam's percent_positive 0 is a placeholder, stored as null.
+      { appid: 1422450, bucket, reviewScore: 0, reviewScoreDesc: "No user reviews", percentPositive: null, totalReviews: 0 },
+      // Below the band threshold: band 0, label is the count, percent is real.
+      { appid: 3601090, bucket, reviewScore: 0, reviewScoreDesc: "5 user reviews", percentPositive: 100, totalReviews: 5 },
+      { appid: 3751970, bucket, reviewScore: 7, reviewScoreDesc: "Positive", percentPositive: 100, totalReviews: 13 },
+      { appid: 5165600, bucket, reviewScore: 7, reviewScoreDesc: "Positive", percentPositive: 86, totalReviews: 45 },
+      // 999999999 answers success 15 with no reviews: no row, and not an error.
+    ]);
+  });
+
+  it("asks for all requested apps in one GetItems call with reviews included", async () => {
+    const fetchImpl = await serving("store-items-reviews.json");
+    await fetchReviewBatch([730, 570], bucket, { fetchImpl });
+    const url = new URL(String(vi.mocked(fetchImpl).mock.calls[0]![0]));
+    expect(url.host).toBe("api.steampowered.com");
+    expect(url.pathname).toBe("/IStoreBrowseService/GetItems/v1/");
+    expect(JSON.parse(url.searchParams.get("input_json")!)).toMatchObject({
+      ids: [{ appid: 730 }, { appid: 570 }],
+      data_request: { include_reviews: true },
     });
   });
 
-  it("keeps totals and drops an out-of-range band rather than the whole row", async () => {
+  it("ignores items it did not ask for and drops out-of-range band and percent", async () => {
     const fetchImpl = vi.fn(
       async () =>
         new Response(
           JSON.stringify({
-            success: 1,
-            query_summary: {
-              review_score: 99,
-              total_positive: 1,
-              total_negative: 2,
-              total_reviews: 3,
+            response: {
+              store_items: [
+                { appid: 1, success: 1, reviews: { summary_filtered: { review_count: 9, percent_positive: 50 } } },
+                {
+                  appid: 730,
+                  success: 1,
+                  reviews: { summary_filtered: { review_count: 3, percent_positive: 101, review_score: 99 } },
+                },
+              ],
             },
           }),
           { status: 200 },
         ),
     ) as unknown as typeof fetch;
-    const sample = await fetchReviewSummary(730, bucket, { fetchImpl });
-    expect(sample).toMatchObject({ reviewScore: null, totalReviews: 3 });
+    await expect(fetchReviewBatch([730], bucket, { fetchImpl })).resolves.toEqual([
+      { appid: 730, bucket, reviewScore: null, reviewScoreDesc: null, percentPositive: null, totalReviews: 3 },
+    ]);
+  });
+
+  it("throws on an unrecognised envelope instead of quietly writing nothing", async () => {
+    // The retired appreviews endpoint failed by redirecting to an HTML page; a
+    // shape change here must surface as a failed batch, not as an empty one.
+    const fetchImpl = vi.fn(
+      async () => new Response(JSON.stringify({ success: 1, query_summary: {} }), { status: 200 }),
+    ) as unknown as typeof fetch;
+    await expect(fetchReviewBatch([730], bucket, { fetchImpl })).rejects.toThrow(/envelope/);
+  });
+
+  it("makes no request for an empty batch", async () => {
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    await expect(fetchReviewBatch([], bucket, { fetchImpl })).resolves.toEqual([]);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 

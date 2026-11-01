@@ -255,6 +255,49 @@ describe("prices lane", () => {
   });
 });
 
+describe("reviews lane", () => {
+  const item = (appid: number) => ({
+    appid,
+    success: 1,
+    reviews: { summary_filtered: { review_count: 10, percent_positive: 90, review_score: 7, review_score_label: "Positive" } },
+  });
+  /** Answers GetItems with an item for every appid the request asked for. */
+  const getItems = (fail?: (ids: number[]) => boolean) =>
+    vi.fn(async (input: URL | RequestInfo) => {
+      const ids = (JSON.parse(new URL(String(input)).searchParams.get("input_json")!) as {
+        ids: { appid: number }[];
+      }).ids.map((id) => id.appid);
+      if (fail?.(ids)) throw new Error("upstream 500");
+      return new Response(JSON.stringify({ response: { store_items: ids.map(item) } }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+  it("covers the working set in REVIEW_BATCH_SIZE batches on the hourly bucket", async () => {
+    const apps = Array.from({ length: 120 }, (_, i) => 1000 + i);
+    const db = stubDb(apps);
+    const fetchImpl = getItems();
+    const report = await runLane("reviews", { execute: db.execute, fetchImpl, logger: silentLogger, now });
+    expect(report).toMatchObject({ lane: "reviews", appsPolled: 120, rowsWritten: 120, appsFailed: 0 });
+    // 120 apps at 50 per request: 3 subrequests, where the old endpoint cost 120.
+    expect(vi.mocked(fetchImpl)).toHaveBeenCalledTimes(3);
+    expect(db.written("steam_review_snapshots")[0]).toEqual({
+      appid: 1000,
+      bucket: "2026-09-02T16:00:00.000Z",
+      review_score: 7,
+      review_score_desc: "Positive",
+      percent_positive: 90,
+      total_reviews: 10,
+    });
+  });
+
+  it("reports lost coverage in apps, not requests, when a batch fails", async () => {
+    const apps = Array.from({ length: 60 }, (_, i) => 1000 + i);
+    const db = stubDb(apps);
+    const fetchImpl = getItems((ids) => ids.includes(1000));
+    const report = await runLane("reviews", { execute: db.execute, fetchImpl, logger: silentLogger, now });
+    expect(report).toMatchObject({ appsPolled: 60, rowsWritten: 10, appsFailed: 50 });
+  });
+});
+
 describe("catalog lane", () => {
   const metadata = {
     "730": {
