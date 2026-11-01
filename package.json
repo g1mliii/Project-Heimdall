@@ -12,7 +12,10 @@
   "dependencyPolicy": {
     "minimumAgeExceptions": {
       "wrangler@4.110.0": "Security exception: replaces the 30-day-soaked 4.100.0 release whose Miniflare tree contains patched undici and ws advisories (GHSA-vmh5-mc38-953g, GHSA-vxpw-j846-p89q, GHSA-hm92-r4w5-c3mj, GHSA-96hv-2xvq-fx4p).",
-      "next@16.2.11": "Security exception: 16.2.6 carries 9 advisories fixed in 16.2.11 — Middleware/Proxy bypass in App Router, SSRF in rewrites and in Server Actions, DoS in App Router Server Components and in the Image Optimization API, response-body cache confusion, unauthenticated Server Function endpoint disclosure, and unbounded Edge Server Action payloads. 16.2.11 is the lowest patched release, preferred over the newer 16.2.12 for soak time."
+      "next@16.4.1": "Security exception: 16.2.11 carries five critical unauthenticated RCEs (GHSA-2464-fhr4-w9xw and GHSA-2xp9-vwfh-vxw4 in Image Optimization, GHSA-673q-mjm6-r5xr in `use cache`, GHSA-p293-qw3h-jr36 on Windows hosts, GHSA-vcvr-r3jv-pc5j in next/og) plus SSRF, cache-poisoning and DoS advisories. Nothing below 16.4.1 patches all of them and no 16.2.x backport exists; lowest patched release, preferred over 16.4.2/16.4.3 for soak.",
+      "zod@4.6.6": "Security exception: GHSA-mrhx-c7xc-m3w5 (memory exhaustion validating oversized constrained collections) is fixed only from 4.6.6; zod validates every upload and API payload. Lowest patched release.",
+      "vitest@4.1.12": "Security exception: GHSA-qxg6-89mg-rqv8 (code injection via unauthenticated manual-mock registration) and GHSA-82fw-gwwq-j7x9 (path traversal in @vitest/mocker) — 4.1.12 is the lowest release fixing both. Test tooling only.",
+      "vite@8.1.6": "Security exception: GHSA-rq7h-c2jc-7f22 (files outside server.fs.allow served) and three launch-editor command-injection/bypass advisories on Windows, the dev platform. Lowest patched release. Dev server only."
     }
   },
   "scripts": {

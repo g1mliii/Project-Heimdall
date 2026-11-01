@@ -29,12 +29,12 @@
     "d3-zoom": "3.0.0",
     "hyparquet": "1.26.0",
     "hyparquet-writer": "0.15.6",
-    "next": "16.2.11",
+    "next": "16.4.1",
     "pg": "8.21.0",
     "react": "19.2.6",
     "react-dom": "19.2.6",
     "svix": "1.96.0",
-    "zod": "4.4.3"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@clerk/backend": "3.8.2",
@@ -59,6 +59,6 @@
     "tsx": "4.22.4",
     "typescript": "6.0.3",
     "typescript-eslint": "8.59.4",
-    "vitest": "4.1.7"
+    "vitest": "4.1.12"
   }
 }
