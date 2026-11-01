@@ -45,8 +45,12 @@ export interface ReviewSample {
   /** Steam's 0-9 band. Null below the review threshold — not zero. */
   reviewScore: number | null;
   reviewScoreDesc: string | null;
-  totalPositive: number;
-  totalNegative: number;
+  /**
+   * Whole-number percent positive, as Steam reports it. Null when there are no
+   * reviews — Steam sends a placeholder 0 there, which is not a percentage.
+   * The exact positive/negative split is not available from GetItems (0046).
+   */
+  percentPositive: number | null;
   totalReviews: number;
 }
 

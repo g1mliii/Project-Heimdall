@@ -27,9 +27,10 @@ import {
   fetchTopAppIds,
   fetchPlayerCount,
   fetchPriceBatch,
-  fetchReviewSummary,
+  fetchReviewBatch,
   LANE_CADENCE_MS,
   PRICE_BATCH_SIZE,
+  REVIEW_BATCH_SIZE,
 } from "./sources";
 import { summariseError } from "@heimdall/shared";
 
@@ -51,7 +52,8 @@ import type {
  * A Cloudflare Worker gets a finite subrequest budget per invocation (50 on the
  * free plan, 1000 on paid), and Steam rate-limits by IP. These numbers are the
  * contract between those two limits: `playerApps` costs one subrequest each,
- * `catalogApps` costs two, and prices cost one per PRICE_BATCH_SIZE apps.
+ * `catalogApps` costs two, prices cost one per PRICE_BATCH_SIZE apps, and
+ * reviews one per REVIEW_BATCH_SIZE.
  *
  * KEEP THE SUM UNDER YOUR PLAN'S BUDGET. The defaults below assume the paid
  * plan; on the free plan every value has to come down by an order of magnitude,
@@ -59,6 +61,7 @@ import type {
  */
 export interface LaneLimits {
   playerApps: number;
+  /** Apps reviewed per run. Costs ceil(n / REVIEW_BATCH_SIZE). */
   reviewApps: number;
   /** Apps priced per run. Costs ceil(n / PRICE_BATCH_SIZE) per country. */
   priceApps: number;
@@ -216,15 +219,17 @@ async function runReviewsLane(deps: ResolvedDeps): Promise<LaneReport> {
     LANE_CADENCE_MS.reviews,
   );
   const bucket = bucketFor(now, LANE_CADENCE_MS.reviews);
-  const results = await mapWithConcurrency(apps, limits.concurrency, (appid) =>
-    fetchReviewSummary(appid, bucket, { fetchImpl }),
+  const batches = chunk(apps, REVIEW_BATCH_SIZE);
+  const results = await mapWithConcurrency(batches, limits.concurrency, (batch) =>
+    fetchReviewBatch(batch, bucket, { fetchImpl }),
   );
   const samples: ReviewSample[] = [];
   let appsFailed = 0;
-  for (const result of results) {
-    if (!result.ok) appsFailed++;
-    else if (result.value) samples.push(result.value);
-  }
+  results.forEach((result, index) => {
+    // A failed request costs the whole batch; count apps, as the prices lane does.
+    if (!result.ok) appsFailed += batches[index]!.length;
+    else samples.push(...result.value);
+  });
   return {
     lane: "reviews",
     appsPolled: apps.length,

@@ -149,12 +149,36 @@ describe.skipIf(!canRun)("steam ingest persistence", () => {
       bucket: "2026-09-02T16:00:00.000Z",
       reviewScore: 8,
       reviewScoreDesc: "Very Positive",
-      totalPositive: 8447162,
-      totalNegative: 1385617,
-      totalReviews: 9832779,
+      percentPositive: 85,
+      totalReviews: 9959244,
     };
     expect(await writeReviewSnapshots(execute, [review])).toBe(1);
     expect(await writeReviewSnapshots(execute, [review])).toBe(0);
+    // GetItems carries no split, so the row holds the percent and null totals (0046).
+    const { rows: stored } = await db.pool.query<{
+      percent_positive: number;
+      total_positive: number | null;
+      total_negative: number | null;
+    }>(
+      "select percent_positive, total_positive, total_negative from steam_review_snapshots where appid = $1",
+      [APPID],
+    );
+    expect(stored).toEqual([{ percent_positive: 85, total_positive: null, total_negative: null }]);
+
+    // 0046: a row with reviews must say how they split, in one form or the other.
+    await expect(
+      db.pool.query(
+        `insert into steam_review_snapshots (appid, bucket, total_reviews) values ($1, '2026-09-02T17:00:00Z', 5)`,
+        [APPID],
+      ),
+    ).rejects.toThrow(/steam_review_snapshots_split_check/);
+    await expect(
+      db.pool.query(
+        `insert into steam_review_snapshots (appid, bucket, percent_positive, total_reviews)
+         values ($1, '2026-09-02T18:00:00Z', 101, 5)`,
+        [APPID],
+      ),
+    ).rejects.toThrow(/steam_review_snapshots_percent_check/);
 
     const price = {
       appid: APPID,

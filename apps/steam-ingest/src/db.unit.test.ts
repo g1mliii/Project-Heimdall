@@ -112,8 +112,7 @@ describe("row mapping", () => {
         bucket: "2026-09-02T16:00:00.000Z",
         reviewScore: 8,
         reviewScoreDesc: "Very Positive",
-        totalPositive: 10,
-        totalNegative: 2,
+        percentPositive: 83,
         totalReviews: 12,
       },
     ]);
@@ -122,8 +121,7 @@ describe("row mapping", () => {
       bucket: "2026-09-02T16:00:00.000Z",
       review_score: 8,
       review_score_desc: "Very Positive",
-      total_positive: 10,
-      total_negative: 2,
+      percent_positive: 83,
       total_reviews: 12,
     });
   });
