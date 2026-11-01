@@ -19,7 +19,7 @@ interface Env {
  * logs the unmapped expression instead of failing silently.
  */
 export const CRON_LANES: Record<string, IngestLane> = {
-  "*/10 * * * *": "players",
+  "7,37 * * * *": "players",
   "7 * * * *": "reviews",
   "23 3,9,15,21 * * *": "prices",
   "41 4 * * *": "catalog",

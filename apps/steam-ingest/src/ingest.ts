@@ -316,7 +316,7 @@ async function runCatalogLane(deps: ResolvedDeps): Promise<LaneReport> {
   // Charts before featured, deliberately. Featured ranks what the store is
   // PROMOTING; the charts rank what people are PLAYING. Seeding from featured
   // alone filled ~half the working set with titles that never reported more
-  // than single digits, each costing a subrequest every ten minutes.
+  // than single digits, each costing a subrequest every players run.
   let appsDiscovered = 0;
   try {
     const ranked = await fetchTopAppIds({ fetchImpl });

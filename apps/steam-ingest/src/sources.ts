@@ -15,7 +15,11 @@ import type {
  * is safe, but it is not free: the series has a visible seam at the change.
  */
 export const LANE_CADENCE_MS: Record<IngestLane, number> = {
-  players: 10 * 60 * 1000,
+  // 30 min, not 10: every invocation wakes the Neon compute, which then idles
+  // 5 min before suspending, so a 10-min lane kept it up more than half the
+  // time and exhausted the free plan's monthly compute on 2026-10-29. See
+  // cron.test.ts for the wake budget that pins this.
+  players: 30 * 60 * 1000,
   reviews: 60 * 60 * 1000,
   prices: 6 * 60 * 60 * 1000,
   catalog: 24 * 60 * 60 * 1000,
@@ -292,7 +296,7 @@ export async function fetchCatalogPage(
  * This is the RIGHT discovery source, and featuredcategories is not. Featured
  * ranks what the store is promoting, which on any given day is mostly tiny new
  * releases — the first seeding run pulled in ~40 apps with a single-digit
- * player count, which cost a subrequest every ten minutes to learn nothing.
+ * player count, which cost a subrequest every players run to learn nothing.
  * These two rank by players: `GetGamesByConcurrentPlayers` is live CCU and
  * `GetMostPlayedGames` is the weekly peak, so the union is "currently busy" and
  * "reliably busy" rather than "currently advertised".

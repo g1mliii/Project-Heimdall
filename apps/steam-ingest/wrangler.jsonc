@@ -8,12 +8,18 @@
   // expression here without changing that map silently disables the lane.
   //
   // Player counts are the only fast lane, and the only one whose row count
-  // scales with cadence: 400 apps every 10 minutes is ~57k rows/day. Reviews,
+  // scales with cadence: 400 apps every 30 minutes is ~19k rows/day. Reviews,
   // prices and catalog move slowly enough that polling them faster would buy
   // duplicate rows, not resolution.
+  //
+  // Every invocation wakes the Neon compute (5 min idle before it suspends),
+  // so wakes, not rows, are the cost that matters. Players fires at :07/:37 so
+  // the hourly reviews run at :07 shares its wake instead of adding one.
+  // src/cron.test.ts caps distinct wake minutes per day; a */10 players lane
+  // exhausted the free plan monthly compute quota on 2026-10-29.
   "triggers": {
     "crons": [
-      "*/10 * * * *",
+      "7,37 * * * *",
       "7 * * * *",
       "23 3,9,15,21 * * *",
       "41 4 * * *"

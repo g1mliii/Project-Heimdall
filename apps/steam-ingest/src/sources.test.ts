@@ -240,8 +240,8 @@ describe("bucketFor", () => {
   it("floors to the lane cadence so a retry lands on the same key", () => {
     const cadence = LANE_CADENCE_MS.players;
     expect(bucketFor(new Date("2026-09-02T16:07:41.512Z"), cadence)).toBe("2026-09-02T16:00:00.000Z");
-    expect(bucketFor(new Date("2026-09-02T16:09:59.999Z"), cadence)).toBe("2026-09-02T16:00:00.000Z");
-    expect(bucketFor(new Date("2026-09-02T16:10:00.000Z"), cadence)).toBe("2026-09-02T16:10:00.000Z");
+    expect(bucketFor(new Date("2026-09-02T16:29:59.999Z"), cadence)).toBe("2026-09-02T16:00:00.000Z");
+    expect(bucketFor(new Date("2026-09-02T16:30:00.000Z"), cadence)).toBe("2026-09-02T16:30:00.000Z");
   });
 
   it("gives each lane its own grid", () => {

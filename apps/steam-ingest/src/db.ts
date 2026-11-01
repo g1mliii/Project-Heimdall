@@ -43,7 +43,7 @@ export const KNOWN_APPIDS_SQL = `select a.appid
  *
  * Featured discovery pulls in whatever the store is promoting, which is mostly
  * tiny new releases: the first seeding run added ~40 apps that never reported
- * more than single-digit players, and each cost a subrequest every ten minutes
+ * more than single-digit players, and each cost a subrequest every players run
  * forever. Without this the working set only grows, and it grows with noise.
  *
  * Parking is tier 0, never deletion — the collected history stays, and an app

@@ -544,7 +544,7 @@ commit — local Windows renders are not valid baselines.
   `games.steam_appid` link (unique partial index, `on delete set null`). Every time-series key is
   `(appid, bucket)` where `bucket` is the poll time floored to the lane cadence — a retried cron,
   an overlapping invocation and a double deploy all collapse onto one row.
-- [x] 8.7.2 **`apps/steam-ingest` Worker**, four cron-dispatched lanes: players (10 min), reviews
+- [x] 8.7.2 **`apps/steam-ingest` Worker**, four cron-dispatched lanes: players (30 min; was 10 — see below), reviews
   (hourly), prices (4x daily), catalog (daily). `CRON_LANES` in `src/index.ts` maps each
   expression; an unmapped cron logs rather than failing silently.
 - [x] 8.7.3 **Allowlisted fetch** (`api.steampowered.com`, `store.steampowered.com` only, redirects
@@ -609,7 +609,7 @@ commit — local Windows renders are not valid baselines.
   work here: there is no before/after comparison to annotate until the validator exists. The data
   and the join are ready — `steam_app_updates.posted_at` between two runs' `captured_at`, via the
   `games.steam_appid` link 8.7.9 just wired.
-- [ ] 8.7.11 **Move the time series to ClickHouse (§28/Phase 12).** 400 apps at 10 min is ~57k
+- [ ] 8.7.11 **Move the time series to ClickHouse (§28/Phase 12).** 400 apps at 30 min is ~19k
   rows/day; the shapes here are deliberately narrow and additive so the copy is mechanical.
 
 - **Verify**: `pnpm --filter @heimdall/steam-ingest test` green including the real-Postgres suite;
@@ -639,6 +639,14 @@ starved the tail of the working set or grew without bound. Migrations 0043 (`par
 `promoted_at`) and 0044 (`games_steam_appid_fkey` was only ever created in the first schema
 migrated, because 0041's guard reads database-wide `pg_constraint` unqualified) go with the fix, so
 this needs `pnpm migrate` again.
+
+**Neon compute quota exhausted (2026-10-29 → 2026-11-01).** Every lane and the 8.8b PICS job
+returned HTTP 402 "exceeded the quota" until the monthly reset. Cause: each invocation wakes the
+Neon compute, which idles 5 min before suspending, so the `*/10` players lane alone kept it awake
+more than half the time. Players moved to 30 min at `:07`/`:37`, sharing the hourly reviews wake.
+`src/cron.test.ts` now pins wrangler.jsonc ↔ `CRON_LANES` ↔ `LANE_CADENCE_MS` and caps distinct
+DB-wake minutes per day (`MAX_DB_WAKE_MINUTES_PER_DAY`). Expect a gap in every series over the
+outage window, and a visible seam where `steam_player_counts` buckets widen from 10 to 30 min.
 
 ---
 
